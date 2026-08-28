@@ -8,6 +8,12 @@ directory. The directory must already exist. At startup, MIA creates missing
 internal subdirectories. Operators must reserve enough space for expected users,
 courses, and material.
 
+The MVP treats the complete data directory and its backups as private trusted
+storage. It does not apply application-layer encryption to SQLite fields,
+including TOTP secrets and active SMS codes. The operator must restrict access to
+the service account and authorized backup administrators. Anyone who can read the
+data directory can read all live MIA data and must be treated as fully trusted.
+
 MIA creates default AI tutor instruction files but never overwrites existing
 ones. Operators may edit these files. MIA reads them only at startup, so changes
 require a restart.

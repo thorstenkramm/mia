@@ -361,8 +361,7 @@ Columns:
 - `user_id`, user ID, not null, cascade on user deletion
 - `requested_by`, nullable user ID
 - `pending_mobile`, E.164 destination, not null
-- `code_verifier`, keyed non-reversible verifier for the low-entropy code, not
-  null
+- `code`, plaintext SMS code, not null
 - `created_at`, not null
 - `expires_at`, not null
 - `last_sent_at`, not null
@@ -388,8 +387,6 @@ Columns:
 
 - `id`, prefix `sms_`, primary key
 - `purpose`, enum `mobile-verification` or `mfa`, not null
-- `destination_fingerprint`, keyed non-reversible normalized-number value, not
-  null
 - `mobile_verification_id`, nullable challenge ID
 - `mfa_challenge_id`, nullable challenge ID
 - `attempted_at`, not null
@@ -399,10 +396,10 @@ Columns:
 Constraints:
 
 - Exactly one challenge foreign key is present and matches `purpose`.
-- The account is derived from the referenced challenge; SMS accounting never
-  accepts an independent user ID.
+- The account and E.164 destination are derived from the referenced challenge
+  and current user data; SMS accounting stores neither independently.
 - Queries enforce a 60-second cooldown, five sends per hour, and ten sends per
-  day for both the challenge owner and destination fingerprint.
+  day for both the challenge owner and destination.
 
 ### Other rate-limit state
 
@@ -425,7 +422,7 @@ Columns:
 - `user_id`, user ID, not null, cascade on user deletion
 - `type`, enum `totp` or `sms`, not null
 - `status`, enum `pending`, `active`, `replaced`, `disabled`, or `reset`, not null
-- `totp_secret`, nullable sensitive recoverable value, present only for TOTP
+- `totp_secret`, nullable plaintext TOTP secret, present only for TOTP
 - `created_at`, not null
 - `verified_at`, nullable
 - `activated_at`, nullable
@@ -462,8 +459,7 @@ Columns:
 - `user_id`, user ID, not null, cascade on user deletion
 - `factor_id`, active factor ID, not null
 - `purpose`, enum `login` or `sensitive-action`, not null
-- `sms_code_verifier`, nullable keyed non-reversible verifier, present only for
-  SMS
+- `sms_code`, nullable plaintext code, present only for SMS
 - `created_at`, not null
 - `expires_at`, not null
 - `last_sent_at`, nullable
@@ -479,6 +475,8 @@ Invariants:
 - Login challenge verification also requires a signed and encrypted cookie in
   the `mfa` stage bound to the same user and challenge ID. The challenge ID alone
   grants no authority.
+- TOTP secrets and active SMS codes rely on SQLite and data-directory access
+  controls rather than application-layer encryption or keyed transformation.
 - Five incorrect SMS submissions invalidate the challenge.
 - SMS resend limits use `sms_delivery_attempts`.
 - TOTP values are verified against the active factor and are never stored.
@@ -860,10 +858,10 @@ Columns:
 - `actor_kind`, enum `user`, `unauthenticated`, `local-operator`, or `system`, not
   null
 - `actor_user_id`, nullable user ID, set null on actor deletion
-- `actor_fingerprint`, nullable irreversible or de-identified actor reference
+- `actor_fingerprint`, nullable random de-identified actor reference
 - `subject_type`, nullable allowlisted enum
 - `subject_id`, nullable live resource ID
-- `subject_fingerprint`, nullable irreversible or de-identified reference
+- `subject_fingerprint`, nullable random de-identified subject reference
 - `course_id`, nullable course ID
 - `request_id`, nullable correlation identifier
 - `source_ip`, nullable
@@ -889,6 +887,8 @@ Invariants:
 - If an actor account is later deleted, controlled de-identification clears the
   direct actor ID while preserving only `actor_fingerprint`. This lifecycle
   operation is the sole update exception to audit immutability.
+- Fingerprints are random opaque values, not hashes or encrypted identifiers.
+  They cannot be reversed or used to recover deleted identity data.
 - Application code constructs each event type from an allowlisted metadata
   schema; arbitrary JSON is rejected.
 
@@ -976,6 +976,7 @@ Migrations must provide indexes for every foreign key and common authorization
 lookup, including:
 
 - normalized username and email;
+- verified and pending mobile destinations used by SMS limits;
 - course supervisor, student, and mentor scope;
 - pending invitation token hash and intended email;
 - active and pending MFA factors and challenges;

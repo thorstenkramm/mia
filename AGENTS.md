@@ -71,6 +71,9 @@
 - Passwords are 12 to 128 characters, allow spaces and Unicode, and have no
   character-class requirements. Reject known-common passwords locally. Do not
   trim passwords or allow operators to weaken the policy.
+- The MVP applies no application-layer encryption to SQLite fields. TOTP secrets
+  and active SMS codes are stored in plaintext and rely on private data-directory
+  and backup access. Never log, audit, or expose them.
 - Authenticated browser sessions expire after 30 minutes of inactivity and no
   later than 12 hours after authentication. Activity can reset only the idle
   timeout.

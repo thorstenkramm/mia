@@ -926,6 +926,9 @@ required by its workload.
 
 - Treat student records, chats, assessments, private uploads, and contact details
   as sensitive data.
+- The MVP relies on private SQLite, data-directory, and backup access rather than
+  application-layer encryption for stored fields. Operators must treat anyone
+  with storage access as fully trusted.
 - Apply authorization to every sensitive resource and field.
 - Keep uploaded and generated files outside the public frontend root.
 - Authorize every download and material retrieval.
