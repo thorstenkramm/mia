@@ -286,11 +286,15 @@ the file set and queues processing once. Ready material is immutable and must be
 deleted and recreated to change its source. Approval requires ready state and a
 non-empty brief; link-only material does not satisfy course readiness.
 
+The finalization route also retries a failed material after automatic attempts
+are exhausted, with or without file changes. MIA has no generic job retry route.
+
 ## Tutoring sessions and messages
 
 - `GET|POST /api/v1/courses/{course_id}/tutoring-sessions`
 - `GET /api/v1/tutoring-sessions/{id}`
 - `POST /api/v1/tutoring-sessions/{id}/completion`
+- `POST /api/v1/tutoring-sessions/{id}/summary-generations`
 - `GET|POST /api/v1/tutoring-sessions/{id}/messages`
 - `POST /api/v1/student-messages/{id}/response-retries`
 - `POST /api/v1/tutor-responses/{id}/interruptions`

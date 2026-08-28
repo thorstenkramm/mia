@@ -10,6 +10,28 @@ MIA performs background tasks to process materials and chats asynchronously. The
 The first version uses one worker that processes one job at a time. When no job is
 due, the worker waits one second before polling again.
 
+## Execution policy
+
+The worker atomically claims one queued job with a two-minute lease and a unique
+lease token. It renews the lease every 30 seconds while work continues. Result
+commits require the current lease token, so an expired or cancelled attempt
+cannot write stale output.
+
+A job has at most three attempts. Transient timeout, throttling, and provider 5xx
+failures retry after one minute and then five minutes. Validation, authorization,
+malformed provider output, and other permanent failures do not retry. A valid
+provider `Retry-After` increases the normal delay up to one hour; malformed
+values are ignored and no provider value can delay a retry longer than one hour.
+
+Startup treats an expired running lease as an abandoned attempt. It requeues the
+job when attempts remain and otherwise marks it failed. Provider requests use a
+stable idempotency key derived from the job ID when supported. Logical output is
+idempotent and commits only while the attempt owns the live lease.
+
+Graceful shutdown stops claiming jobs and gives the running job up to 30 seconds
+to finish. MIA then cancels and requeues it when attempts remain; the interrupted
+attempt stays counted. A job with no attempt remaining becomes failed.
+
 ## OCR
 
 Finalizing a draft PDF, PNG, or JPEG material queues its OCR work once. The job
@@ -27,6 +49,12 @@ Finalizing DOCX, UTF-8 text, or Markdown queues bounded local extraction instead
 MIA validates and extracts these formats without sending them to Mistral. DOCX
 processing treats its ZIP and XML structures as untrusted input and never runs
 macros or embedded content.
+
+Finalization atomically queues one extraction job per source file. The last
+successful extraction queues one material-summary job in the same transaction.
+A permanent extraction failure marks the material failed and cancels its other
+non-terminal extraction jobs. Late results from cancelled or expired leases are
+discarded.
 
 ## Material Summary
 
@@ -91,3 +119,8 @@ for the next tutoring session.
 The generated summary and follow-up are drafts. An assigned supervisor can
 correct them, and every correction is audited. Regeneration must not silently
 overwrite supervisor corrections. The completed chat history remains immutable.
+
+Session completion atomically queues one summary job. After automatic attempts
+are exhausted, an assigned supervisor may request regeneration while the summary
+is absent and no summary job is queued or running. This domain action creates a
+new job; MIA exposes no generic job-retry route.

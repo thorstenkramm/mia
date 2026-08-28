@@ -615,6 +615,8 @@ Constraints:
 - Adding or removing files is allowed only in `draft` or `failed`. The first file
   mutation in `failed` returns the material to `draft`. A `ready` material cannot
   be reopened.
+- Finalizing a failed material again creates fresh extraction jobs and returns it
+  to `processing`, whether or not its file set changed.
 - Course-wide link-only website and YouTube material becomes `ready` only with a
   non-empty supervisor-authored brief. Even when approved, it does not satisfy
   course activation or new-session material readiness.
@@ -906,14 +908,18 @@ Constraints:
 Columns:
 
 - `id`, prefix `job_`, primary key
-- `type`, enum `ocr`, `material-summary`, or `tutoring-session-summary`, not null
-- `state`, enum `queued`, `running`, `succeeded`, or `failed`, not null
+- `type`, enum `material-extraction`, `material-summary`, or
+  `tutoring-session-summary`, not null
+- `state`, enum `queued`, `running`, `succeeded`, `failed`, or `cancelled`, not
+  null
+- `material_file_id`, nullable material file ID, cascade on file deletion
 - `material_id`, nullable material ID, cascade on material deletion
 - `tutoring_session_id`, nullable session ID, cascade on session deletion
 - `created_at`, not null
 - `created_by`, nullable user ID
 - `available_at`, not null
 - `started_at`, nullable
+- `lease_token`, nullable random claim value
 - `lease_until`, nullable
 - `completed_at`, nullable
 - `failure_code`, nullable sanitized code
@@ -923,14 +929,37 @@ Columns:
 
 Constraints:
 
-- OCR and material-summary jobs require one material and no tutoring session.
-- Tutoring-session-summary jobs require one tutoring session and no material.
-- Terminal jobs have `completed_at`; non-terminal jobs do not.
+- Material-extraction jobs require one material file and no direct material or
+  tutoring session. Material-summary jobs require one material and no material
+  file or tutoring session.
+- Tutoring-session-summary jobs require one tutoring session and no material or
+  material file.
+- Terminal jobs have `completed_at`; queued and running jobs do not.
 - Failure fields never store raw provider payloads, prompts, material content, or
   chat content.
-- Queue claiming, lease acquisition, and state transition are atomic.
+- Queue claiming, creation of a unique two-minute lease token, and state
+  transition are atomic. A running worker renews its lease every 30 seconds.
 - Claiming a queued job increments `attempt_count` in the same transaction. The
-  counter enforces MIA's fixed retry bound and survives restart.
+  counter enforces the three-attempt bound and survives restart.
+- Result commits require matching running state and lease token. An expired or
+  cancelled attempt cannot commit output.
+- Transient failures retry after one and five minutes. A valid provider
+  `Retry-After` may extend a delay up to one hour. Permanent failures do not
+  retry.
+- Startup requeues an expired running lease if attempts remain and otherwise
+  marks it failed. Stable job-derived provider idempotency keys are used where
+  supported.
+- Graceful shutdown stops claims, allows 30 seconds for the running job, and then
+  cancels and requeues it if attempts remain. The interrupted attempt stays
+  counted.
+- A partial unique index prevents more than one queued or running job for one
+  type and subject.
+- Finalization creates one extraction job per file. The last extraction success
+  creates one material-summary job transactionally. A permanent extraction
+  failure marks the material failed and cancels sibling jobs.
+- Session completion creates one tutoring-session-summary job in the same
+  transaction. An assigned supervisor may create another only while the summary
+  is absent and no summary job is queued or running.
 - `input_units` and `output_units` accumulate available usage reported across all
   attempts. MIA does not persist per-attempt provider request IDs or diagnostics.
 - `failure_code` contains only the latest sanitized failure. Detailed attempt
@@ -1095,6 +1124,7 @@ not part of these transactions:
 - course supervisor removal and student membership removal;
 - course mentor removal and reassignment;
 - creation and completion of the one active tutoring session;
+- tutoring-session completion and summary-job creation;
 - invitation resend, acceptance, and revocation;
 - password and MFA replacement and account-state changes;
 - mobile-number verification and SMS-limit accounting;

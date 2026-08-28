@@ -651,6 +651,9 @@ the required extraction work once.
   never uses a partially processed material.
 - A failed material may return to draft when its uploader removes or replaces a
   source file. Processing and ready materials have immutable file sets.
+- After automatic attempts are exhausted, the authorized uploader may finalize a
+  failed material again with unchanged or corrected files. This creates fresh
+  material-processing jobs without exposing a generic job retry.
 - A ready material cannot be reopened in the MVP. Correcting its source requires
   deleting and recreating the material.
 
@@ -902,10 +905,14 @@ turns are omitted without a hidden rolling summary.
 - While a session is active, assigned supervisors can see its status but cannot
   read its chat messages.
 - Completing a session queues creation of a session summary and follow-up.
+- Queue creation and session completion occur atomically.
 - The result outlines strengths, weaknesses, and suggested next steps.
 - The student can view their progress summary.
 - An assigned supervisor can correct a generated session summary and follow-up.
   Every correction is audited.
+- If automatic summary attempts are exhausted while no summary exists, an
+  assigned supervisor can request summary generation again. MIA never silently
+  overwrites a supervisor correction.
 - Chat history is immutable. Correcting a summary does not rewrite the chat.
 - Supervisors assigned to the course can inspect completed sessions, including
   full chat histories and student-private material used in the session.
