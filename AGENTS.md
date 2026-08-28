@@ -76,6 +76,9 @@
 - Usernames use 3-32 characters from a restricted ASCII set and compare by ASCII
   lowercase. Emails use a practical ASCII subset, are limited to 254 characters,
   and compare by ASCII lowercase. Password length counts Unicode code points.
+- Optional profile text uses null as its sole absent representation. Names are
+  limited to 100 Unicode code points, nicknames to 24, and student-specific AI
+  instructions to 4,000 code points and 16 KiB. Mobile numbers use strict E.164.
 - The MVP applies no application-layer encryption to SQLite fields. TOTP secrets
   and active SMS codes are stored in plaintext and rely on private data-directory
   and backup access. Never log, audit, or expose them.

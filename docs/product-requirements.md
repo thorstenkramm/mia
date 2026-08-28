@@ -137,6 +137,18 @@ defaults, and accurate documentation.
 - MIA stores a country as an uppercase ISO 3166-1 alpha-2 code.
 - MIA accepts `UTC` or a named IANA time-zone identifier available in its embedded
   time-zone database. It rejects `Local` and numeric fixed offsets.
+- Optional names contain at most 100 Unicode code points; optional nicknames
+  contain at most 24. MIA trims surrounding whitespace and rejects control
+  characters. A non-empty value contains at least one code point.
+- An optional year of birth is an integer from 1900 through the current UTC year.
+  It is self-reported profile data, not age verification.
+- Optional student-specific AI tutor instructions contain at most 4,000 Unicode
+  code points and 16 KiB of valid UTF-8. MIA normalizes line endings to LF and
+  treats whitespace-only instructions as absent.
+- A mobile number uses E.164 form: `+`, a first digit from 1 through 9, and 7
+  through 14 further digits. MIA does not accept or infer regional formats.
+- After field-specific trimming, MIA stores an empty or whitespace-only optional
+  text value as absent. Required text fields reject empty values.
 
 ## Roles and capabilities
 

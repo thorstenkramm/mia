@@ -43,6 +43,13 @@ decisions at the end of this document must be completed before implementation.
 - Clients convert display-local values to UTC before sending an instant.
 - One-time mentoring appointments use `scheduled_for` as a UTC instant.
 
+### Optional text
+
+- After field-specific trimming, empty or whitespace-only optional text is
+  represented as JSON `null` and persisted as SQL null.
+- Clients clear a writable optional text field with JSON `null` or an empty value.
+- Required text fields reject empty or whitespace-only values.
+
 ### Pagination and filtering
 
 - Collection routes use offset pagination with `page[limit]` and

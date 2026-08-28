@@ -116,19 +116,21 @@ Columns:
 - `id`, prefix `u_`, primary key
 - `username`, original username, not null
 - `username_normalized`, case-insensitive comparison value, not null, unique
-- `name`, nullable
-- `nickname`, nullable, maximum 24 characters
+- `name`, nullable, maximum 100 Unicode code points
+- `nickname`, nullable, maximum 24 Unicode code points
 - `password_hash`, not null
 - `must_change_password`, boolean, not null, default false
-- `year_of_birth`, nullable four-digit integer
+- `year_of_birth`, nullable integer from 1900 through the current UTC year at
+  write time
 - `email`, nullable original address
 - `email_normalized`, nullable normalized address, unique when present
 - `email_verified_at`, nullable
 - `language`, BCP 47 language tag, not null
 - `country_code`, ISO 3166-1 alpha-2 code, not null
 - `time_zone`, IANA time-zone identifier, not null
-- `mobile`, nullable verified E.164 number
-- `llm_instructions`, nullable global student-specific instructions
+- `mobile`, nullable verified E.164 number in strict normalized form
+- `llm_instructions`, nullable normalized student-specific instructions, maximum
+  4,000 Unicode code points and 16 KiB
 - `mentoring_requests_allowed`, boolean, not null, default false
 - `tts_voice`, nullable ElevenLabs voice identifier
 - `is_banned`, boolean, not null, default false
@@ -141,6 +143,7 @@ Columns:
 Invariants:
 
 - A stored `mobile` is verified. Pending values live in a verification challenge.
+- Optional text fields use null, not an empty string, to represent absence.
 - An administrator, supervisor, or mentor role requires a non-null verified
   email.
 - `must_change_password` gates every authenticated feature except password
