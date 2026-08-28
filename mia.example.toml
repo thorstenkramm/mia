@@ -1,0 +1,206 @@
+## TOML-based configuration for the mia server
+##
+## Default location: /etc/mia/mia.toml
+## The file may contain secrets. Restrict its mode to 0400, 0440, 0600, or 0640.
+
+[main]
+  ## Base data directory, string, mandatory
+  ## Can be overridden with --main-data-dir or MIA_MAIN_DATA_DIR
+  ## Must be an existing absolute directory writable by the service user
+  ## Example: "/var/lib/mia"
+  ## Default: none
+  data_dir = "/var/lib/mia"
+
+  ## Frontend document root, string, mandatory
+  ## Can be overridden with --main-doc-root or MIA_MAIN_DOC_ROOT
+  ## Must be an existing absolute directory separate from data_dir
+  ## Example: "/usr/share/mia/frontend"
+  ## Default: none
+  doc_root = "/usr/share/mia/frontend"
+
+  ## Public HTTPS origin, string, mandatory
+  ## Can be overridden with --main-public-url or MIA_MAIN_PUBLIC_URL
+  ## Used for invitation and password-recovery links
+  ## Example: "https://mia.example.org"
+  ## Default: none
+  public_url = "https://mia.example.org"
+
+[http]
+  ## TCP or Unix listener endpoint, string, optional
+  ## Can be overridden with --http-listen or MIA_HTTP_LISTEN
+  ## TCP example: "127.0.0.1:9900"
+  ## Unix example: "unix:/run/mia/mia.sock"
+  ## Default: "127.0.0.1:9900"
+  #listen = "127.0.0.1:9900"
+
+  ## Additional trusted proxy networks, array of strings, optional
+  ## Can be overridden with --http-trusted-proxy-cidrs or MIA_HTTP_TRUSTED_PROXY_CIDRS
+  ## Environment and flag values are comma-separated
+  ## Loopback networks are always trusted
+  ## Example: ["10.0.0.0/8", "2001:db8::/32"]
+  ## Default: empty
+  #trusted_proxy_cidrs = ["10.0.0.0/8", "2001:db8::/32"]
+
+  ## Unix socket group, string, optional
+  ## Can be overridden with --http-socket-group or MIA_HTTP_SOCKET_GROUP
+  ## Invalid when listen is a TCP endpoint
+  ## Example: "www-data"
+  ## Default: service user's primary group
+  #socket_group = "www-data"
+
+[log]
+  ## Log file, string, optional
+  ## Can be overridden with --log-file or MIA_LOG_FILE
+  ## If omitted, logs are written to standard error
+  ## Example: "/var/log/mia/mia.log"
+  ## Default: none
+  #file = "/var/log/mia/mia.log"
+
+  ## Minimum log level, string, optional
+  ## Can be overridden with --log-level or MIA_LOG_LEVEL
+  ## Valid values: "debug", "info", "warn", "error"
+  ## Example: "debug"
+  ## Default: "info"
+  #level = "info"
+
+  ## Log format, string, optional
+  ## Can be overridden with --log-format or MIA_LOG_FORMAT
+  ## Valid values: "json", "text"
+  ## Example: "text"
+  ## Default: "json"
+  #format = "json"
+
+[openai]
+  ## OpenAI API key, string, mandatory, secret
+  ## Can be overridden with MIA_OPENAI_API_KEY; no command-line flag is available
+  ## Example: "replace-with-openai-api-key"
+  ## Default: none
+  api_key = "replace-with-openai-api-key"
+
+  ## Tutoring model, string, optional
+  ## Can be overridden with --openai-chat-model or MIA_OPENAI_CHAT_MODEL
+  ## Must support the Responses API and required tutoring tools
+  ## Example: "gpt-5.6-terra"
+  ## Default: "gpt-5.6-terra"
+  #chat_model = "gpt-5.6-terra"
+
+  ## Background-job model, string, optional
+  ## Can be overridden with --openai-job-model or MIA_OPENAI_JOB_MODEL
+  ## Must support the Responses API and required job tools
+  ## Example: "gpt-5.6-terra"
+  ## Default: "gpt-5.6-terra"
+  #job_model = "gpt-5.6-terra"
+
+[mistral]
+  ## Mistral API key, string, mandatory, secret
+  ## Can be overridden with MIA_MISTRAL_API_KEY; no command-line flag is available
+  ## Example: "replace-with-mistral-api-key"
+  ## Default: none
+  api_key = "replace-with-mistral-api-key"
+
+[smtp]
+  ## SMTP server hostname or IP address, string, mandatory
+  ## Can be overridden with --smtp-host or MIA_SMTP_HOST
+  ## Example: "smtp.example.org"
+  ## Default: none
+  host = "smtp.example.org"
+
+  ## SMTP server port, integer, optional
+  ## Can be overridden with --smtp-port or MIA_SMTP_PORT
+  ## Valid range: 1 through 65535
+  ## Example: 465
+  ## Default: 587
+  #port = 587
+
+  ## SMTP transport mode, string, optional
+  ## Can be overridden with --smtp-transport or MIA_SMTP_TRANSPORT
+  ## Valid values: "starttls", "implicit_tls", "plaintext"
+  ## WARNING: plaintext exposes messages and configured credentials in transit
+  ## Example: "implicit_tls"
+  ## Default: "starttls"
+  #transport = "starttls"
+
+  ## SMTP authentication username, string, optional credential
+  ## Can be overridden with MIA_SMTP_USERNAME; no command-line flag is available
+  ## Must be configured together with password
+  ## Example: "mia@example.org"
+  ## Default: none
+  #username = "mia@example.org"
+
+  ## SMTP authentication password, string, optional, secret
+  ## Can be overridden with MIA_SMTP_PASSWORD; no command-line flag is available
+  ## Must be configured together with username
+  ## Example: "replace-with-smtp-password"
+  ## Default: none
+  #password = "replace-with-smtp-password"
+
+  ## Sender email address, string, mandatory
+  ## Can be overridden with --smtp-sender-email or MIA_SMTP_SENDER_EMAIL
+  ## Example: "mia@example.org"
+  ## Default: none
+  sender_email = "mia@example.org"
+
+  ## Sender display name, string, optional
+  ## Can be overridden with --smtp-sender-name or MIA_SMTP_SENDER_NAME
+  ## Example: "MIA"
+  ## Default: none
+  #sender_name = "MIA"
+
+  ## ClickSend is optional. Uncomment the table and its mandatory keys to enable SMS.
+  #[clicksend]
+  ## ClickSend account username, string, mandatory when the table is present
+  ## Can be overridden with MIA_CLICKSEND_USERNAME; no command-line flag is available
+  ## Example: "sms@example.org"
+  ## Default: none
+  #username = "sms@example.org"
+
+  ## ClickSend API key, string, mandatory when the table is present, secret
+  ## Can be overridden with MIA_CLICKSEND_API_KEY; no command-line flag is available
+  ## Example: "replace-with-clicksend-api-key"
+  ## Default: none
+  #api_key = "replace-with-clicksend-api-key"
+
+  ## ClickSend sender ID, string, optional
+  ## Can be overridden with --clicksend-sender-id or MIA_CLICKSEND_SENDER_ID
+  ## May be a ClickSend-supported alpha tag or sending number
+  ## Example: "MIA"
+  ## Default: none; ClickSend assigns the sender
+  #sender_id = "MIA"
+
+  ## ElevenLabs is optional. Uncomment the table and API key to enable text-to-speech.
+  #[eleven_labs]
+  ## ElevenLabs API key, string, mandatory when the table is present, secret
+  ## Can be overridden with MIA_ELEVEN_LABS_API_KEY; no command-line flag is available
+  ## Example: "replace-with-elevenlabs-api-key"
+  ## Default: none
+  #api_key = "replace-with-elevenlabs-api-key"
+
+  ## Generated-speech retention in whole days, integer, optional
+  ## Can be overridden with --eleven-labs-cache-retention-days or MIA_ELEVEN_LABS_CACHE_RETENTION_DAYS
+  ## Valid range: 1 through 365
+  ## Example: 14
+  ## Default: 30
+  #cache_retention_days = 30
+
+[uploads]
+  ## Maximum size of one uploaded file in MiB, integer, optional
+  ## Can be overridden with --uploads-max-file-size-mib or MIA_UPLOADS_MAX_FILE_SIZE_MIB
+  ## Valid range: 1 through 512
+  ## Example: 50
+  ## Default: 100
+  #max_file_size_mib = 100
+
+  ## Maximum combined material size in MiB, integer, optional
+  ## Can be overridden with --uploads-max-material-size-mib or MIA_UPLOADS_MAX_MATERIAL_SIZE_MIB
+  ## Must be greater than or equal to max_file_size_mib
+  ## Valid range: 1 through 512
+  ## Example: 150
+  ## Default: 200
+  #max_material_size_mib = 200
+
+  ## Maximum combined material page count, integer, optional
+  ## Can be overridden with --uploads-max-material-pages or MIA_UPLOADS_MAX_MATERIAL_PAGES
+  ## Valid range: 1 through 2000
+  ## Example: 500
+  ## Default: 1000
+  #max_material_pages = 1000

@@ -1,0 +1,67 @@
+# The data directory
+
+Audience: operators and developers. This document defines the current filesystem
+layout beneath configured `main.data_dir`.
+
+MIA stores SQLite data, uploads, and generated files in the configured data
+directory. The directory must already exist. At startup, MIA creates missing
+internal subdirectories. Operators must reserve enough space for expected users,
+courses, and material.
+
+MIA creates default AI tutor instruction files but never overwrites existing
+ones. Operators may edit these files. MIA reads them only at startup, so changes
+require a restart.
+
+## Directory Structure
+
+```text
+<data-dir>/
+├── <database-file>
+├── llm-instructions/
+│   ├── init.md
+│   └── jobs/
+│       ├── tutoring-session-summary.md
+│       └── material/
+│           ├── text-book.md
+│           ├── exam.md
+│           ├── website.md
+│           ├── worksheet.md
+│           └── youtube.md
+├── courses/
+│   └── <course-id>/
+│       └── logo.png
+├── materials/
+│   └── <material-id>
+│       └── files/
+│           └── <file-id>/
+│               ├── file
+│               └── content.txt
+├── users/
+│   └── <user-id>
+│       └── avatar.png
+└── tts-cache/
+    └── <speech-id>.mp3
+```
+
+`<database-file>` is MIA's fixed SQLite filename. Its final name remains an
+implementation decision and is not an operator setting.
+
+Generated speech in `tts-cache` is retained for the configured number of days
+after generation. The default is 30 days. Access does not extend retention.
+Expired files are deleted and can be generated again on request when
+text-to-speech is available.
+
+Cached speech can be reused only while its source chat message and requested
+voice still match. A changed source or voice invalidates the cached file.
+
+Each material-file directory is one managed filesystem unit. `file` is the
+validated source upload and `content.txt` is its normalized extracted content.
+MIA writes generated content atomically and does not retain raw OCR responses,
+separate content outlines, or retrieval indexes. Deleting a material file removes
+the complete directory.
+
+An avatar has no database metadata row. Its presence is determined by the fixed
+`users/<user-id>/avatar.png` path. MIA validates an uploaded image before writing
+it and replaces an existing avatar through a temporary file and atomic rename.
+Startup reconciliation removes avatar files and user directories whose user no
+longer exists.
