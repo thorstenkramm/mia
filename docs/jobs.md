@@ -23,6 +23,10 @@ malformed provider output, and other permanent failures do not retry. A valid
 provider `Retry-After` increases the normal delay up to one hour; malformed
 values are ignored and no provider value can delay a retry longer than one hour.
 
+An OpenAI material- or session-summary request uses a ten-second response-header
+timeout and a two-minute total deadline. One Mistral OCR chunk uses a 30-second
+response-header timeout and a five-minute total deadline.
+
 Startup treats an expired running lease as an abandoned attempt. It requeues the
 job when attempts remain and otherwise marks it failed. Provider requests use a
 stable idempotency key derived from the job ID when supported. Logical output is

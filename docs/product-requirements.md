@@ -1112,6 +1112,12 @@ required by its workload.
 - Model output cannot authorize a platform action.
 - External operations require bounded inputs, timeouts, cancellation, and
   bounded retries.
+- Startup does not contact external providers. A provider outage disables or
+  fails only operations that need that provider; it does not prevent MIA from
+  serving other features.
+- Request-path email, SMS, speech, and streamed tutor operations do not retry
+  automatically after an ambiguous failure. Users may retry through the normal
+  authorized workflow and rate limits.
 - Automated tests must not call paid or production providers.
 
 ### Safeguarding and emergencies

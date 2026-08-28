@@ -1,9 +1,9 @@
 # Server Configuration
 
 This document is the normative reference for configuring `mia serve`. MIA
-validates the complete effective configuration before serving requests. A
-validation or required-service connectivity failure is written to standard error
-and terminates startup with exit code 1.
+validates the complete effective configuration before serving requests. A local
+configuration validation failure is written to standard error and terminates
+startup with exit code 1. Startup makes no external provider request.
 
 Audience: operators and implementers. This document is authoritative for server
 settings.
@@ -207,8 +207,9 @@ The log encoding. Valid values are `json` for newline-delimited JSON and `text` 
 
 ### `[openai]`
 
-OpenAI is required for tutoring and model-driven background jobs. Startup performs a bounded live credential, connectivity,
-and model-capability check. MIA does not start while that check fails.
+OpenAI is required for tutoring and model-driven background jobs. Startup
+validates the configured model names and tokenizer mappings locally but does not
+test credentials, connectivity, or provider availability.
 
 #### `openai.api_key`
 
@@ -244,8 +245,8 @@ jobs.
 
 ### `[mistral]`
 
-Mistral is required for OCR. Startup performs a bounded live credential and connectivity check. The supported OCR model is
-fixed by the MIA release and is not configurable.
+Mistral is required for OCR. Startup performs no live provider check. The
+supported OCR model is fixed by the MIA release and is not configurable.
 
 #### `mistral.api_key`
 
@@ -259,7 +260,8 @@ The Mistral API key used by MIA.
 
 ### `[smtp]`
 
-SMTP is required for email. Startup performs a bounded live connectivity and credential check without sending an email.
+SMTP is required for email. Startup validates settings locally and performs no
+live connection or credential check.
 
 #### `smtp.host`
 
@@ -338,8 +340,9 @@ The display name used in the message `From` header. When absent, messages use on
 
 ### `[clicksend]`
 
-ClickSend is optional. An absent table disables SMS features. If any key is present, the complete mandatory configuration
-must be valid and startup performs a bounded live credential and connectivity check.
+ClickSend is optional. An absent table disables SMS features. If any key is
+present, the complete mandatory configuration must be locally valid. Startup
+performs no live provider check.
 
 #### `clicksend.username`
 
@@ -373,8 +376,9 @@ A ClickSend-supported alpha tag or sending number.
 
 ### `[eleven_labs]`
 
-ElevenLabs is optional. An absent table disables text-to-speech. If any key is present, the complete mandatory configuration
-must be valid and startup performs a bounded live credential and connectivity check.
+ElevenLabs is optional. An absent table disables text-to-speech. If any key is
+present, the complete mandatory configuration must be locally valid. Startup
+performs no live provider check.
 
 #### `eleven_labs.api_key`
 

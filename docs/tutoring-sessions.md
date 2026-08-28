@@ -77,6 +77,11 @@ MIA consumes the OpenAI Responses API stream in an operation that is independent
 of the browser connection. It translates provider events into MIA state and
 Server-Sent Events rather than forwarding raw provider events.
 
+The provider must return the first event within 30 seconds, continue producing an
+event at least every 60 seconds, and finish within ten minutes. A timeout fails
+the response while preserving text already received. MIA does not automatically
+retry the uncertain provider request.
+
 After creating a student message, the frontend connects to the tutor response's
 SSE route. MIA first sends a snapshot of current content and state, followed by
 new text deltas and one terminal event. It persists generated text in bounded

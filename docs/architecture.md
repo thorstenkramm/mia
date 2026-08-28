@@ -83,3 +83,23 @@ These settings are fixed for the MVP and are not operator-configurable.
 - Retrieval performs bounded streaming searches over authorized normalized
   `content.txt` files. The MVP stores no separate search index and no
   provider-managed material files.
+
+## Provider Operations
+
+- Streamed OpenAI tutoring waits at most 30 seconds for the first event, 60
+  seconds between events, and ten minutes overall.
+- Non-streaming OpenAI summary requests use a ten-second response-header timeout
+  and a two-minute total deadline.
+- Each bounded Mistral OCR chunk uses a 30-second response-header timeout and a
+  five-minute total deadline.
+- SMTP delivery uses ten-second connect, TLS, and command deadlines within a
+  30-second total operation.
+- ClickSend uses a five-second connection timeout and a 15-second total deadline.
+- ElevenLabs uses a ten-second response-header timeout and a two-minute total
+  deadline.
+- Request-path provider operations do not retry automatically after failure.
+  Authorized user retries and resends remain subject to normal state and rate
+  limits. Background jobs use their separate durable retry policy.
+- Startup validates provider configuration and supported model-tokenizer mappings
+  locally but makes no provider call. Provider outages do not prevent MIA from
+  starting.

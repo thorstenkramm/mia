@@ -118,6 +118,9 @@
   stored in the data directory. Both form one consistent data set.
 - OpenAI and Mistral are external processors. SMTP is required for email;
   ClickSend and ElevenLabs support optional features.
+- External provider availability is not a startup prerequisite. Startup validates
+  provider settings locally and operations use fixed deadlines. Request-path
+  provider calls do not retry automatically after ambiguous failure.
 - Echo 5.3.1 is the confirmed web framework. Follow
   `.agents/rules/echo.md` for framework-specific rules.
 - Course-wide material has a revocable supervisor approval flag. Only approved
