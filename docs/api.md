@@ -248,6 +248,13 @@ Adding a student accepts either an existing student relationship or the fields
 needed for supervisor provisioning. It requires an active course and is not a
 public registration workflow.
 
+The request explicitly selects new-account or existing-account mode.
+Existing-account mode accepts only the complete username, performs no search,
+requires an existing student role, and rejects profile or password fields.
+Unknown and non-student usernames return the same safe not-found response. An
+existing membership returns that membership idempotently. A clean rejoin creates
+a new membership and restores no deleted course data.
+
 Only an administrator removes a course supervisor, and the last supervisor
 cannot be removed. An assigned supervisor may remove a student only when that
 student has no active tutoring session in the course. Removal atomically deletes

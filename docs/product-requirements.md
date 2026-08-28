@@ -331,6 +331,19 @@ rules.
 - After replacement, the temporary password no longer grants access.
 - An existing student account is added to the course instead of creating a
   duplicate account.
+- Adding an existing student requires the complete username. MIA provides no
+  global student search or autocomplete to supervisors.
+- The existing-account operation accepts only the username and rejects password
+  or profile fields. The account must already have the student role; course
+  enrollment never grants a role implicitly.
+- Unknown usernames and accounts without the student role produce the same safe
+  failure without disclosing account details.
+- An assigned supervisor adds the existing student directly; MIA has no pending
+  membership or student-acceptance workflow.
+- Adding an existing current member is idempotent and returns the existing
+  membership without changes.
+- A student removed earlier may rejoin the active course as a new membership.
+  Deleted course-scoped data is never restored.
 
 ### Student password recovery
 

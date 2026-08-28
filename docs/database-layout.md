@@ -271,6 +271,11 @@ mentoring records, mentor assignments, generated speech, related jobs, and audit
 events. It then creates one minimal content-free removal audit event. The user,
 global profile, roles, and other-course data remain.
 
+Existing-account enrollment looks up the exact normalized username and requires
+an existing student role. It changes no profile, password, or role data. Repeated
+creation returns the existing membership. Rejoining after removal inserts a new
+row and does not restore deleted course-scoped records.
+
 Student-specific LLM instructions remain on the global student profile. Course
 deletion does not remove them.
 
