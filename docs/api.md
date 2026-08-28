@@ -71,9 +71,10 @@ ID are never sufficient authorization.
 ### Browser session and CSRF
 
 The MVP uses Echo session middleware with Gorilla `CookieStore`. The signed and
-encrypted `__Host-mia_session` cookie contains only the user ID, authentication
-time, idle expiry, and absolute expiry. It is `Secure`, `HttpOnly`,
-`SameSite=Lax`, has path `/`, and has no `Domain` attribute.
+encrypted `__Host-mia_session` cookie contains only the user ID, login stage,
+stage-specific challenge ID when needed, authentication time, idle expiry, and
+absolute expiry. It is `Secure`, `HttpOnly`, `SameSite=Lax`, has path `/`, and
+has no `Domain` attribute.
 
 Every authenticated request reloads current account, role, assignment, ban, and
 password-gate state from SQLite. Authorization never trusts those values from the
@@ -111,6 +112,20 @@ route.
 Login may return an MFA challenge instead of a complete authenticated session.
 Public recovery responses are account-enumeration safe. Successful password
 reset does not revoke other stateless browser cookies in the MVP.
+
+Login cookie stages are:
+
+- `mfa`, which permits only the matching MFA challenge verification or recovery
+  code consumption and logout;
+- `password-change`, which permits only password replacement and logout;
+- `authenticated`, which permits normal authenticated routes subject to
+  authorization.
+
+Restricted stages expire after 30 minutes and do not refresh. Password
+verification creates `mfa` before `password-change` when both are required. MIA
+rotates the cookie after MFA, password replacement, and completed login. An MFA
+verification route requires both the matching challenge ID and the bound `mfa`
+cookie stage; a challenge ID alone grants no authority.
 
 ## Invitations
 

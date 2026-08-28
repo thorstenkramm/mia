@@ -457,6 +457,9 @@ Invariants:
 - SMS challenge expiry is 30 minutes after issuance.
 - `factor_id` belongs to `user_id` and is that user's active factor when the
   challenge is created.
+- Login challenge verification also requires a signed and encrypted cookie in
+  the `mfa` stage bound to the same user and challenge ID. The challenge ID alone
+  grants no authority.
 - Five incorrect SMS submissions invalidate the challenge.
 - SMS resend limits use `sms_delivery_attempts`.
 - TOTP values are verified against the active factor and are never stored.

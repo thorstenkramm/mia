@@ -340,6 +340,22 @@ rules.
 - The one-active-tutoring-session rule applies across all of a student's browser
   sessions and devices.
 
+### Login stages
+
+- Login always verifies the password first.
+- When the account has active MFA, successful password verification creates a
+  restricted `mfa` cookie stage. That stage permits only completion of the bound
+  MFA challenge and logout.
+- After MFA, an account with `must_change_password` enters a restricted
+  `password-change` cookie stage. Without MFA, successful password verification
+  enters this stage directly.
+- The `password-change` stage permits only password replacement and logout.
+- Restricted stages expire after 30 minutes, do not refresh, and are rotated at
+  every successful transition.
+- MIA creates a full authenticated cookie only after every required stage is
+  complete. Completing password replacement starts a new authenticated-session
+  lifetime.
+
 ### MFA enforcement
 
 - MFA is optional for every user and role.

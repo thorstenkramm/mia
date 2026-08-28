@@ -78,6 +78,9 @@
   server-side browser-session records. Account ban and deletion are checked on
   every request. A student's one-active-tutoring-session rule applies across
   devices.
+- Login uses one rotated CookieStore value with restricted `mfa` and
+  `password-change` stages before the full `authenticated` stage. When both are
+  required, MFA precedes password replacement.
 - MFA is optional for every user and role. Do not impose role-based MFA
   enrollment.
 - Supported MFA methods are TOTP and, when ClickSend and a verified mobile number
