@@ -137,6 +137,25 @@ Invariants:
 - Login throttling is not an account ban and is not stored in `users`.
 - Passwords and temporary passwords are never stored or audited in plaintext.
 
+#### Password hashing
+
+MIA hashes every permanent and temporary password with Argon2id using these
+fixed parameters:
+
+- Argon2 version 19
+- 19 MiB of memory (`m=19456` KiB)
+- two iterations (`t=2`)
+- one degree of parallelism (`p=1`)
+- a new 16-byte cryptographically random salt for each hash
+- a 32-byte output
+
+`password_hash` stores the complete PHC string, including the algorithm,
+version, parameters, salt, and output. The expected form is
+`$argon2id$v=19$m=19456,t=2,p=1$<salt>$<hash>`, with unpadded base64 values.
+These parameters are not operator-configurable. Verification accepts only this
+bounded format and compares the derived output in constant time. A malformed or
+unexpected stored value is a persisted-data error, not an invalid password.
+
 The student brief used at tutoring-session start is derived from named user
 profile fields and `llm_instructions`; it is not a second persisted summary.
 
