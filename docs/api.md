@@ -305,6 +305,11 @@ Each student-message creation includes a client-generated request ID scoped to
 the session. Repeating the same ID and content returns the existing message and
 response operation. Different content is a conflict.
 
+A session accepts at most one generating response and one queued message. A
+further message returns a conflict. Queued work begins after any terminal result
+from current generation. Completion returns a conflict while work is queued or
+generating. Response retry is available only when the session is idle.
+
 Assigned supervisors can see active-session status but cannot retrieve messages
 until completion. Material retrieval performed by the AI tutor uses internal
 authorized application tools, not client-selected arbitrary file paths.
@@ -316,16 +321,19 @@ with media type `text/event-stream`. Establishing a stream reauthorizes access t
 the response. The stream exposes MIA events only; raw OpenAI events, tool calls,
 provider errors, and provider payloads are never forwarded.
 
-On every connection, MIA first sends the current persisted content and state:
+On every connection, MIA first sends the current content and state:
 
 ```text
 event: snapshot
 data: {"content":"Current persisted text","state":"generating"}
 ```
 
-New text and terminal state changes use these events:
+Generation start, new text, and terminal state changes use these events:
 
 ```text
+event: started
+data: {"state":"generating"}
+
 event: delta
 data: {"text":"next text"}
 
@@ -345,9 +353,25 @@ subscription; it does not cancel response generation. Reconnecting to the same
 route receives a fresh snapshot followed by new deltas, so MIA does not need a
 persisted per-token event history.
 
+MIA registers the subscriber and captures the current content and state as one
+per-response synchronized operation. Deltas created after that point enter the
+subscriber queue, preventing a gap between snapshot and live delivery without a
+persisted SSE event log. During generation the synchronized in-memory content may
+be ahead of the latest bounded persistence batch; persisted content remains the
+restart-recovery baseline.
+
+Each subscriber queue holds at most 64 events or 256 KiB, whichever is reached
+first. Overflow closes only that SSE connection; it never blocks provider
+consumption or other subscribers. Reconnection recovers through a fresh snapshot.
+
 The reverse proxy must not buffer this route. MIA flushes complete SSE events and
 persists generated text in bounded batches rather than writing one database
 update for every provider delta.
+
+The interruption route accepts queued and generating responses. A queued
+response becomes interrupted without a provider call; a generating response
+cancels its provider operation. Startup resumes queued work and marks stranded
+generation failed rather than recreating an uncertain provider request.
 
 ## Generated speech
 

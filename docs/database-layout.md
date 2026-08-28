@@ -706,6 +706,7 @@ Constraints:
   supervisor-corrected summary without an explicit authorized supervisor action.
 - Sessions do not expire and cannot be abandoned.
 - Only the owning student can transition the session to completed.
+- Completion requires no queued or generating tutor response.
 - New sessions require an active course with approved, ready, file-backed
   course-wide material.
 
@@ -736,28 +737,42 @@ Columns:
 - `student_message_id`, student message ID, not null, cascade on message deletion
 - `retry_of_response_id`, nullable response ID
 - `attempt`, positive integer, not null
-- `state`, enum `generating`, `completed`, `interrupted`, or `failed`, not null
+- `state`, enum `queued`, `generating`, `completed`, `interrupted`, or `failed`,
+  not null
 - `content`, partial or complete immutable terminal content, not null, default
   empty
-- `started_at`, not null
+- `started_at`, nullable
 - `finished_at`, nullable
 - `failure_code`, nullable sanitized code
-- `provider`, not null
-- `model`, not null
+- `provider`, nullable while queued
+- `model`, nullable while queued
 - `input_units`, nullable non-negative provider usage
 - `output_units`, nullable non-negative provider usage
 
 Constraints:
 
 - Unique: (`student_message_id`, `attempt`).
-- A partial unique index permits at most one generating response per student
-  message.
+- In one tutoring session, at most one response is generating and at most one is
+  queued. Message creation, sequence allocation, response creation, and these
+  checks occur in one transaction.
 - Retry rows link to a terminal failed response for the same message.
+- A retry can be created only when the session has no queued or generating work;
+  it starts in queued state.
+- Queued responses have no start time, provider, or model. Claiming one records
+  those values and changes it to generating before the provider request starts.
 - Streaming updates content while state is `generating`. Terminal content and
   state are immutable.
 - Client disconnect does not change response state or create another response.
 - Student cancellation transitions generating to interrupted and cancels the
-  provider operation.
+  provider operation. Canceling queued work makes no provider request and
+  preserves its student message.
+- A terminal transition starts the sole queued response, if any. Preserved
+  partial content from the earlier response is eligible conversation context.
+- Startup changes stranded generating responses to failed with a sanitized
+  restart code, then dispatches queued work. It never retries an uncertain
+  provider request.
+- Graceful shutdown stops claiming queued work. After 30 seconds it cancels and
+  fails remaining generating responses; queued state is preserved.
 
 ### `session_material_selections`
 
@@ -1086,6 +1101,7 @@ not part of these transactions:
 - MFA replacement, recovery-code use, and reset;
 - material approval, revocation, and private-material deletion;
 - idempotent student-message creation, attempt allocation, and response retry;
+- tutor-response claim, terminal transition, and queued-response handoff;
 - mentoring cancellation and rescheduling;
 - job claim, retry, completion, and lease recovery;
 - student and course cascading deletion with mentor reassignment and audit

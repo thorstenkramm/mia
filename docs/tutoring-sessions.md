@@ -78,9 +78,17 @@ of the browser connection. It translates provider events into MIA state and
 Server-Sent Events rather than forwarding raw provider events.
 
 After creating a student message, the frontend connects to the tutor response's
-SSE route. MIA first sends a snapshot of persisted content and state, followed by
+SSE route. MIA first sends a snapshot of current content and state, followed by
 new text deltas and one terminal event. It persists generated text in bounded
 batches while generation continues.
+
+Subscriber registration and snapshot capture occur atomically under
+per-response synchronization. Later deltas enter the subscriber queue, so a
+connection cannot miss text in the transition from snapshot to live delivery.
+
+Each subscriber queue is bounded to 64 events or 256 KiB. A slow subscriber that
+exceeds either bound is disconnected without affecting generation or other
+subscribers and can reconnect for a fresh snapshot.
 
 Disconnecting the browser removes only that SSE subscription. It does not cancel
 the OpenAI operation. A reconnect to the same tutor response receives a fresh
@@ -94,6 +102,24 @@ authorized for the requesting user and tutor response.
 
 An idle stream sends an SSE comment heartbeat every 15 seconds. Each write has a
 30-second deadline. Heartbeats do not count as authenticated session activity.
+
+## Tutor work queue
+
+A session has at most one generating response and one queued student message.
+The queued response begins after the current response reaches any terminal state
+and uses preserved partial text as conversation context. Further message
+submissions and session completion are rejected while their required slot is not
+available.
+
+The student may interrupt queued work before it starts. The immutable student
+message remains, its response becomes interrupted, and MIA makes no provider
+request. Retrying a failed response is allowed only while the session is idle and
+creates its sole queued response.
+
+At startup, queued work remains safe to dispatch. A response left in generating
+state is failed with a safe restart code because MIA cannot know whether its
+provider request ran. During graceful shutdown MIA starts no queued work, gives
+active generation 30 seconds to finish, then cancels and fails what remains.
 
 ## Starting a tutoring session
 

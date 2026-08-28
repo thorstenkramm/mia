@@ -849,6 +849,15 @@ turns are omitted without a hidden rolling summary.
 
 - A student message contains at most 8,000 Unicode code points and 32 KiB of valid
   UTF-8.
+- A tutoring session has at most one generating tutor response and one queued
+  student message. A further message is rejected until the queue slot is free.
+- A queued message starts automatically after the generating response completes,
+  fails, or is interrupted. Preserved partial response text is part of the
+  conversation context when generation starts.
+- The student may interrupt a queued response before provider work starts. MIA
+  preserves the student message, marks its response interrupted, and makes no
+  provider request.
+- Session completion is rejected while a response is generating or queued.
 - AI tutor responses appear incrementally while they are generated.
 - The product must not wait for the complete model response before displaying
   available text to the student.
@@ -859,6 +868,8 @@ turns are omitted without a hidden rolling summary.
   disconnected.
 - After reconnecting, the student receives the preserved output and continues
   the same response stream without starting a duplicate model response.
+- Establishing or reconnecting a stream cannot lose text generated between the
+  initial snapshot and live delivery.
 - If generation finishes while disconnected, the completed response is
   available when the student resumes the session.
 - The student can stop a response while it is being generated without ending
@@ -875,6 +886,14 @@ turns are omitted without a hidden rolling summary.
 - If the provider fails after returning partial output, MIA preserves the text
   and marks the response as failed and incomplete.
 - MIA shows the failure to the student and does not retry automatically.
+- A response retry is allowed only while the session has no generating or queued
+  work. The retry becomes the sole queued response for the existing message.
+- On startup, MIA resumes queued responses but marks every response stranded in
+  generating state as failed with a safe restart code. It never recreates an
+  uncertain provider request automatically.
+- During graceful shutdown, MIA starts no queued response. It allows current
+  generation to finish for up to 30 seconds, then cancels and marks remaining
+  generation failed. Queued responses remain queued for startup recovery.
 - The student can explicitly retry. A retry creates a new response linked to the
   same student message and failed response without deleting or rewriting either.
 

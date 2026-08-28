@@ -267,6 +267,9 @@ hardening.
   messages until the session is completed.
 - Tutoring sessions do not expire from inactivity. An authenticated student can
   resume the same active session from any device.
+- A tutoring session has at most one generating response and one queued message.
+  Startup resumes queued work but fails stranded generation rather than risking a
+  duplicate provider request.
 - Students cannot abandon tutoring sessions; finishing is their only action for
   ending one.
 - Only the owning student can finish an active tutoring session. Supervisors and
