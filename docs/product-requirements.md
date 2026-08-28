@@ -679,6 +679,14 @@ approval.
 - The hard maximum combined size of one material is 512 MiB.
 - The default maximum page count of one material is 1,000 pages.
 - The hard maximum page count of one material is 2,000 pages.
+- The maximum number of source files in one material defaults to and cannot
+  exceed 200. Operators may lower it.
+- The default decoded-image limit is 40 megapixels per JPEG or PNG. Operators may
+  raise it only to 100 megapixels. MIA also rejects an image wider or taller than
+  20,000 pixels.
+- A DOCX archive may contain at most 10,000 entries, expand to at most 512 MiB in
+  total, contain no entry larger than 100 MiB, and have no entry with an expansion
+  ratio above 100:1.
 - MIA splits OCR work into provider-compatible requests without bypassing the
   material-level limits.
 

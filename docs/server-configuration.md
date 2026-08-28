@@ -433,6 +433,29 @@ to `max_file_size_mib`.
 
 The maximum combined page count of one material. Valid values are 1 through 2000.
 
+#### `uploads.max_material_files`
+
+- Type: integer
+- Status: optional
+- Default: `200`
+- Environment: `MIA_UPLOADS_MAX_MATERIAL_FILES`
+- Flag: `--uploads-max-material-files`
+
+The maximum number of source files in one material. Valid values are 1 through
+200.
+
+#### `uploads.max_image_megapixels`
+
+- Type: integer
+- Status: optional
+- Default: `40`
+- Environment: `MIA_UPLOADS_MAX_IMAGE_MEGAPIXELS`
+- Flag: `--uploads-max-image-megapixels`
+
+The maximum decoded pixel count of one JPEG or PNG, measured in whole
+megapixels. Valid values are 1 through 100. Independently, neither image
+dimension may exceed 20,000 pixels.
+
 ## Deliberately Fixed Behavior
 
 The initial configuration surface stays small. MIA provides no TOML settings for:

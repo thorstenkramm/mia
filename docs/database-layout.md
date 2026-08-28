@@ -636,6 +636,12 @@ Constraints:
   parent material's `file_type`.
 - File and combined-material sizes and page counts respect configured defaults
   and fixed hard caps before external processing.
+- A material respects the configured file-count limit, which cannot exceed 200.
+- JPEG and PNG dimensions and decoded pixels respect the configured megapixel
+  limit and fixed 100-megapixel and 20,000-pixel-per-dimension hard caps.
+- DOCX validation rejects more than 10,000 archive entries, more than 512 MiB of
+  total expanded data, an entry larger than 100 MiB, or an entry expansion ratio
+  above 100:1.
 - Encrypted, password-protected, macro-enabled, signature-mismatched, and
   unsupported uploads are rejected without a durable source file or
   `material_files` row.

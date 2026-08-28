@@ -222,7 +222,8 @@ hardening.
 - Keep uploaded and generated files outside the public static root. Authorize
   every download.
 - Upload limits are operator-configurable within fixed MIA hard caps. Never allow
-  unbounded file size, material size, or page count.
+  unbounded file size, file count, material size, page count, decoded image size,
+  or archive expansion.
 - MIA has no malware-scanner integration. Treat files as untrusted, validate
   signatures and detected media types, never execute active content, and use
   safe download headers. Do not claim accepted files are malware-free.
