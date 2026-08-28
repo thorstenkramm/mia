@@ -990,7 +990,8 @@ The database changes in the following operations require one SQLite transaction
 and cannot use a check-then-act sequence outside it. Filesystem side effects are
 not part of these transactions:
 
-- first-administrator bootstrap;
+- first-administrator bootstrap, including the no-administrator check, user and
+  role creation, and audit event;
 - username and email assignment;
 - course creation with initial supervisor assignment, activation, and deletion;
 - course mentor removal and reassignment;

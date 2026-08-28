@@ -47,9 +47,9 @@
   and mentor registration is invitation-only; student accounts are provisioned
   by assigned supervisors.
 - The first administrator is created through a one-time local operator bootstrap
-  that is available only while no administrator exists. Do not expose bootstrap
-  through a public web route. Its exact mechanism remains an architecture
-  decision.
+  command while the server is stopped. It reads the password twice from a
+  terminal, is available only while no administrator exists, and has no public
+  web route.
 - Students do not require email addresses. A supervisor provisions a student
   account and chooses its username and temporary initial password. The student
   must replace it at first login before using other authenticated features.

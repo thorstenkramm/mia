@@ -94,8 +94,18 @@ enable CORS.
 MIA serves the separately installed frontend outside `/api`. Unknown API paths
 never fall back to frontend HTML.
 
-The first-administrator bootstrap is a local operator action and has no HTTP
-route.
+The first-administrator bootstrap has no HTTP route. With the server stopped, the
+operator runs the interactive `mia bootstrap-admin` command locally. The command
+collects the required account fields, reads the password twice from a terminal,
+and refuses redirected password input. It never accepts a password through a
+command-line argument, environment variable, or input file.
+
+The command validates the normal account and password rules, verifies that no
+administrator exists inside the bootstrap transaction, creates the user and
+administrator role, records the local-operator audit event, and commits. It makes
+no database change if validation fails, an administrator already exists, or any
+write fails. The supplied administrator email is marked verified because the
+local operator creates the account directly.
 
 ## Authentication and recovery
 
@@ -331,12 +341,8 @@ automatic retries.
 
 ## Open decisions
 
-The following current decisions remain open and are not implied by the route
-layout:
-
-- the local first-administrator bootstrap command or mechanism;
-- exact JSON:API attributes, relationships, includes, filters, and collection
-  limits.
+Exact JSON:API attributes, relationships, includes, filters, and collection
+limits remain open and are not implied by the route layout.
 
 Resolve each item in this document or a more specific current architecture
 document before implementing the affected routes. Superseded proposals should be

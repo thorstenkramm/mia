@@ -424,7 +424,6 @@ rules.
   as a public web registration flow.
 - After the first administrator is created, bootstrap is disabled and further
   administrators follow the authorized account-management workflow.
-- The exact local command or startup mechanism is an architecture decision.
 
 ## Course lifecycle
 

@@ -86,8 +86,9 @@ invitation-only; student accounts are provisioned by assigned supervisors, and
 student email is optional.
 New supervisors and mentors choose their own username and password while
 accepting the invitation.
-The operator creates the first administrator through a one-time local bootstrap
-action that is disabled after the first administrator exists.
+With the server stopped, the operator creates the first administrator through a
+one-time interactive local command. The command is disabled after the first
+administrator exists.
 
 **Step 4: make students familiar**: While technically not required, this step is crucial: Make the students familiar
 with the tutoring platform. Integrate it into regular classes. Or conduct the first tutoring sessions under personal
