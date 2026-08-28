@@ -220,8 +220,8 @@ rules.
   number.
 - If SMS delivery is not configured or fails, self-service mobile-number changes
   are unavailable and the current number remains unchanged.
-- Confirmation codes must not be stored in plaintext, returned by the API, or
-  written to logs.
+- Confirmation codes are stored only in private SQLite. They are never returned
+  by the API or written to logs or audit content.
 
 ## Account registration
 
