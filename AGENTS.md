@@ -119,12 +119,13 @@
   `.agents/rules/echo.md` for framework-specific rules.
 - Course-wide material has a revocable supervisor approval flag. Only approved
   course-wide material is visible to course students or usable by the AI tutor.
-- An active course with no approved course-wide material accepts no new tutoring
-  sessions. Existing sessions may finish without access to revoked material.
+- An active course with no approved, ready, file-backed course-wide material
+  accepts no new tutoring sessions. Existing sessions may finish without access
+  to revoked material.
 - Courses are either inactive or active. There is no separate archive state.
 - Course activation requires learning goals, AI instructions, a valid language,
-  at least one supervisor, and approved course-wide material. Only active courses
-  accept new student memberships.
+  at least one supervisor, and approved, ready, file-backed course-wide material.
+  Only active courses accept new student memberships.
 - Every course keeps at least one supervisor; only administrators remove
   supervisor assignments. An assigned supervisor may remove a student only when
   no active tutoring session exists, and removal deletes all of that student's

@@ -220,10 +220,10 @@ Invariants:
 - A newly created course is inactive.
 - Course creation and initial supervisor assignment occur in one transaction.
 - Activation requires at least one assigned supervisor, non-empty learning
-  goals, non-empty LLM instructions, a valid language, and at least one approved
-  course-wide material.
-- An active course with no approved course-wide material remains active but
-  cannot accept a new tutoring session.
+  goals, non-empty LLM instructions, a valid language, and at least one approved,
+  ready, file-backed course-wide material.
+- An active course with no approved, ready, file-backed course-wide material
+  remains active but cannot accept a new tutoring session.
 - Only an assigned supervisor can activate or deactivate the course.
 - Deactivation blocks new sessions but does not terminate an active session.
 - Only an administrator can delete a course, and only while it is inactive and
@@ -554,11 +554,11 @@ Columns:
 - `name`, not null
 - `name_normalized`, not null
 - `description`, nullable
-- `type`, enum `text-book`, `youtube`, `exam`, `website`, `worksheet`, or
-  `other`, not null
+- `type`, enum `text-book`, `youtube`, `exam`, `website`, or `worksheet`, not null
 - `file_type`, nullable enum `pdf`, `jpeg`, `png`, `txt`, `md`, or `docx`
 - `external_url`, nullable
 - `llm_instructions`, nullable
+- `state`, enum `draft`, `processing`, `ready`, or `failed`, not null
 - `brief_json`, nullable validated material-brief document
 - `brief_source`, nullable enum `generated` or `supervisor`
 - `brief_updated_at`, nullable
@@ -576,9 +576,12 @@ Constraints:
 - Unique: (`course_id`, `name_normalized`).
 - Course-wide material has no owner. Student-private material requires an owner
   who belongs to the course.
+- Website and YouTube link-only material requires course-wide scope.
+- Student-private material requires at least one source file before finalization.
 - Student-private material can never be approved.
-- Approval requires course-wide scope, an assigned approving supervisor, and no
-  faulty source file or failed required processing job.
+- Approval requires course-wide scope, `state = ready`, a non-empty brief, and an
+  assigned approving supervisor. Approval records the review; there is no
+  separate reviewed flag.
 - Revocation sets `is_approved` false and clears approval attribution in one
   transaction.
 - All files in one material have the same detected format, equal to `file_type`.
@@ -586,6 +589,17 @@ Constraints:
   supplies AI-readable content.
 - External URLs use HTTPS. YouTube material uses a recognized YouTube host.
 - External URLs are metadata only and are never fetched by the server.
+- Finalization of file-backed material requires at least one uploaded file and
+  atomically changes `draft` to `processing`, freezes the file set, and queues
+  extraction. Duplicate finalization does not queue duplicate work.
+- Every file and brief must succeed before `processing` becomes `ready`; any
+  required failure makes the material `failed`.
+- Adding or removing files is allowed only in `draft` or `failed`. The first file
+  mutation in `failed` returns the material to `draft`. A `ready` material cannot
+  be reopened.
+- Course-wide link-only website and YouTube material becomes `ready` only with a
+  non-empty supervisor-authored brief. Even when approved, it does not satisfy
+  course activation or new-session material readiness.
 - MIA derives a source file's safe download media type from `file_type`; detected
   upload values are validation inputs and are not persisted separately.
 - Brief fields are either all absent, or `brief_json`, `brief_source`, and
@@ -632,7 +646,7 @@ Constraints:
   approved or used until the file is removed or replaced.
 - A transition to faulty atomically revokes existing approval. Every activation,
   course-availability, session-start, and retrieval check requires material to
-  be both approved and usable.
+  be approved, ready, and file-backed.
 
 ## Tutoring
 
@@ -668,7 +682,8 @@ Constraints:
   supervisor-corrected summary without an explicit authorized supervisor action.
 - Sessions do not expire and cannot be abandoned.
 - Only the owning student can transition the session to completed.
-- New sessions require an active course with approved course-wide material.
+- New sessions require an active course with approved, ready, file-backed
+  course-wide material.
 
 ### `student_messages`
 

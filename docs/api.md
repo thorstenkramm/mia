@@ -249,6 +249,7 @@ course with no active tutoring sessions.
 
 - `GET|POST /api/v1/courses/{course_id}/materials`
 - `GET|PATCH|DELETE /api/v1/materials/{id}`
+- `POST /api/v1/materials/{id}/finalizations`
 - `POST /api/v1/materials/{id}/approvals`
 - `DELETE /api/v1/materials/{id}/approvals`
 - `GET|POST /api/v1/materials/{id}/files`
@@ -266,6 +267,11 @@ internal path or raw OCR provider response.
 
 Course-wide approval is separate from upload and processing. Student-private
 material cannot be approved or converted to course-wide material.
+
+Files may change only while a material is draft or failed. Finalization freezes
+the file set and queues processing once. Ready material is immutable and must be
+deleted and recreated to change its source. Approval requires ready state and a
+non-empty brief; link-only material does not satisfy course readiness.
 
 ## Tutoring sessions and messages
 

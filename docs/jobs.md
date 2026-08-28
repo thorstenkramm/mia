@@ -12,8 +12,8 @@ due, the worker waits one second before polling again.
 
 ## OCR
 
-After a PDF, PNG, or JPEG material is completely uploaded, MIA queues an OCR job.
-The job sends provider-compatible requests to the Mistral OCR API, validates the
+Finalizing a draft PDF, PNG, or JPEG material queues its OCR work once. The job
+sends provider-compatible requests to the Mistral OCR API, validates the
 responses, and writes normalized extracted content to the source file's
 deterministic `content.txt` path. Raw provider responses are discarded.
 
@@ -23,17 +23,23 @@ is marked faulty. If one file is faulty, the entire material remains unusable
 until that file is removed or replaced. MIA never approves or uses a partial
 material while silently excluding a failed file.
 
+Finalizing DOCX, UTF-8 text, or Markdown queues bounded local extraction instead.
+MIA validates and extracts these formats without sending them to Mistral. DOCX
+processing treats its ZIP and XML structures as untrusted input and never runs
+macros or embedded content.
+
 ## Material Summary
 
-After OCR completes, or after directly readable material is uploaded, MIA queues
-a material-summary job. The configured job model creates the material brief
+After every required extraction completes, MIA queues one material-summary job.
+The configured job model creates the material brief
 using instructions from
 `<data-dir>/llm-instructions/jobs/material/<material-type>.md`. The job updates
 `materials.brief_json`, `materials.brief_source`, and
 `materials.brief_updated_at`.
 
 Website and YouTube links are metadata only and do not trigger server-side
-fetching or a material-summary job. AI-readable content requires a separately
+fetching or a material-summary job. A link-only material requires a
+supervisor-authored brief. AI-readable source content requires a separately
 uploaded supported file.
 
 The output is a material brief used by supervisors and by the AI tutor when it

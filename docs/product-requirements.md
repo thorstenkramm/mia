@@ -496,8 +496,8 @@ available to students.
 An assigned supervisor prepares the course by defining its learning goals,
 curriculum context, AI tutor instructions, language, and course-wide material.
 
-Course-wide material is processed and reviewed separately. At least one
-course-wide material must be approved before activation.
+Course-wide material is processed and reviewed separately. At least one ready,
+file-backed course-wide material must be approved before activation.
 
 ### Activation
 
@@ -505,12 +505,13 @@ An assigned supervisor activates a prepared course. Activation allows
 supervisors to add students and allows students to start tutoring.
 
 The course must have learning goals, AI tutor instructions, a valid language, and
-at least one approved course-wide material before it can be activated.
+at least one approved, ready, file-backed course-wide material before it can be
+activated.
 
 ### Loss of approved material
 
-- If an active course has no approved course-wide material, it remains active
-  but students cannot start new tutoring sessions.
+- If an active course has no approved, ready, file-backed course-wide material,
+  it remains active but students cannot start new tutoring sessions.
 - Existing active sessions may finish, but revoked material is unavailable for
   subsequent retrieval.
 - Approving course-wide material automatically permits new sessions again; the
@@ -563,6 +564,8 @@ Every material has exactly one immutable scope:
 
 Material names are unique within a course using case-insensitive comparison.
 Every file in one material uses the same supported file format.
+Website and YouTube link-only material is course-wide and created by an assigned
+supervisor. Student-private material requires at least one uploaded source file.
 
 ### Course-wide material
 
@@ -571,7 +574,10 @@ Every file in one material uses the same supported file format.
 - A generated material brief is a draft that a supervisor can review and
   correct.
 - Course-wide material has a separate, revocable approval flag.
-- A supervisor can grant or revoke approval at any time.
+- Approval requires a ready material and a non-empty brief. The approval action
+  itself records the assigned supervisor's review; there is no separate reviewed
+  state.
+- A supervisor can grant or revoke approval subject to those requirements.
 - Only approved course-wide material is visible to course students or available to
   the AI tutor during their sessions.
 - Revoking approval removes the material from subsequent student access and AI
@@ -607,6 +613,29 @@ Every file in one material uses the same supported file format.
   data-lifecycle policy.
 
 ### Material processing
+
+File-backed material starts in a draft state. The uploader may add or remove
+files while it is a draft and then explicitly finalize the material. Finalization
+atomically freezes the file set, changes the material to processing, and queues
+the required extraction work once.
+
+- PDF, PNG, and JPEG use Mistral OCR.
+- DOCX, UTF-8 text, and Markdown are validated and extracted locally with bounded
+  parsers. These formats are not sent to Mistral.
+- Successful extraction of every file and generation of a trustworthy brief
+  changes the material to ready.
+- Any required extraction or brief failure changes the material to failed. MIA
+  never uses a partially processed material.
+- A failed material may return to draft when its uploader removes or replaces a
+  source file. Processing and ready materials have immutable file sets.
+- A ready material cannot be reopened in the MVP. Correcting its source requires
+  deleting and recreating the material.
+
+Course-wide website and YouTube metadata may be finalized without a source file
+only when an assigned supervisor provides a non-empty brief. An approved
+link-only material is visible to students, but it does not satisfy course
+activation or new-session readiness and provides no retrievable source content
+to the AI tutor.
 
 After readable content is available, MIA generates one grounded material brief.
 The brief contains:
