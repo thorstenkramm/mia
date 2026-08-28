@@ -381,6 +381,9 @@ rules.
   digits, or symbols.
 - MIA rejects known-common passwords using a local check that does not disclose
   the candidate password to an external service.
+- The local check uses MIA's bundled SecLists top-100,000 common-password list and
+  compares the unchanged valid UTF-8 password exactly, without trimming,
+  normalization, case folding, or mutation rules.
 - MIA does not silently trim or alter a submitted password.
 - The policy applies to permanent and supervisor-chosen temporary passwords.
 - Operators cannot configure weaker password requirements.

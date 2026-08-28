@@ -51,6 +51,11 @@ These settings are fixed for the MVP and are not operator-configurable.
   generated communications do not depend on host time-zone files.
 - Password length counts Unicode code points without trimming or Unicode
   normalization. MIA rejects invalid UTF-8 before hashing.
+- MIA embeds the versioned SecLists top-100,000 common-password list in the
+  executable. The repository records the upstream version and license when the
+  list is added, and MIA updates it only through normal releases.
+- Blocklist comparison uses the submitted valid UTF-8 bytes exactly. MIA does not
+  trim, normalize, case-fold, or generate password mutations.
 
 ## HTTP Runtime
 
