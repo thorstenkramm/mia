@@ -286,6 +286,17 @@ Constraints:
 
 ## Invitations and account recovery
 
+### Bearer tokens
+
+Invitation and password-reset links use canonical lowercase UUID v4 bearer
+tokens generated from the operating system's cryptographically secure random
+source. MIA accepts only the exact canonical representation.
+
+SQLite stores the 32-byte SHA-256 digest of the token as a `BLOB`. MIA hashes the
+ASCII token bytes without normalization and uses the digest for lookup. The
+plaintext token exists only while constructing the link and is never persisted,
+logged, or audited.
+
 ### `invitations`
 
 This table stores supervisor and mentor invitations. Student accounts do not use
@@ -298,7 +309,7 @@ Columns:
 - `course_id`, nullable course ID
 - `email`, intended original address, not null
 - `email_normalized`, intended normalized address, not null
-- `token_hash`, non-reversible current token value, not null, unique
+- `token_hash`, SHA-256 token digest, not null, unique
 - `token_generation`, positive integer, not null, default 1
 - `state`, enum `pending`, `accepted`, or `revoked`, not null
 - `created_at`, not null
@@ -325,7 +336,7 @@ Invariants:
 - Mentor acceptance creates course eligibility, not a student assignment.
 - Any administrator can revoke a supervisor invitation. Any current course
   supervisor can revoke a mentor invitation for that course.
-- Tokens are never stored, logged, or audited in plaintext.
+- Tokens follow the shared bearer-token contract above.
 
 ### `password_reset_challenges`
 
@@ -336,7 +347,7 @@ Columns:
 
 - `id`, prefix `pr_`, primary key
 - `user_id`, user ID, not null, cascade on user deletion
-- `token_hash`, non-reversible value, not null, unique
+- `token_hash`, SHA-256 token digest, not null, unique
 - `created_at`, not null
 - `expires_at`, not null
 - `consumed_at`, nullable

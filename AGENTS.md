@@ -64,6 +64,8 @@
 - Supervisor and mentor invitations do not expire; they remain pending until
   accepted or revoked.
 - Invitation acceptance is single-use and permanently consumes the invitation.
+- Invitation and password-reset bearer tokens are canonical lowercase UUID v4
+  values. Persist only their SHA-256 digests.
 - Supervisors, mentors, and administrators recover passwords through a
   single-use link sent to their verified email that expires after 30 minutes.
   Public recovery responses do not reveal account existence. The MVP does not

@@ -135,7 +135,8 @@ replacement and logout when MIA next checks account state.
 Login may return an MFA challenge instead of a complete authenticated session.
 Public recovery responses are account-enumeration safe. Successful password
 reset does not revoke other stateless browser cookies in the MVP. A password
-reset link expires 30 minutes after issuance and is single-use.
+reset link expires 30 minutes after issuance and is single-use. Its bearer token
+is a canonical lowercase UUID v4.
 
 Login cookie stages are:
 
@@ -165,7 +166,8 @@ not appear in access-log paths:
 - `POST /api/v1/invitation-acceptances`
 
 Supervisor and mentor invitations are single-use, do not expire, and remain
-pending until accepted or revoked. Student accounts do not use invitations.
+pending until accepted or revoked. Their bearer tokens are canonical lowercase
+UUID v4 values. Student accounts do not use invitations.
 
 ## Current user and MFA
 
