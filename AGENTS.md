@@ -163,10 +163,10 @@
   state, and course or mentor assignments.
 - Mentoring is a last resource after the AI tutor has tried suitable educational
   approaches and authorized material. With no assigned mentor, all
-  student-facing mentoring features are disabled. The last mentor cannot be
-  unassigned; removing one of several requires supervisor-selected reassignment
-  of open mentoring sessions. `mentoring_requests_allowed` independently
-  controls new requests.
+  new student-facing mentoring requests are disabled. A supervisor may remove
+  any mentor; affected open work returns to supervisor triage with future schedule
+  details cleared. `mentoring_requests_allowed` independently controls new
+  requests.
 - The Go module path is `github.com/thorstenkramm/mia`, and the minimum supported
   Go version is 1.27.0. No package layout, authentication mechanism, or deployment
   procedure has been finalized unless a later authoritative document explicitly

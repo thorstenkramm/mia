@@ -312,10 +312,10 @@ Constraints:
 - Primary key: (`course_id`, `student_user_id`, `mentor_user_id`).
 - The student must belong to `course_id`.
 - The mentor must be eligible in `course_mentors` for `course_id`.
-- Once a student has a mentor, the last assignment cannot be removed.
-- Removing one of several mentors requires one transaction that transfers all
-  open mentoring sessions to a supervisor-selected replacement before deleting
-  the assignment.
+- An assigned supervisor may remove any assignment, including the last.
+- Removing course-level mentor eligibility deletes all of that mentor's student
+  assignments in the course and returns affected open mentoring work to triage in
+  one transaction.
 
 ## Invitations and account recovery
 
@@ -867,41 +867,50 @@ Columns:
 - `id`, prefix `ms_`, primary key
 - `student_user_id`, student user ID, not null
 - `course_id`, course ID, not null
-- `mentor_user_id`, nullable current mentor user ID, required while open
+- `mentor_user_id`, nullable current mentor user ID
 - `mentor_fingerprint`, nullable de-identified historical mentor reference
 - `topic`, not null
 - `response`, nullable
 - `responded_at`, nullable
 - `responded_by`, nullable mentor user ID
 - `responded_by_fingerprint`, nullable de-identified actor reference
+- `proposed_for`, nullable student-proposed UTC instant
 - `scheduled_for`, nullable
 - `meeting_instructions`, nullable
 - `meeting_url`, nullable HTTPS URL
 - `created_at`, not null
 - `closed_at`, nullable
-- `closed_by`, nullable student or mentor user ID
+- `closed_by`, nullable student, mentor, or supervisor user ID
 - `closure_reason`, nullable enum `completed` or `cancelled`
 
 Constraints:
 
-- Creation requires `users.mentoring_requests_allowed`, an active course, and an
-  assigned mentor for the student and course. Disabling new requests does not
-  change existing rows.
+- Creation requires `users.mentoring_requests_allowed`, an active course, and at
+  least one mentor assignment for the student and course. A new row has no
+  current mentor. Disabling new requests does not change existing rows.
 - `scheduled_for IS NULL` and `closed_at IS NULL` means requested. A non-null
   `scheduled_for` with no `closed_at` means scheduled. A non-null `closed_at`
   means closed.
-- The student may provide `scheduled_for` when creating the request. Otherwise,
-  the assigned mentor may add it later. Either participant may reschedule an open
-  row.
+- An assigned course supervisor selects `mentor_user_id` from the student's
+  current mentor assignments. Mentor response and scheduling require that
+  selection. A student may set `proposed_for` at creation; only the assigned
+  mentor confirms or changes `scheduled_for`.
+- The student or assigned mentor may reschedule a future scheduled row.
 - `response`, `responded_at`, and `responded_by` are either all absent or all
-  present. The responding mentor must hold the row's current student-course
-  assignment. Response content and original authorship are immutable.
+  present. At response creation, the mentor must be the current mentor and hold
+  the student-course assignment. Response content and original authorship remain
+  immutable after later triage.
 - `closed_at`, `closed_by`, and `closure_reason` are either all absent or all
-  present. The student or assigned mentor may cancel a future schedule or close
-  completed mentoring work. MIA has no no-show state.
-- Mentor reassignment atomically transfers every open row. Closed rows retain a
-  de-identified reference to the mentor who handled them if that account is
-  later deleted. Response authorship remains separate from the current mentor.
+  present. The student or an assigned supervisor may cancel an unscheduled
+  request. The student or assigned mentor may cancel a future schedule. Only the
+  assigned mentor may mark completion after `scheduled_for`.
+- Removing the current mentor from the student or course clears
+  `mentor_user_id`, `proposed_for`, `scheduled_for`, meeting details, and schedule
+  attribution on every open row. Topic and immutable response authorship remain
+  for supervisor triage. Closed rows retain a de-identified historical mentor
+  reference.
+- Course deactivation blocks creation but does not block changes to existing
+  rows.
 - Rescheduling overwrites `scheduled_for`; the required audit event records the
   actor, previous time, and new time instead of a revision row.
 - External meeting URLs use HTTPS and are never fetched by MIA.
@@ -1053,8 +1062,8 @@ behavior.
 - Course supervisor, student, and mentor eligibility rows cascade with the course
   or referenced user.
 - Mentor assignments cascade with the student or course. Deleting a mentor user
-  is allowed only after open mentoring sessions are reassigned.
-- Deleting a multi-role account first performs required mentor reassignment.
+  first performs the same open-work triage as mentor removal.
+- Deleting a multi-role account first performs required mentor triage.
   Course-wide resources created by that user remain with nullable attribution;
   completed mentoring history keeps only a de-identified mentor fingerprint.
 - Invitations scoped to a deleted course cascade. Deleting an accepting or
@@ -1127,7 +1136,7 @@ not part of these transactions:
 - username and email assignment;
 - course creation with initial supervisor assignment, activation, and deletion;
 - course supervisor removal and student membership removal;
-- course mentor removal and reassignment;
+- course mentor removal and open-work triage;
 - creation and completion of the one active tutoring session;
 - tutoring-session completion and summary-job creation;
 - invitation resend, acceptance, and revocation;
@@ -1139,5 +1148,5 @@ not part of these transactions:
 - tutor-response claim, terminal transition, and queued-response handoff;
 - mentoring cancellation and rescheduling;
 - job claim, retry, completion, and lease recovery;
-- student and course cascading deletion with mentor reassignment and audit
+- student and course cascading deletion with mentor triage and audit
   de-identification.

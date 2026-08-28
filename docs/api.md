@@ -261,9 +261,9 @@ student has no active tutoring session in the course. Removal atomically deletes
 all data owned by that student in the course while preserving the account and
 other-course data.
 
-Mentor removal accepts the required replacement mentor when open mentoring
-sessions must be reassigned. Course deletion remains restricted to an inactive
-course with no active tutoring sessions.
+Mentor removal drops affected student assignments and returns open mentoring work
+to supervisor triage in one transaction. Course deletion remains restricted to
+an inactive course with no active tutoring sessions.
 
 ## Materials and files
 
@@ -405,10 +405,16 @@ closure:
 - `GET|POST /api/v1/courses/{course_id}/mentoring-sessions`
 - `GET|PATCH /api/v1/mentoring-sessions/{id}`
 
-The student may provide `scheduled_for` during creation. Otherwise, the assigned
-mentor may add it later. `PATCH` supports the mentor response, rescheduling,
-meeting details, and closure subject to field-level authorization and current
-state.
+Creation is unassigned and may include `proposed_for`. An assigned course
+supervisor selects one of the student's assigned mentors through `PATCH`. The
+assigned mentor may then respond and set `scheduled_for`. The student or
+supervisor may cancel an unscheduled request; the student or assigned mentor may
+cancel a future schedule; only the assigned mentor may complete it after the
+scheduled time.
+
+Course deactivation blocks creation but not existing work. Mentor removal clears
+the current mentor and future schedule details on open work and returns it to
+supervisor triage.
 
 MIA provides no live mentoring channel. Meeting URLs are HTTPS metadata and are
 never fetched by MIA.

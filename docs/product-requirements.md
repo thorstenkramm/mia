@@ -940,24 +940,29 @@ turns are omitted without a hidden rolling summary.
 - The AI tutor may suggest mentoring only when those attempts do not resolve the
   student's difficulty.
 - At least one mentor must be assigned to the student in the active course for
-  any student-facing mentoring feature to be available.
-- When no mentor is assigned, MIA disables mentoring suggestions, requests,
-  responses, and scheduling. Supervisor assignment management remains available.
+  new mentoring suggestions or requests to be available.
+- When no mentor is assigned, MIA disables new suggestions and requests.
+  Existing mentoring records remain visible and cancellable while assigned
+  supervisors restore an assignment.
 - `mentoring_requests_allowed` independently controls whether the student can
   create a new request. When it is false, MIA does not offer or suggest creating
   a new request. It does not remove mentor assignments or cancel existing
   requests or scheduled sessions.
 - The mentor receives the mentoring topic, not private uploads or tutoring chat
   history.
-- A student may include an appointment time when creating a mentoring request.
-  Otherwise, the assigned mentor can add it later. The mentor can respond to the
-  request, and either participant can reschedule an open mentoring session.
+- A new mentoring request is unassigned even when one or more mentors are
+  assigned to the student. An assigned course supervisor selects one of the
+  student's assigned mentors before mentor response or scheduling work continues.
+- A student may include a proposed appointment time when creating a mentoring
+  request. After supervisor assignment, the mentor can respond, confirm or change
+  the schedule, and provide meeting details.
 - Mentoring sessions take place outside MIA. MIA provides no live mentor chat,
   audio, or video channel.
 - The mentor supplies meeting instructions or an external HTTPS meeting link.
 - MIA stores and communicates the schedule and meeting instructions but does not
   fetch or validate the external service's content.
-- The student or assigned mentor can cancel a future mentoring session.
+- The student or an assigned course supervisor can cancel an unscheduled request.
+- The student or assigned mentor can cancel a future scheduled session.
 - Cancellation records the actor and time. Participants and assigned supervisors
   see the updated state when viewing the mentoring session.
 - The student or assigned mentor can reschedule a future mentoring session
@@ -966,6 +971,10 @@ turns are omitted without a hidden rolling summary.
   updates the state visible to the other participant and assigned supervisors.
 - MIA does not track attendance or no-shows for external mentoring sessions and
   applies no no-show status or penalty.
+- Only the assigned mentor can mark a session completed, and only after its
+  scheduled time has begun.
+- Course deactivation blocks new mentoring requests but does not stop triage,
+  responses, rescheduling, cancellation, or completion of existing work.
 
 ## Product notifications
 
@@ -977,15 +986,18 @@ turns are omitted without a hidden rolling summary.
   codes are required account or security delivery and are not product
   notifications.
 
-### Mentor unassignment and reassignment
+### Mentor removal and triage
 
-- A supervisor cannot unassign the student's last mentor.
-- When several mentors are assigned, unassigning one requires the supervisor to
-  select a replacement mentor.
-- The replacement must be assigned to the same student and course as part of or
-  before the unassignment.
-- All open mentoring sessions assigned to the removed mentor transfer atomically
-  to the selected replacement.
+- An assigned supervisor may remove any mentor assignment, including the last.
+  New student-facing mentoring requests remain disabled until another mentor is
+  assigned.
+- Removing a mentor from the course eligibility list drops all of that mentor's
+  student assignments in the course.
+- Open mentoring work assigned to a removed mentor returns to supervisor triage:
+  MIA clears the current mentor, scheduled time, and meeting details while
+  preserving the request topic and any immutable mentor response.
+- Mentor removal, assignment deletion, open-work triage, and audit events occur
+  in one transaction.
 - Completed mentoring history remains attributed to the mentor who handled it.
 
 ## Time and scheduling
@@ -1233,12 +1245,12 @@ The completed product must support at least these observable scenarios:
    to their own preferred time zones.
 10. A provider or processing failure remains visible and does not create a
     successful-looking summary or material state.
-11. MIA exposes no student-facing mentoring feature when the student has no
-    assigned mentor in the active course.
+11. MIA offers no new mentoring request when the student has no assigned mentor
+    in the active course, while existing triaged work remains visible.
 12. Disabling `mentoring_requests_allowed` blocks new requests without cancelling
     existing requests or scheduled sessions.
-13. A supervisor cannot remove the last assigned mentor and must select a
-    replacement when removing one of several mentors.
+13. Removing a mentor returns affected open mentoring work to supervisor triage
+    without losing its topic or prior immutable response.
 14. Repeated unauthenticated requests are throttled without revealing whether
     the submitted account or invitation exists.
 15. Repeated login failures produce temporary throttling rather than a permanent
