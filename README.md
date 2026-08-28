@@ -205,9 +205,9 @@ Students cannot change other profile fields. If SMS delivery is unavailable,
 the current mobile number remains unchanged.
 
 A supervisor can recover a student's account by setting a temporary password.
-MIA revokes the student's existing sessions, and the student must replace the
-temporary password at the next login.
+MIA restricts existing browser sessions to password replacement and logout, and
+the student must replace the temporary password at the next login.
 
 Supervisors, mentors, and administrators recover forgotten passwords through a
-single-use link sent to their verified email address. Successful reset revokes
-all existing sessions.
+single-use link sent to their verified email address. Existing stateless browser
+cookies remain valid until their normal expiry in the MVP.

@@ -16,7 +16,6 @@ behavior.
 - [Identity and access](#identity-and-access)
 - [Course scope and relationships](#course-scope-and-relationships)
 - [Invitations and account recovery](#invitations-and-account-recovery)
-- [Browser sessions](#browser-sessions)
 - [Mobile verification and SMS limits](#mobile-verification-and-sms-limits)
 - [MFA](#mfa)
 - [Material](#material)
@@ -328,37 +327,10 @@ Columns:
 Invariants:
 
 - A challenge is short-lived and single-use.
-- Successful reset consumes the challenge and revokes all browser sessions for
-  the account.
+- Successful reset consumes the challenge. Stateless browser cookies issued
+  before the reset remain valid until their normal expiry in the MVP.
 - Public request behavior never reveals whether an account exists. Requests for
   nonexistent accounts create no user-linked row.
-
-## Browser sessions
-
-### `browser_sessions`
-
-Columns:
-
-- `id`, prefix `ses_`, primary key
-- `user_id`, user ID, not null, cascade on user deletion
-- `token_hash`, non-reversible session token, not null, unique
-- `authenticated_at`, not null
-- `last_activity_at`, not null
-- `idle_expires_at`, not null
-- `absolute_expires_at`, not null
-- `revoked_at`, nullable
-- `revocation_reason`, nullable safe enum
-- `created_ip`, nullable
-- `user_agent`, nullable bounded text
-
-Invariants:
-
-- `idle_expires_at` is at most 30 minutes after `last_activity_at`.
-- `absolute_expires_at` is exactly 12 hours after authentication and never
-  extends.
-- Concurrent rows per user are allowed.
-- Password reset, account ban, account deletion, and MFA reset revoke every live
-  session for the account.
 
 ## Mobile verification and SMS limits
 
@@ -491,8 +463,8 @@ Invariants:
 - A recovery code can consume a challenge and itself in one transaction.
 
 MFA reset ends active and pending factors, invalidates recovery codes and
-challenges, revokes all browser sessions, sets `must_change_password`, and writes
-a safe audit event in one transaction.
+challenges, sets `must_change_password`, and writes a safe audit event in one
+transaction. The password gate restricts existing stateless cookies.
 
 Authorization invariants:
 
@@ -900,7 +872,7 @@ Invariants:
 
 Required event families:
 
-- authentication login, logout, failure, throttling, and session revocation;
+- authentication login, logout, failure, and throttling;
 - account creation, profile change, ban, unban, password recovery, password
   replacement, MFA enrollment, MFA replacement, MFA reset, and account deletion;
 - invitation creation, delivery, token rotation, acceptance, and revocation;
@@ -922,9 +894,9 @@ Required event families:
 Migrations specify every foreign key and never rely on SQLite's implicit default
 behavior.
 
-- User-owned security data cascades with the user: roles, browser sessions,
-  password-reset challenges, mobile challenges, SMS history, MFA factors,
-  recovery codes, and MFA challenges.
+- User-owned security data cascades with the user: roles, password-reset
+  challenges, mobile challenges, SMS history, MFA factors, recovery codes, and
+  MFA challenges.
 - Course supervisor, student, and mentor eligibility rows cascade with the course
   or referenced user.
 - Mentor assignments cascade with the student or course. Deleting a mentor user
@@ -963,8 +935,6 @@ Migrations add `CHECK` constraints for state and timestamp combinations:
   `is_active` and records attribution atomically.
 - Pending invitations have no accepted or revoked attribution; accepted and
   revoked states require their matching terminal fields and forbid the other.
-- Live browser sessions have no revocation fields; revoked sessions require both
-  revocation time and reason.
 - Pending MFA factors are unverified and inactive; active factors are verified
   and activated; ended factors require `ended_at`.
 - A tutoring session is active when `completed_at` is null. A completed session
@@ -985,7 +955,6 @@ lookup, including:
 
 - normalized username and email;
 - course supervisor, student, and mentor scope;
-- active browser sessions by user;
 - pending invitation token hash and intended email;
 - active and pending MFA factors and challenges;
 - material course, scope, owner, approval, and name;
@@ -1005,7 +974,7 @@ not part of these transactions:
 - course mentor removal and reassignment;
 - creation and completion of the one active tutoring session;
 - invitation resend, acceptance, and revocation;
-- password, MFA, ban, and account-deletion session revocation;
+- password and MFA replacement and account-state changes;
 - mobile-number verification and SMS-limit accounting;
 - MFA replacement, recovery-code use, and reset;
 - material approval, revocation, and private-material deletion;

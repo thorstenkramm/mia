@@ -68,6 +68,26 @@ Every operation authorizes the action, role, course assignment, student
 assignment, ownership, and resource state. Route grouping and possession of an
 ID are never sufficient authorization.
 
+### Browser session and CSRF
+
+The MVP uses Echo session middleware with Gorilla `CookieStore`. The signed and
+encrypted `__Host-mia_session` cookie contains only the user ID, authentication
+time, idle expiry, and absolute expiry. It is `Secure`, `HttpOnly`,
+`SameSite=Lax`, has path `/`, and has no `Domain` attribute.
+
+Every authenticated request reloads current account, role, assignment, ban, and
+password-gate state from SQLite. Authorization never trusts those values from the
+cookie. Each successful authenticated request reissues the cookie with a
+30-minute idle expiry capped by the original 12-hour absolute expiry. An SSE
+connection refreshes the cookie when established; server-sent events do not.
+
+MIA uses Echo's CSRF middleware with Fetch Metadata checks and token validation
+for unsafe methods. The `__Host-mia_csrf` cookie is `Secure`, `SameSite=Lax`,
+host-only, uses path `/`, and is readable by the frontend rather than
+`HttpOnly`. The frontend sends its value in `X-CSRF-Token` when token validation
+is required. MIA supports same-origin browser access only in the MVP and does not
+enable CORS.
+
 ## Frontend and bootstrap
 
 MIA serves the separately installed frontend outside `/api`. Unknown API paths
@@ -90,7 +110,7 @@ route.
 
 Login may return an MFA challenge instead of a complete authenticated session.
 Public recovery responses are account-enumeration safe. Successful password
-reset revokes every existing browser session for the account.
+reset does not revoke other stateless browser cookies in the MVP.
 
 ## Invitations
 
@@ -111,8 +131,6 @@ pending until accepted or revoked. Student accounts do not use invitations.
 ## Current user and MFA
 
 - `GET|PATCH /api/v1/users/me`
-- `GET /api/v1/users/me/sessions`
-- `DELETE /api/v1/users/me/sessions/{id}`
 - `GET|POST /api/v1/users/me/mfa-enrollments`
 - `POST /api/v1/users/me/mfa-enrollments/{id}/verifications`
 - `DELETE /api/v1/users/me/mfa-enrollments/{id}`
@@ -301,8 +319,6 @@ automatic retries.
 The following current decisions remain open and are not implied by the route
 layout:
 
-- browser authentication and session transport;
-- CSRF token transport tied to the authentication mechanism;
 - the local first-administrator bootstrap command or mechanism;
 - exact JSON:API attributes, relationships, includes, filters, and collection
   limits.

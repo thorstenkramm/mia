@@ -66,17 +66,18 @@
 - Invitation acceptance is single-use and permanently consumes the invitation.
 - Supervisors, mentors, and administrators recover passwords through a
   short-lived, single-use link sent to their verified email. Public recovery
-  responses do not reveal account existence, and successful reset revokes all
-  sessions.
+  responses do not reveal account existence. The MVP does not revoke other
+  stateless browser cookies after reset; they expire normally.
 - Passwords are 12 to 128 characters, allow spaces and Unicode, and have no
   character-class requirements. Reject known-common passwords locally. Do not
   trim passwords or allow operators to weaken the policy.
 - Authenticated browser sessions expire after 30 minutes of inactivity and no
   later than 12 hours after authentication. Activity can reset only the idle
   timeout.
-- Accounts may have concurrent browser sessions. Password reset, account ban,
-  and account deletion revoke all sessions. A student's one-active-tutoring-
-  session rule applies across devices.
+- The MVP uses signed and encrypted Echo CookieStore sessions and keeps no
+  server-side browser-session records. Account ban and deletion are checked on
+  every request. A student's one-active-tutoring-session rule applies across
+  devices.
 - MFA is optional for every user and role. Do not impose role-based MFA
   enrollment.
 - Supported MFA methods are TOTP and, when ClickSend and a verified mobile number
@@ -84,8 +85,8 @@
 - MFA enrollment issues single-use recovery codes shown once and stored only as
   non-reversible values. Never log or audit recovery-code values.
 - An assigned supervisor may reset lost student MFA as a separate security
-  action. Revoke all sessions, invalidate recovery codes, and require password
-  replacement at next login.
+  action. Invalidate recovery codes, require password replacement, and restrict
+  existing cookies to replacement and logout.
 - Staff MFA reset requires a different administrator. When exactly one
   administrator exists, a local operator-only recovery action may reset that
   administrator's MFA. Never expose this action through a public web route.

@@ -4,8 +4,8 @@
 
 This document defines MIA's confirmed product behavior. It describes what users
 must be able to do and which access boundaries the product must preserve. It
-does not define package layout, database implementation, streaming transport,
-or other software architecture.
+does not define package layout, database implementation, or other architecture
+unless a product-facing contract requires a specific choice.
 
 Audience: product owners, designers, operators, and developers. This document is
 authoritative for confirmed product behavior.
@@ -281,8 +281,8 @@ rules.
   password recovery.
 - The supervisor chooses a new temporary password that satisfies the password
   policy.
-- MIA revokes all existing sessions for the student when the temporary password
-  is set.
+- Setting the temporary password immediately restricts every existing browser
+  session to password replacement and logout.
 - The student must replace the temporary password at the next login before using
   any other authenticated feature.
 - The temporary password is never logged, included in audit content, or exposed
@@ -297,7 +297,8 @@ rules.
 - MIA sends a short-lived, single-use reset link.
 - Public recovery responses do not reveal whether the submitted account or email
   address exists.
-- Successful password reset revokes every existing session for the account.
+- Successful password reset does not revoke other stateless browser cookies in
+  the MVP. They remain valid until their normal expiry.
 - Reset request, completion, and failure events are audited without storing the
   link token or password.
 
@@ -315,21 +316,27 @@ rules.
 
 ### Authentication session lifetime
 
+- The MVP uses a signed and encrypted stateless browser cookie. MIA keeps no
+  server-side session records.
 - An authenticated browser session expires after 30 minutes without an
   authenticated user action.
-- Authenticated user activity resets the inactivity timer.
+- Each successful authenticated HTTP request, including establishment of an SSE
+  connection, resets the inactivity timer. Server-sent heartbeats and background
+  provider work do not.
 - A session expires no later than 12 hours after authentication, regardless of
   activity.
 - After either timeout, the user must authenticate again.
 - The 12-hour maximum is not extended by session activity.
+- Logout clears the cookie in the current browser. MIA does not provide session
+  listing or individual remote-session revocation in the MVP.
 
 ### Concurrent sessions
 
 - One account may have authenticated browser sessions on multiple devices at the
   same time.
 - Each session has its own inactivity and maximum-lifetime timers.
-- Password reset, account ban, or account deletion revokes every session for the
-  affected account.
+- Account ban and deletion take effect on the next request because MIA reloads
+  current account state instead of trusting it from the cookie.
 - The one-active-tutoring-session rule applies across all of a student's browser
   sessions and devices.
 
@@ -372,10 +379,10 @@ rules.
 - If a student loses the active factor and all recovery codes, any supervisor
   sharing an assigned course with the student can perform a separate MFA reset.
 - The reset removes the active MFA method and invalidates all recovery codes.
-- MIA revokes all student sessions and requires password replacement at the next
-  login.
-- MFA reset, session revocation, and subsequent password replacement are audited
-  without recording secrets.
+- MIA requires password replacement. Existing browser cookies are immediately
+  restricted to password replacement and logout.
+- MFA reset and subsequent password replacement are audited without recording
+  secrets.
 
 ### Staff and administrator lost-factor recovery
 
@@ -383,12 +390,13 @@ rules.
   recovery codes requires an MFA reset by a different administrator.
 - A user cannot approve their own MFA reset.
 - The reset removes the active MFA method, invalidates all recovery codes,
-  revokes all sessions, and requires password replacement at next login.
+  and requires password replacement at next login. Existing browser cookies are
+  restricted to password replacement and logout.
 - Every action is audited without recording secrets.
 - If exactly one administrator account exists and it has lost both MFA and all
   recovery codes, the operator can perform a local server-only recovery action.
-- Local recovery resets MFA, invalidates recovery codes, revokes all sessions,
-  and requires password replacement at next login.
+- Local recovery resets MFA, invalidates recovery codes, restricts existing
+  browser cookies, and requires password replacement at next login.
 - Local recovery is not exposed through a public web route. Its exact mechanism
   is an architecture decision.
 

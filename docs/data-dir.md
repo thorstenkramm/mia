@@ -17,6 +17,7 @@ require a restart.
 ```text
 <data-dir>/
 ├── <database-file>
+├── session.key
 ├── llm-instructions/
 │   ├── init.md
 │   └── jobs/
@@ -45,6 +46,12 @@ require a restart.
 
 `<database-file>` is MIA's fixed SQLite filename. Its final name remains an
 implementation decision and is not an operator setting.
+
+`session.key` contains 64 random bytes generated on first startup. MIA creates it
+with mode `0600`, never logs it, and uses the first 32 bytes for signing and the
+remaining 32 bytes for encryption with Echo CookieStore. It is part of
+data-directory backup and restore. Replacing or losing it invalidates every
+existing browser cookie.
 
 Generated speech in `tts-cache` is retained for the configured number of days
 after generation. The default is 30 days. Access does not extend retention.

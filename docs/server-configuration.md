@@ -446,3 +446,7 @@ The initial configuration surface stays small. MIA provides no TOML settings for
 
 These values and policies are fixed by MIA. Settings may be added later when a concrete installation requirement justifies
 them.
+
+The CookieStore key is not a configuration setting. MIA generates and protects
+`session.key` in the data directory as documented in
+[The data directory](data-dir.md).
