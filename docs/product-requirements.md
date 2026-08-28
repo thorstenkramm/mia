@@ -504,8 +504,8 @@ course-wide material must be approved before activation.
 An assigned supervisor activates a prepared course. Activation allows
 supervisors to add students and allows students to start tutoring.
 
-The course must have learning goals, AI tutor instructions, and at least one
-approved course-wide material before it can be activated.
+The course must have learning goals, AI tutor instructions, a valid language, and
+at least one approved course-wide material before it can be activated.
 
 ### Loss of approved material
 
@@ -528,6 +528,26 @@ approved course-wide material before it can be activated.
   to material that remains approved.
 - An assigned supervisor can reactivate the course only when the activation
   requirements are satisfied.
+
+### Course relationships
+
+- Every existing course has at least one assigned supervisor.
+- Only an administrator can remove a supervisor assignment. Removing the last
+  supervisor is forbidden; staff account deletion requires a replacement first.
+- A supervisor can add a student only to an assigned active course. Deactivation
+  preserves existing memberships but blocks new ones.
+- Any supervisor assigned to the course can remove a student from it.
+- Student removal is rejected while that student has an active tutoring session
+  in the course. Only the student can finish that session.
+- Removing a student permanently deletes all data owned by that student in the
+  course, including private material and files, tutoring sessions and chats,
+  summaries and follow-ups, generated speech, mentoring records, mentor
+  assignments, and related jobs.
+- Student removal preserves the user account, global profile, roles, and data in
+  other courses. It retains only one minimal, content-free audit event for the
+  removal.
+- Course-student removal and all database deletion effects occur atomically.
+  Filesystem deletion follows the managed-file deletion contract.
 
 ## Material
 

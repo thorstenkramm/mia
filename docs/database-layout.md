@@ -242,8 +242,10 @@ Constraints:
 
 - Primary key: (`course_id`, `supervisor_user_id`).
 - The assigned user must hold the supervisor role.
-- Deleting a course cascades the assignment. Deleting a user removes their
-  assignment without deleting the course.
+- Every course has at least one assignment. Only an administrator can remove an
+  assignment, and removing the last one is forbidden.
+- Deleting a course cascades the assignment. A supervisor user cannot be deleted
+  until every last-supervisor responsibility has a replacement.
 
 ### `course_students`
 
@@ -258,7 +260,16 @@ Constraints:
 
 - Primary key: (`course_id`, `student_user_id`).
 - The user must hold the student role.
+- Creating a membership requires an active course and an acting assigned
+  supervisor.
 - Deleting either the course or student cascades the membership.
+
+Removing a membership requires an acting assigned supervisor and no active
+tutoring session for that student and course. In one transaction, MIA deletes the
+membership and all student-owned course data: private material, tutoring and
+mentoring records, mentor assignments, generated speech, related jobs, and audit
+events. It then creates one minimal content-free removal audit event. The user,
+global profile, roles, and other-course data remain.
 
 Student-specific LLM instructions remain on the global student profile. Course
 deletion does not remove them.
@@ -1027,6 +1038,7 @@ not part of these transactions:
   role creation, and audit event;
 - username and email assignment;
 - course creation with initial supervisor assignment, activation, and deletion;
+- course supervisor removal and student membership removal;
 - course mentor removal and reassignment;
 - creation and completion of the one active tutoring session;
 - invitation resend, acceptance, and revocation;

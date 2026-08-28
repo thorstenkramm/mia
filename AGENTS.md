@@ -122,6 +122,13 @@
 - An active course with no approved course-wide material accepts no new tutoring
   sessions. Existing sessions may finish without access to revoked material.
 - Courses are either inactive or active. There is no separate archive state.
+- Course activation requires learning goals, AI instructions, a valid language,
+  at least one supervisor, and approved course-wide material. Only active courses
+  accept new student memberships.
+- Every course keeps at least one supervisor; only administrators remove
+  supervisor assignments. An assigned supervisor may remove a student only when
+  no active tutoring session exists, and removal deletes all of that student's
+  course-scoped data while preserving the account and other-course data.
 - Only an administrator can delete a course, and only while it is inactive with
   no active tutoring sessions.
 - Material uploaded by a student is accessible to that student, the AI tutor,

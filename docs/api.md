@@ -232,7 +232,14 @@ role. Protected course and mentor relationships must be resolved first.
 - `DELETE /api/v1/courses/{id}/students/{student_id}/mentors/{mentor_id}`
 
 Adding a student accepts either an existing student relationship or the fields
-needed for supervisor provisioning. It is not a public registration workflow.
+needed for supervisor provisioning. It requires an active course and is not a
+public registration workflow.
+
+Only an administrator removes a course supervisor, and the last supervisor
+cannot be removed. An assigned supervisor may remove a student only when that
+student has no active tutoring session in the course. Removal atomically deletes
+all data owned by that student in the course while preserving the account and
+other-course data.
 
 Mentor removal accepts the required replacement mentor when open mentoring
 sessions must be reassigned. Course deletion remains restricted to an inactive
