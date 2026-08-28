@@ -66,8 +66,11 @@ after generation. The default is 30 days. Access does not extend retention.
 Expired files are deleted and can be generated again on request when
 text-to-speech is available.
 
-Cached speech can be reused only while its source chat message and requested
-voice still match. A changed source or voice invalidates the cached file.
+Each `<speech-id>.mp3` path is derived directly from its generated-speech row ID.
+MIA stores and serves only MP3 (`audio/mpeg`) and keeps no separate storage key.
+
+Cached speech can be reused only while its completed tutor-response content hash
+and requested voice match.
 
 Each material-file directory is one managed filesystem unit. `file` is the
 validated source upload and `content.txt` is its normalized extracted content.

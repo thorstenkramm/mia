@@ -1054,13 +1054,18 @@ required by its workload.
 
 ### Generated speech retention
 
+- Speech generation is available only for a completed tutor response. Preserved
+  text from failed or interrupted responses is not eligible.
+- MIA requests, stores, and serves generated speech as MP3 with media type
+  `audio/mpeg`.
 - The server configuration defines generated-speech retention in days.
 - The default retention is 30 days from generation.
 - Accessing generated speech does not extend its retention.
 - MIA deletes expired generated speech. It may generate the audio again on
   request when text-to-speech is available.
-- Cached speech is reused only while the source chat message and requested voice
-  match. A changed source or voice invalidates the cache.
+- Cached speech is reused only while the completed tutor-response content and
+  requested voice match. Concurrent requests reuse one generation operation. An
+  authorized retry transitions the same failed cache record back to generating.
 
 ## Data and deployment
 

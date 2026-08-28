@@ -400,6 +400,11 @@ GET route returns JSON:API state while generation is pending or failed and audio
 with its documented media type when available. Every request reauthorizes access
 to the source response.
 
+Only completed tutor responses are eligible. Available audio is MP3 served as
+`audio/mpeg`. Concurrent POST requests reuse one cache record and provider
+operation. Retrying a failed variant transitions the same record back to
+generating; request-path generation never retries automatically.
+
 When ElevenLabs is not configured, both routes return a stable
 feature-unavailable error.
 

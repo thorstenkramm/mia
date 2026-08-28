@@ -837,7 +837,6 @@ Columns:
 - `tutor_response_id`, response ID, not null, cascade on response deletion
 - `voice_id`, not null
 - `source_content_hash`, not null
-- `storage_key`, MIA-generated opaque relative key, not null, unique
 - `state`, enum `generating`, `available`, or `failed`, not null
 - `generated_at`, nullable
 - `expires_at`, nullable
@@ -848,6 +847,10 @@ Constraints:
 - Reuse requires matching response content hash and requested voice.
 - Speech generation requires a completed tutor response.
 - Unique cache identity: (`tutor_response_id`, `source_content_hash`, `voice_id`).
+- The MP3 path is derived as `tts-cache/<speech-id>.mp3`; no second storage key is
+  persisted.
+- Concurrent POST requests return the same cache row. An authorized retry changes
+  that row from failed to generating instead of creating another row.
 - `expires_at` is the configured number of days after generation, default 30.
 - Access does not change expiry.
 - Expiry or mismatch makes the row unavailable. Cleanup removes the row and
