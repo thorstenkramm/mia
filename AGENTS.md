@@ -147,6 +147,8 @@
   Go version is 1.27.0. No package layout, authentication mechanism, or deployment
   procedure has been finalized unless a later authoritative document explicitly
   defines it.
+- MIA ships one `mia` executable with `serve`, `bootstrap-admin`, and
+  `reset-admin-mfa` subcommands.
 
 ## Product documentation
 

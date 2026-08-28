@@ -1,7 +1,8 @@
 # Server Configuration
 
-This document is the normative reference for configuring the `mia` server. MIA validates the complete effective
-configuration before serving requests. A validation or required-service connectivity failure is written to standard error
+This document is the normative reference for configuring `mia serve`. MIA
+validates the complete effective configuration before serving requests. A
+validation or required-service connectivity failure is written to standard error
 and terminates startup with exit code 1.
 
 Audience: operators and implementers. This document is authoritative for server
