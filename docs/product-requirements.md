@@ -254,6 +254,9 @@ rules.
 - An incorrect or expired code leaves the current mobile number unchanged.
 - After a successful change, MIA sends no notification to the previous mobile
   number.
+- Changing the profile mobile number does not move an active SMS MFA factor. The
+  factor remains bound to its previously verified destination until the user
+  completes an explicit MFA replacement.
 - If SMS delivery is not configured or fails, self-service mobile-number changes
   are unavailable and the current number remains unchanged.
 - Confirmation codes are stored only in private SQLite. They are never returned
@@ -419,23 +422,41 @@ rules.
 ### MFA methods
 
 - MIA supports time-based one-time passwords from authenticator applications.
+- TOTP uses SHA-1, six digits, a 30-second period, and a 20-byte random secret
+  encoded as uppercase unpadded Base32. Verification accepts the current time
+  step and one adjacent step in either direction.
+- The authenticator issuer is `MIA (<hostname>)`, using the normalized hostname
+  from `main.public_url`; the account label is the username.
 - MIA supports SMS one-time passwords when ClickSend is configured and the user
   has a verified mobile number.
+- SMS MFA and mobile-verification codes are uniformly generated six-digit decimal
+  strings from `000000` through `999999`; leading zeros are significant.
 - An SMS MFA code expires 30 minutes after issuance and is single-use.
 - SMS MFA resends use the same 60-second cooldown, five-per-hour limit, and
   ten-per-day limit, applied to both account and destination number.
 - Five incorrect SMS MFA submissions invalidate the code.
 - SMS MFA is unavailable when either prerequisite is missing.
 - MFA enrollment is not active until the user verifies the selected factor.
+- A pending enrollment expires after 30 minutes. Expiry removes its pending
+  secret or SMS code without changing an existing active factor.
+- Five incorrect verification submissions delete the pending enrollment.
 - An account has at most one active MFA method: TOTP or SMS.
 - Replacing the method requires verification of the new factor before it becomes
   active. The existing factor remains active until replacement succeeds.
+- Disabling or replacing active MFA requires the current password and a fresh
+  verification using the current factor or one recovery code. Lost-factor cases
+  use the authorized reset workflows instead.
+- An SMS factor is bound to the verified mobile number captured at enrollment.
+  Profile changes do not alter that destination.
+- Five incorrect TOTP or SMS submissions invalidate the current MFA challenge.
 
 ### MFA recovery codes
 
-- Enabling MFA issues a set of one-time recovery codes.
+- Enabling MFA issues ten one-time recovery codes. Each code contains 16 random
+  characters from the unambiguous Crockford Base32 alphabet and is displayed as
+  four groups of four characters.
 - MIA displays the plaintext codes only once and stores only non-reversible
-  representations.
+  SHA-256 digests. Verification ignores display hyphens and ASCII letter case.
 - Each code can satisfy one MFA challenge and is permanently consumed after
   successful use.
 - Generating a replacement set invalidates every unused code from the previous

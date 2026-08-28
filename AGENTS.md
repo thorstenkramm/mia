@@ -96,6 +96,9 @@
   enrollment.
 - Supported MFA methods are TOTP and, when ClickSend and a verified mobile number
   are available, SMS. Enrollment requires verification before activation.
+- TOTP uses SHA-1, six digits, 30-second steps, one-step clock skew, and a 20-byte
+  secret. SMS codes use six decimal digits. Pending enrollment expires after 30
+  minutes. Five failed submissions invalidate an MFA challenge.
 - MFA enrollment issues single-use recovery codes shown once and stored only as
   non-reversible values. Never log or audit recovery-code values.
 - An assigned supervisor may reset lost student MFA as a separate security

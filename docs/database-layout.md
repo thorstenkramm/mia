@@ -465,6 +465,11 @@ Columns:
 - `type`, enum `totp` or `sms`, not null
 - `status`, enum `pending`, `active`, `replaced`, `disabled`, or `reset`, not null
 - `totp_secret`, nullable plaintext TOTP secret, present only for TOTP
+- `sms_mobile`, nullable E.164 destination snapshot, present only for SMS
+- `enrollment_sms_code`, nullable plaintext six-digit code, present only for a
+  pending SMS factor
+- `expires_at`, nullable, required only while pending
+- `failed_attempts`, integer, not null, default 0
 - `created_at`, not null
 - `verified_at`, nullable
 - `activated_at`, nullable
@@ -475,8 +480,15 @@ Constraints:
 
 - A partial unique index permits at most one active factor per user.
 - A partial unique index permits at most one pending factor per user.
-- TOTP requires a secret; SMS forbids one and requires a verified user mobile.
+- TOTP requires a 20-byte secret and forbids SMS fields. SMS requires an immutable
+  verified `sms_mobile` snapshot and forbids a TOTP secret.
+- A pending factor expires 30 minutes after creation. Activation clears the
+  enrollment SMS code and expiry. Expiry deletes the pending factor without
+  changing an active factor.
+- Five failed enrollment verifications delete the pending factor.
 - Activation of a replacement and ending of the old factor occur atomically.
+- Disabling or replacing an active factor requires a current-password check and
+  fresh current-factor or recovery-code verification.
 - Sensitive factor values are never logged or returned after enrollment setup.
 
 ### `mfa_recovery_codes`
@@ -485,13 +497,16 @@ Columns:
 
 - `id`, prefix `mrc_`, primary key
 - `factor_id`, factor ID, not null, cascade on factor deletion
-- `code_hash`, non-reversible value, not null, unique within factor
+- `code_hash`, 32-byte SHA-256 digest, not null, unique within factor
 - `created_at`, not null
 - `consumed_at`, nullable
 - `invalidated_at`, nullable
 
-Generating a replacement set invalidates all unused codes from the previous set
-in one transaction. Plaintext codes are never persisted or audited.
+Each activated factor receives ten independently generated 80-bit recovery codes.
+Input normalization removes display hyphens and folds ASCII letters to uppercase
+before hashing. Generating a replacement set invalidates all unused codes from
+the previous set in one transaction. Plaintext codes are never persisted or
+audited.
 
 ### `mfa_challenges`
 
@@ -519,7 +534,7 @@ Invariants:
   grants no authority.
 - TOTP secrets and active SMS codes rely on SQLite and data-directory access
   controls rather than application-layer encryption or keyed transformation.
-- Five incorrect SMS submissions invalidate the challenge.
+- Five incorrect TOTP or SMS submissions invalidate the challenge.
 - SMS resend limits use `sms_delivery_attempts`.
 - TOTP values are verified against the active factor and are never stored.
 - A recovery code can consume a challenge and itself in one transaction.

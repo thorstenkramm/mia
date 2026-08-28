@@ -159,6 +159,13 @@ rotates the cookie after MFA, password replacement, and completed login. An MFA
 verification route requires both the matching challenge ID and the bound `mfa`
 cookie stage; a challenge ID alone grants no authority.
 
+MFA enrollment expires after 30 minutes, and five incorrect submissions delete
+the pending enrollment. TOTP provisioning uses issuer
+`MIA (<main.public_url hostname>)` and the username as account label. Successful
+activation returns ten recovery codes once. Disabling or replacing active MFA
+requires the current password and a fresh current-factor or recovery-code proof.
+An SMS factor retains its enrolled destination when the profile mobile changes.
+
 ## Invitations
 
 Authenticated invitation management uses stable invitation IDs:
