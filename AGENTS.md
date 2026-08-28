@@ -73,6 +73,9 @@
 - Passwords are 12 to 128 characters, allow spaces and Unicode, and have no
   character-class requirements. Reject known-common passwords locally. Do not
   trim passwords or allow operators to weaken the policy.
+- Usernames use 3-32 characters from a restricted ASCII set and compare by ASCII
+  lowercase. Emails use a practical ASCII subset, are limited to 254 characters,
+  and compare by ASCII lowercase. Password length counts Unicode code points.
 - The MVP applies no application-layer encryption to SQLite fields. TOTP secrets
   and active SMS codes are stored in plaintext and rely on private data-directory
   and backup access. Never log, audit, or expose them.

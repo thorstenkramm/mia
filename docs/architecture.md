@@ -42,3 +42,12 @@ administration binary.
   WAL journal mode, and `synchronous=FULL`.
 
 These settings are fixed for the MVP and are not operator-configurable.
+
+## Identity Representation
+
+- MIA uses `golang.org/x/text/language` to parse and canonicalize BCP 47 language
+  tags.
+- MIA embeds Go's time-zone database through `time/tzdata` so validation and
+  generated communications do not depend on host time-zone files.
+- Password length counts Unicode code points without trimming or Unicode
+  normalization. MIA rejects invalid UTF-8 before hashing.

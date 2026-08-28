@@ -117,6 +117,27 @@ defaults, and accurate documentation.
 - Usernames are unique case-insensitively. Email addresses are unique
   case-insensitively when present.
 
+## Account identity
+
+- A username contains 3 through 32 ASCII characters. It starts and ends with an
+  ASCII letter or digit; interior characters may also be `.`, `_`, or `-`.
+- MIA preserves username letter case for display and compares usernames using
+  their ASCII lowercase form.
+- An email address contains at most 254 ASCII characters after surrounding
+  whitespace is removed. MIA accepts a practical RFC mailbox subset: an unquoted
+  local part, including `+`, followed by a DNS-style domain. It rejects display
+  names, comments, quoted local parts, domain literals, and malformed dots.
+- MIA preserves the trimmed email spelling for display and compares email
+  addresses using the ASCII lowercase form of the complete address.
+- Every account requires a username, password, preferred language, country, and
+  preferred time zone. Administrators, supervisors, and mentors additionally
+  require a verified email address. Other profile fields remain optional.
+- MIA stores a preferred language as a canonical BCP 47 tag and rejects an
+  unspecified or private-use-only language.
+- MIA stores a country as an uppercase ISO 3166-1 alpha-2 code.
+- MIA accepts `UTC` or a named IANA time-zone identifier available in its embedded
+  time-zone database. It rejects `Local` and numeric fixed offsets.
+
 ## Roles and capabilities
 
 ### Administrator capabilities
@@ -304,7 +325,8 @@ rules.
 
 ### Password policy
 
-- Passwords contain at least 12 and at most 128 characters.
+- Passwords contain at least 12 and at most 128 Unicode code points and must be
+  valid UTF-8. Their encoded form contains at most 512 bytes.
 - MIA allows spaces, Unicode, and password-manager-generated values.
 - MIA does not require particular character classes, such as uppercase letters,
   digits, or symbols.

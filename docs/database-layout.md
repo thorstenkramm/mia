@@ -69,9 +69,14 @@ continuing.
 
 ### Text identity
 
-- Usernames are compared case-insensitively and are unique.
-- Email addresses are normalized for comparison and are unique when present.
-- The original email spelling may be retained for display.
+- Usernames follow the product's ASCII syntax, retain their submitted case, and
+  use ASCII lowercase as their unique normalized value.
+- Email addresses follow the product's practical ASCII syntax. The trimmed
+  spelling is retained for display; ASCII lowercase is the unique normalized
+  value when present.
+- Languages are canonical BCP 47 tags, country codes are uppercase ISO 3166-1
+  alpha-2 values, and time zones are `UTC` or names from MIA's embedded IANA
+  database.
 - Course names are globally unique using the documented case-insensitive
   comparison.
 - Material names are unique within a course using the same comparison.
@@ -404,6 +409,8 @@ Columns:
 
 - `id`, prefix `sms_`, primary key
 - `purpose`, enum `mobile-verification` or `mfa`, not null
+- `user_id`, user ID at send time, not null, cascade on user deletion
+- `destination_mobile`, E.164 destination at send time, not null
 - `mobile_verification_id`, nullable challenge ID
 - `mfa_challenge_id`, nullable challenge ID
 - `attempted_at`, not null
@@ -413,8 +420,8 @@ Columns:
 Constraints:
 
 - Exactly one challenge foreign key is present and matches `purpose`.
-- The account and E.164 destination are derived from the referenced challenge
-  and current user data; SMS accounting stores neither independently.
+- `user_id` and `destination_mobile` match the referenced challenge at creation
+  and remain immutable historical limiter values.
 - Queries enforce a 60-second cooldown, five sends per hour, and ten sends per
   day for both the challenge owner and destination.
 
