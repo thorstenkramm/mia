@@ -152,10 +152,17 @@ effective service user. A foreign-owned socket or an existing path of another fi
 - Environment: `MIA_HTTP_TRUSTED_PROXY_CIDRS`
 - Flag: `--http-trusted-proxy-cidrs`
 
-Additional proxy IP networks whose forwarded client-address headers MIA trusts. Loopback networks are always trusted and
-are not removed by this list. MIA ignores forwarded headers from every other peer.
+Additional proxy IP networks whose `X-Forwarded-For` header MIA trusts. Loopback
+networks are always trusted and are not removed by this list. MIA ignores
+forwarded headers from every other TCP peer. A Unix listener is treated as a
+trusted proxy transport because socket permissions control access.
 
 Each value must use CIDR notation, for example `"10.0.0.0/8"` or `"2001:db8::/32"`.
+
+MIA accepts at most 20 plain IP hops and two KiB of `X-Forwarded-For` data. It
+walks trusted hops from right to left and selects the first untrusted address. A
+malformed or excessive header is ignored as a whole. MIA then uses the direct TCP
+peer, or one shared local identity for a Unix socket.
 
 #### `http.socket_group`
 

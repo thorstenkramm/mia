@@ -1177,8 +1177,10 @@ required by its workload.
   code, and `Retry-After` when a retry time is known.
 - Rate-limit behavior must not reveal whether a username, email address, mobile
   number, invitation, or other sensitive identifier exists.
-- Client-IP limits use only addresses derived from explicitly trusted proxy
-  configuration.
+- Client-IP limits use only addresses derived through trusted proxy transports.
+- Loopback TCP peers and permission-controlled Unix listeners are trusted proxy
+  transports. MIA accepts only a bounded `X-Forwarded-For` chain and falls back
+  to the direct peer or one local Unix-socket identity when the chain is invalid.
 - Limiter state is bounded so arbitrary identifiers cannot exhaust memory or
   persistent storage.
 - Process-level limiter state holds at most 50,000 keys. MIA removes expired keys

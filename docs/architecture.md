@@ -64,6 +64,24 @@ These settings are fixed for the MVP and are not operator-configurable.
 - Graceful shutdown allows 30 seconds before canceling remaining request and
   streaming work.
 
+### Client addresses
+
+- MIA recognizes only `X-Forwarded-For`. It ignores `Forwarded`, `X-Real-IP`, and
+  every other client-address header.
+- A TCP peer must belong to a configured trusted proxy CIDR or a loopback network
+  before MIA considers the header. Loopback networks are always trusted.
+- MIA parses at most 20 comma-separated plain IP addresses and at most two KiB of
+  header data. Ports, zone identifiers, empty elements, and malformed addresses
+  make the complete header invalid.
+- Starting at the direct peer, MIA walks the chain right-to-left across trusted
+  proxy addresses. The first untrusted address is the client. If every forwarded
+  address is trusted, the leftmost address is the client.
+- An absent, malformed, or excessive trusted-proxy header falls back to the
+  direct TCP peer. IPv4-mapped IPv6 addresses normalize to IPv4.
+- A permission-controlled Unix listener is a trusted proxy transport. It uses the
+  same bounded header parser and one shared local limiter key when the header is
+  absent or invalid; audit `source_ip` is then null.
+
 ## Tutor Context And Retrieval
 
 - One student message contains at most 8,000 Unicode code points and 32 KiB of

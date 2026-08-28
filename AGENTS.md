@@ -248,6 +248,9 @@ hardening.
   use layered IP and account or challenge limits without revealing resource
   existence. Resource-intensive authenticated routes have separate user- and
   course-scoped limits. Bound process limiter state to 50,000 expiring LRU keys.
+- Trust `X-Forwarded-For` only from configured proxies, loopback peers, or the
+  permission-controlled Unix listener. Parse bounded chains right-to-left and use
+  a safe peer or local fallback for malformed input.
 - Never call paid or production providers from automated tests.
 - Generated speech retention is configured in days and defaults to 30 days from
   generation. Access does not extend retention. Reuse cached speech only while
