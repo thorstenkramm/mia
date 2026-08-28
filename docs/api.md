@@ -10,7 +10,7 @@ decisions at the end of this document must be completed before implementation.
 ## Contents
 
 - [Conventions](#conventions)
-- [System and frontend](#system-and-frontend)
+- [Frontend and bootstrap](#frontend-and-bootstrap)
 - [Authentication and recovery](#authentication-and-recovery)
 - [Invitations](#invitations)
 - [Current user and MFA](#current-user-and-mfa)
@@ -33,8 +33,8 @@ decisions at the end of this document must be completed before implementation.
 - Resource types use plural kebab-case. Attributes use snake_case.
 - Collections and resources have no trailing slash. The router does not serve
   the same resource at both forms.
-- Health responses, uploads, downloads, generated audio, and the future response
-  stream use their explicitly documented non-JSON:API media types.
+- Uploads, downloads, generated audio, and tutor-response event streams use
+  their explicitly documented non-JSON:API media types.
 
 ### Identifiers and time
 
@@ -68,15 +68,7 @@ Every operation authorizes the action, role, course assignment, student
 assignment, ownership, and resource state. Route grouping and possession of an
 ID are never sufficient authorization.
 
-## System and frontend
-
-Health endpoints are outside the versioned API and return small JSON documents:
-
-- `GET /health/live` reports whether the process is running.
-- `GET /health/ready` reports whether the process can serve requests.
-
-Health responses expose no configuration, provider credentials, user data, or
-detailed dependency errors.
+## Frontend and bootstrap
 
 MIA serves the separately installed frontend outside `/api`. Unknown API paths
 never fall back to frontend HTML.
@@ -203,6 +195,7 @@ material cannot be approved or converted to course-wide material.
 - `GET|POST /api/v1/tutoring-sessions/{id}/messages`
 - `POST /api/v1/student-messages/{id}/response-retries`
 - `POST /api/v1/tutor-responses/{id}/interruptions`
+- `GET /api/v1/tutor-responses/{id}/events`
 - `GET /api/v1/tutoring-sessions/{id}/materials`
 
 Session creation optionally includes selected material relationships. The owning
@@ -216,6 +209,45 @@ response operation. Different content is a conflict.
 Assigned supervisors can see active-session status but cannot retrieve messages
 until completion. Material retrieval performed by the AI tutor uses internal
 authorized application tools, not client-selected arbitrary file paths.
+
+### Tutor-response events
+
+`GET /api/v1/tutor-responses/{id}/events` returns a Server-Sent Events stream
+with media type `text/event-stream`. Establishing a stream reauthorizes access to
+the response. The stream exposes MIA events only; raw OpenAI events, tool calls,
+provider errors, and provider payloads are never forwarded.
+
+On every connection, MIA first sends the current persisted content and state:
+
+```text
+event: snapshot
+data: {"content":"Current persisted text","state":"generating"}
+```
+
+New text and terminal state changes use these events:
+
+```text
+event: delta
+data: {"text":"next text"}
+
+event: completed
+data: {"state":"completed"}
+
+event: interrupted
+data: {"state":"interrupted"}
+
+event: failed
+data: {"state":"failed","code":"provider_failure"}
+```
+
+MIA may send SSE comment heartbeats to keep an otherwise idle connection open.
+A browser disconnect closes only that subscription; it does not cancel response
+generation. Reconnecting to the same route receives a fresh snapshot followed by
+new deltas, so MIA does not need a persisted per-token event history.
+
+The reverse proxy must not buffer this route. MIA flushes complete SSE events and
+persists generated text in bounded batches rather than writing one database
+update for every provider delta.
 
 ## Generated speech
 
@@ -271,11 +303,9 @@ layout:
 
 - browser authentication and session transport;
 - CSRF token transport tied to the authentication mechanism;
-- tutor-response streaming transport and reconnection protocol;
 - the local first-administrator bootstrap command or mechanism;
 - exact JSON:API attributes, relationships, includes, filters, and collection
-  limits;
-- exact health readiness criteria and safe response fields.
+  limits.
 
 Resolve each item in this document or a more specific current architecture
 document before implementing the affected routes. Superseded proposals should be

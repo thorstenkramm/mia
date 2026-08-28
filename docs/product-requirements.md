@@ -657,7 +657,7 @@ At session start, the AI tutor receives:
 
 MIA does not send the complete content of every available material at session
 start. It may include the complete extracted content of a small selected
-material only when it fits within a configured input limit.
+material only when it fits within MIA's fixed input limit.
 
 ### Material retrieval
 
@@ -682,8 +682,8 @@ material only when it fits within a configured input limit.
 - AI tutor responses appear incrementally while they are generated.
 - The product must not wait for the complete model response before displaying
   available text to the student.
-- The streaming transport is an architecture decision and is not defined by
-  this product requirement.
+- MIA delivers incremental tutor-response events to the browser using
+  Server-Sent Events as defined by the current API design.
 - A client disconnect does not cancel response generation.
 - MIA preserves output received from the provider while the student is
   disconnected.

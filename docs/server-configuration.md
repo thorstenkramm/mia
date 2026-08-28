@@ -121,6 +121,9 @@ normalized. MIA never derives security-sensitive links from request or forwarded
 The HTTP table defines the local listener and reverse proxies trusted to report client addresses. HTTPS terminates at an
 operator-managed reverse proxy; MIA does not expose TLS certificate settings.
 
+The reverse proxy must pass `/api/v1/tutor-responses/{id}/events` responses
+incrementally and disable response buffering for that Server-Sent Events route.
+
 #### `http.listen`
 
 - Type: string

@@ -60,6 +60,27 @@ retrieved after the session started. The retrieval implementation is not defined
 here; it may use provider-supported file search or application-controlled search
 as long as it preserves this behavior and the authorization boundaries.
 
+## Response Streaming
+
+MIA consumes the OpenAI Responses API stream in an operation that is independent
+of the browser connection. It translates provider events into MIA state and
+Server-Sent Events rather than forwarding raw provider events.
+
+After creating a student message, the frontend connects to the tutor response's
+SSE route. MIA first sends a snapshot of persisted content and state, followed by
+new text deltas and one terminal event. It persists generated text in bounded
+batches while generation continues.
+
+Disconnecting the browser removes only that SSE subscription. It does not cancel
+the OpenAI operation. A reconnect to the same tutor response receives a fresh
+snapshot and continues with new deltas without creating another provider
+response. An explicit student interruption uses the interruption API, cancels
+the provider operation, and preserves text already received.
+
+Provider failures preserve partial text and produce a sanitized failed state.
+Tool calls and provider payloads remain internal to MIA. Every SSE connection is
+authorized for the requesting user and tutor response.
+
 ## Starting a tutoring session
 
 A student can conduct only one session at a time across all courses. Starting

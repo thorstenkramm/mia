@@ -133,9 +133,9 @@
   unassigned; removing one of several requires supervisor-selected reassignment
   of open mentoring sessions. `mentoring_requests_allowed` independently
   controls new requests.
-- No module path, package layout, streaming transport, authentication mechanism,
-  or deployment procedure has been finalized unless a later authoritative
-  document explicitly defines it.
+- No module path, package layout, authentication mechanism, or deployment
+  procedure has been finalized unless a later authoritative document explicitly
+  defines it.
 
 ## Product documentation
 
