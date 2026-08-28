@@ -91,8 +91,10 @@ The main table defines installation paths and MIA's externally visible origin.
 - Environment: `MIA_MAIN_DATA_DIR`
 - Flag: `--main-data-dir`
 
-The absolute base directory for SQLite data, uploaded files, generated files, and MIA-managed instructions. It must already
-exist and be writable by the service user. MIA creates documented internal subdirectories when they are missing.
+The absolute base directory for SQLite data, uploaded files, generated files, and
+MIA-managed instructions. It must already exist, be owned and writable by the
+effective service user, and have no group or other permission bits. MIA creates
+documented internal directories with mode `0700` and files with mode `0600`.
 
 #### `main.doc_root`
 

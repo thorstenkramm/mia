@@ -30,6 +30,12 @@ behavior.
 The schema must enable SQLite foreign-key enforcement for every connection.
 Every state transition that spans tables must run in one transaction.
 
+MIA uses WAL journal mode with `synchronous=FULL` and a five-second busy timeout.
+These settings and foreign-key enforcement are applied to every connection.
+Embedded forward migrations run before the server or a database-using local
+command performs other work. A dirty or newer schema prevents the command from
+continuing.
+
 ## Storage conventions
 
 ### Identifiers

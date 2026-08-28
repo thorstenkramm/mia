@@ -149,6 +149,9 @@
   defines it.
 - MIA ships one `mia` executable with `serve`, `bootstrap-admin`, and
   `reset-admin-mfa` subcommands.
+- MIA uses `modernc.org/sqlite` with the fixed `data_dir/mia.sqlite3` path, WAL,
+  `synchronous=FULL`, foreign keys, and a five-second busy timeout. Embedded
+  `golang-migrate` v4 up migrations run automatically before database use.
 
 ## Product documentation
 

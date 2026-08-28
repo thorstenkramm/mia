@@ -27,3 +27,18 @@ MIA ships one executable named `mia`. It provides these subcommands:
 The executable contains one shared implementation of configuration, persistence,
 account policy, and auditing. Local commands do not require a separate
 administration binary.
+
+## SQLite
+
+- MIA uses the CGo-free `modernc.org/sqlite` `database/sql` driver.
+- The database is the fixed `mia.sqlite3` file in `main.data_dir`.
+- MIA uses `golang-migrate` v4 as a library. Numbered SQL migrations are embedded
+  in the executable through `io/fs`; no external migration files or executable
+  are required.
+- `mia serve` and every local command that opens the database apply pending up
+  migrations before other work. They refuse a dirty schema or a schema newer
+  than the executable. MIA does not run down migrations.
+- Every connection enables foreign-key enforcement, a five-second busy timeout,
+  WAL journal mode, and `synchronous=FULL`.
+
+These settings are fixed for the MVP and are not operator-configurable.

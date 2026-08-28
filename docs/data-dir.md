@@ -10,9 +10,11 @@ courses, and material.
 
 The MVP treats the complete data directory and its backups as private trusted
 storage. It does not apply application-layer encryption to SQLite fields,
-including TOTP secrets and active SMS codes. The operator must restrict access to
-the service account and authorized backup administrators. Anyone who can read the
-data directory can read all live MIA data and must be treated as fully trusted.
+including TOTP secrets and active SMS codes. The data directory must be owned by
+the effective service user and have no group or other permission bits. MIA
+creates internal directories with mode `0700` and files with mode `0600`.
+Anyone who can bypass these permissions, including a root backup process, can
+read all live MIA data and must be treated as fully trusted.
 
 MIA creates default AI tutor instruction files but never overwrites existing
 ones. Operators may edit these files. MIA reads them only at startup, so changes
@@ -22,7 +24,7 @@ require a restart.
 
 ```text
 <data-dir>/
-├── <database-file>
+├── mia.sqlite3
 ├── session.key
 ├── llm-instructions/
 │   ├── init.md
@@ -50,8 +52,8 @@ require a restart.
     └── <speech-id>.mp3
 ```
 
-`<database-file>` is MIA's fixed SQLite filename. Its final name remains an
-implementation decision and is not an operator setting.
+`mia.sqlite3` is MIA's fixed SQLite database. Its name is not an operator
+setting.
 
 `session.key` contains 64 random bytes generated on first startup. MIA creates it
 with mode `0600`, never logs it, and uses the first 32 bytes for signing and the
