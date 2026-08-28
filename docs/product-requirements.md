@@ -158,7 +158,10 @@ An administrator can:
 
 - create and manage course records;
 - assign supervisors to courses;
+- invite additional administrators and remove another administrator's role;
 - invite supervisors to MIA;
+- permanently delete user accounts subject to the account and relationship
+  lifecycle rules;
 - supervise platform background jobs;
 - access the audit log.
 
@@ -259,28 +262,30 @@ rules.
 ## Account registration
 
 - MIA has no public sign-up endpoint or self-registration workflow.
-- Supervisor and mentor registration is invitation-only.
+- Administrator, supervisor, and mentor registration is invitation-only after
+  the first-administrator bootstrap.
 - Student accounts are provisioned by assigned supervisors.
 - Only an actor authorized for the intended role and scope can initiate account
   creation or registration.
 - Administrators, supervisors, and mentors must have a verified email address.
 - Accepting an invitation delivered to that address verifies it.
-- A new supervisor or mentor chooses their username and password while accepting
-  the invitation. The inviter does not create or receive a temporary password.
+- A new administrator, supervisor, or mentor chooses their username and password
+  while accepting the invitation. The inviter does not create or receive a
+  temporary password.
 - The inviter supplies only the intended email address. The invited role and,
   for a mentor, course scope come from the authorized invitation action.
-- A new supervisor or mentor completes their own required profile fields during
-  acceptance.
+- A new administrator, supervisor, or mentor completes their own required profile
+  fields during acceptance.
 - Before acceptance, an unauthenticated invitation page shows only that it is a
   MIA invitation, the invited role, and the course name for a mentor invitation.
 - The preview does not expose the inviter's profile, intended email address,
   user records, or other course data.
 - Student email remains optional.
-- Supervisor and mentor invitations do not expire. They remain pending until
-  accepted or explicitly revoked.
+- Administrator, supervisor, and mentor invitations do not expire. They remain
+  pending until accepted or explicitly revoked.
 - Invitations are single-use. Successful acceptance permanently consumes the
   invitation and prevents further acceptance attempts.
-- Any administrator can revoke a pending supervisor invitation.
+- Any administrator can revoke a pending administrator or supervisor invitation.
 - Any supervisor currently assigned to the course can revoke a pending mentor
   invitation for that course.
 - Revocation takes effect immediately, prevents acceptance, and is audited.
@@ -294,6 +299,20 @@ rules.
 - Accepting a mentor invitation makes the account eligible as a mentor in the
   course but does not assign the mentor to a student. Assignment remains a
   separate supervisor action.
+
+### Account and administrator lifecycle
+
+- Only an administrator can permanently delete a student account. A supervisor
+  can remove course membership but cannot delete the account globally.
+- A supervisor, mentor, or administrator account can be deleted only by a
+  different administrator. An account with any staff role follows this rule even
+  if it also has the student role.
+- Course responsibilities, mentor assignments, and other protected relationships
+  must satisfy their removal rules before staff account deletion.
+- Only a different administrator can remove an administrator role. Self-removal
+  is forbidden.
+- MIA never removes or deletes the last administrator. The check and role removal
+  or account deletion occur in one transaction.
 
 ### Student account provisioning
 
@@ -439,6 +458,8 @@ rules.
 - A supervisor, mentor, or administrator who has lost the active factor and all
   recovery codes requires an MFA reset by a different administrator.
 - A user cannot approve their own MFA reset.
+- An account with any administrator, supervisor, or mentor role always uses the
+  staff reset path, including an account that also has the student role.
 - The reset removes the active MFA method, invalidates all recovery codes,
   and requires password replacement at next login. Existing browser cookies are
   restricted to password replacement and logout.

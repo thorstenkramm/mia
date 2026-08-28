@@ -57,12 +57,12 @@
   password for recovery. Revoke all student sessions and require replacement at
   next login. Never log or audit password values.
 - Administrators, supervisors, and mentors require verified email addresses.
-  Acceptance of a supervisor or mentor invitation delivered to that address
-  verifies it.
-- New supervisors and mentors choose their own username and password during
-  invitation acceptance; the inviter does not issue temporary credentials.
-- Supervisor and mentor invitations do not expire; they remain pending until
-  accepted or revoked.
+  Acceptance of an invitation delivered to that address verifies it.
+- New administrators, supervisors, and mentors choose their own username and
+  password during invitation acceptance; the inviter does not issue temporary
+  credentials.
+- Administrator, supervisor, and mentor invitations do not expire; they remain
+  pending until accepted or revoked.
 - Invitation acceptance is single-use and permanently consumes the invitation.
 - Invitation and password-reset bearer tokens are canonical lowercase UUID v4
   values. Persist only their SHA-256 digests.
@@ -105,6 +105,10 @@
   administrator exists, an interactive local command run while the server is
   stopped may reset that administrator's MFA. Never expose this action through a
   public web route.
+- Additional administrators join by invitation. Only a different administrator
+  can remove an administrator role or delete a staff account, and MIA preserves
+  the last administrator. Only administrators delete student accounts. Any staff
+  role makes the staff MFA-reset rule apply to a multi-role account.
 - The server is expected to serve a separately installed frontend from a
   configured document root.
 - Structured records are stored in SQLite. Uploaded and generated files are

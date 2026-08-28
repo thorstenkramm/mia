@@ -187,6 +187,9 @@ Constraints:
 - Primary key: (`user_id`, `role`).
 - Role removal cannot bypass the deletion and assignment rules in the product
   requirements.
+- Removing an administrator role requires a different administrator and cannot
+  remove the last administrator. The authorizing actor check, last-administrator
+  check, removal, and audit event occur in one transaction.
 
 ## Course scope and relationships
 
@@ -313,13 +316,13 @@ logged, or audited.
 
 ### `invitations`
 
-This table stores supervisor and mentor invitations. Student accounts do not use
-invitations.
+This table stores administrator, supervisor, and mentor invitations. Student
+accounts do not use invitations.
 
 Columns:
 
 - `id`, prefix `inv_`, primary key
-- `role`, enum `supervisor` or `mentor`, not null
+- `role`, enum `administrator`, `supervisor`, or `mentor`, not null
 - `course_id`, nullable course ID
 - `email`, intended original address, not null
 - `email_normalized`, intended normalized address, not null
@@ -336,7 +339,8 @@ Columns:
 
 Invariants:
 
-- Supervisor invitations have no course; mentor invitations require a course.
+- Administrator and supervisor invitations have no course; mentor invitations
+  require a course.
 - Invitations do not expire.
 - Only pending invitations can be resent, accepted, or revoked.
 - Resend replaces `token_hash`, increments `token_generation`, and invalidates
@@ -348,8 +352,8 @@ Invariants:
   existing email or uniqueness conflict rejects acceptance without consuming the
   invitation.
 - Mentor acceptance creates course eligibility, not a student assignment.
-- Any administrator can revoke a supervisor invitation. Any current course
-  supervisor can revoke a mentor invitation for that course.
+- Any administrator can revoke an administrator or supervisor invitation. Any
+  current course supervisor can revoke a mentor invitation for that course.
 - Tokens follow the shared bearer-token contract above.
 
 ### `password_reset_challenges`

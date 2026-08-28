@@ -172,9 +172,9 @@ not appear in access-log paths:
 
 - `POST /api/v1/invitation-acceptances`
 
-Supervisor and mentor invitations are single-use, do not expire, and remain
-pending until accepted or revoked. Their bearer tokens are canonical lowercase
-UUID v4 values. Student accounts do not use invitations.
+Administrator, supervisor, and mentor invitations are single-use, do not expire,
+and remain pending until accepted or revoked. Their bearer tokens are canonical
+lowercase UUID v4 values. Student accounts do not use invitations.
 
 ## Current user and MFA
 
@@ -202,12 +202,19 @@ exposes an internal filesystem path.
 - `PUT|DELETE /api/v1/users/{id}/avatar`
 - `POST /api/v1/users/{id}/temporary-passwords`
 - `POST /api/v1/users/{id}/mfa-resets`
+- `DELETE /api/v1/users/{id}/roles/administrator`
 - `POST /api/v1/users/{id}/bans`
 - `DELETE /api/v1/users/{id}/bans`
 
 These routes do not create a generic administrator override. Each operation
 enforces its role, course, student, and protected-field rules. Student
 provisioning and course membership use the course routes below.
+
+Creating an invitation with role `administrator` requires an administrator.
+Deleting an administrator role requires a different administrator and is denied
+for the last administrator. `DELETE /users/{id}` requires an administrator for a
+student-only account and a different administrator for any account with a staff
+role. Protected course and mentor relationships must be resolved first.
 
 ## Courses and relationships
 

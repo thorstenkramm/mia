@@ -81,11 +81,10 @@ supervisor can add context and special LLM instructions for the student, which
 become part of the context during tutoring sessions.
 
 MIA provides no public sign-up workflow. Administrators, supervisors, and mentors
-require a verified email address. Supervisor and mentor registration is
-invitation-only; student accounts are provisioned by assigned supervisors, and
-student email is optional.
-New supervisors and mentors choose their own username and password while
-accepting the invitation.
+require a verified email address. After the first-administrator bootstrap, their
+registration is invitation-only. Student accounts are provisioned by assigned
+supervisors, and student email is optional. New administrators, supervisors, and
+mentors choose their own username and password while accepting the invitation.
 With the server stopped, the operator creates the first administrator through a
 one-time interactive local command. The command is disabled after the first
 administrator exists.
