@@ -216,6 +216,17 @@ A student cannot change any other profile field. In particular, students cannot
 change their email address, name, preferred time zone, roles, instructions, or
 account state.
 
+### Avatar images
+
+- Avatar upload accepts only signature-validated JPEG and PNG source images.
+- The encoded source is limited to 10 MiB, 40 decoded megapixels, and 10,000
+  pixels in either dimension. Animated or malformed images are rejected.
+- MIA applies JPEG orientation, strips metadata, preserves aspect ratio, and
+  resizes so neither output dimension exceeds 512 pixels.
+- MIA stores one non-animated PNG. It never serves the untrusted source image.
+- Avatar download requires authorization to view the corresponding user profile
+  and never broadens profile visibility.
+
 ### Supervisor-managed student profiles
 
 Any supervisor who shares an assigned course with a student can edit that

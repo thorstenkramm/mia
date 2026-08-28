@@ -198,21 +198,27 @@ lowercase UUID v4 values. Student accounts do not use invitations.
 - `POST /api/v1/users/me/mobile-change-challenges`
 - `POST /api/v1/users/me/mobile-change-challenges/{id}/verifications`
 - `POST /api/v1/users/me/mobile-change-challenges/{id}/resends`
-- `PUT|DELETE /api/v1/users/me/avatar`
+- `GET|PUT|DELETE /api/v1/users/me/avatar`
 
 Field-level authorization still applies to `PATCH /users/me`. In particular, a
 student can change only the self-service fields confirmed by the product
 requirements.
 
-Avatar upload uses a bounded image media type rather than JSON:API. Avatar
-download is represented by an authorized URL in the user resource; it never
-exposes an internal filesystem path.
+Avatar upload accepts bounded JPEG or PNG rather than JSON:API. The source is at
+most 10 MiB, 40 decoded megapixels, and 10,000 pixels per dimension. MIA applies
+orientation, strips metadata, fits the image within 512 by 512 pixels without
+changing its aspect ratio, and stores PNG.
+
+Avatar download is represented by an authorized URL in the user resource; it
+never exposes an internal filesystem path. Download authorization is identical
+to profile-view authorization for that user and responses use `image/png`, safe
+content headers, a strong content ETag, and `Cache-Control: private, no-cache`.
 
 ## User administration
 
 - `GET /api/v1/users`
 - `GET|PATCH|DELETE /api/v1/users/{id}`
-- `PUT|DELETE /api/v1/users/{id}/avatar`
+- `GET|PUT|DELETE /api/v1/users/{id}/avatar`
 - `POST /api/v1/users/{id}/temporary-passwords`
 - `POST /api/v1/users/{id}/mfa-resets`
 - `DELETE /api/v1/users/{id}/roles/administrator`

@@ -77,6 +77,9 @@ the complete directory.
 
 An avatar has no database metadata row. Its presence is determined by the fixed
 `users/<user-id>/avatar.png` path. MIA validates an uploaded image before writing
-it and replaces an existing avatar through a temporary file and atomic rename.
-Startup reconciliation removes avatar files and user directories whose user no
-longer exists.
+it, applies orientation, strips metadata, preserves aspect ratio, fits it within
+512 by 512 pixels, and re-encodes it as a non-animated PNG. Source JPEG or PNG is
+limited to 10 MiB, 40 decoded megapixels, and 10,000 pixels per dimension. MIA
+replaces an existing avatar through a temporary file and atomic rename. Startup
+reconciliation removes avatar files and user directories whose user no longer
+exists.

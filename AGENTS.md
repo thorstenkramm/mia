@@ -230,6 +230,9 @@ hardening.
   are bounded. Material search remains local and index-free in the MVP.
 - Keep uploaded and generated files outside the public static root. Authorize
   every download.
+- Avatar uploads accept bounded JPEG or PNG, are decoded and normalized to a
+  metadata-free PNG no larger than 512 pixels per dimension, and inherit profile
+  view authorization.
 - Upload limits are operator-configurable within fixed MIA hard caps. Never allow
   unbounded file size, file count, material size, page count, decoded image size,
   or archive expansion.
