@@ -143,7 +143,8 @@
   unassigned; removing one of several requires supervisor-selected reassignment
   of open mentoring sessions. `mentoring_requests_allowed` independently
   controls new requests.
-- No module path, package layout, authentication mechanism, or deployment
+- The Go module path is `github.com/thorstenkramm/mia`, and the minimum supported
+  Go version is 1.27.0. No package layout, authentication mechanism, or deployment
   procedure has been finalized unless a later authoritative document explicitly
   defines it.
 

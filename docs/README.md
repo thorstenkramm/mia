@@ -23,6 +23,8 @@ guides will be added when the corresponding implementation exists.
 
 ## Developers
 
+- [Architecture](architecture.md) records confirmed programming and architecture
+  decisions.
 - [API design](api.md) defines the current route layout and open transport
   decisions.
 - [Database layout](database-layout.md) defines the current logical SQLite
@@ -38,7 +40,8 @@ When documents differ, use this order:
 1. [Product requirements](product-requirements.md) for product behavior.
 2. [Server configuration](server-configuration.md) for operator settings.
 3. [API design](api.md) for the current HTTP route layout.
-4. The relevant current developer design for other implementation details.
+4. [Architecture](architecture.md) and the relevant current developer design for
+   other implementation details.
 
 Silence is not a product decision. Current design documents may be extended as
 implementation questions are resolved, but superseded text should be removed
