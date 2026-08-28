@@ -210,5 +210,6 @@ MIA restricts existing browser sessions to password replacement and logout, and
 the student must replace the temporary password at the next login.
 
 Supervisors, mentors, and administrators recover forgotten passwords through a
-single-use link sent to their verified email address. Existing stateless browser
-cookies remain valid until their normal expiry in the MVP.
+single-use link sent to their verified email address. The link expires after 30
+minutes. Existing stateless browser cookies remain valid until their normal
+expiry in the MVP.

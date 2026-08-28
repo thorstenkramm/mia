@@ -134,7 +134,8 @@ replacement and logout when MIA next checks account state.
 
 Login may return an MFA challenge instead of a complete authenticated session.
 Public recovery responses are account-enumeration safe. Successful password
-reset does not revoke other stateless browser cookies in the MVP.
+reset does not revoke other stateless browser cookies in the MVP. A password
+reset link expires 30 minutes after issuance and is single-use.
 
 Login cookie stages are:
 

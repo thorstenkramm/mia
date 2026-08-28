@@ -345,7 +345,7 @@ Columns:
 
 Invariants:
 
-- A challenge is short-lived and single-use.
+- A challenge expires 30 minutes after issuance and is single-use.
 - Successful reset consumes the challenge. Stateless browser cookies issued
   before the reset remain valid until their normal expiry in the MVP.
 - Public request behavior never reveals whether an account exists. Requests for

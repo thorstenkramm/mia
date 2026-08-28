@@ -65,9 +65,9 @@
   accepted or revoked.
 - Invitation acceptance is single-use and permanently consumes the invitation.
 - Supervisors, mentors, and administrators recover passwords through a
-  short-lived, single-use link sent to their verified email. Public recovery
-  responses do not reveal account existence. The MVP does not revoke other
-  stateless browser cookies after reset; they expire normally.
+  single-use link sent to their verified email that expires after 30 minutes.
+  Public recovery responses do not reveal account existence. The MVP does not
+  revoke other stateless browser cookies after reset; they expire normally.
 - Passwords are 12 to 128 characters, allow spaces and Unicode, and have no
   character-class requirements. Reject known-common passwords locally. Do not
   trim passwords or allow operators to weaken the policy.

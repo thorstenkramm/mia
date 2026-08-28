@@ -294,7 +294,7 @@ rules.
 
 - Supervisors, mentors, and administrators recover forgotten passwords through
   their verified email address.
-- MIA sends a short-lived, single-use reset link.
+- MIA sends a single-use reset link that expires 30 minutes after issuance.
 - Public recovery responses do not reveal whether the submitted account or email
   address exists.
 - Successful password reset does not revoke other stateless browser cookies in
