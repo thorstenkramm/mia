@@ -249,6 +249,8 @@ rules.
   limited to five sends per hour and ten sends per day.
 - Send limits apply independently to both the account and destination mobile
   number.
+- Every provider call counts toward the cooldown, hourly, and daily send limits,
+  including a failed delivery attempt.
 - Five incorrect submissions invalidate the code. A replacement remains subject
   to the resend cooldown and hourly and daily limits.
 - An incorrect or expired code leaves the current mobile number unchanged.
@@ -1095,8 +1097,8 @@ required by its workload.
 ### Rate limiting
 
 - Every unauthenticated API endpoint is rate limited.
-- MIA applies a global per-source-IP limit and stricter endpoint-specific limits
-  where appropriate.
+- MIA applies a global token bucket of 60 unauthenticated requests per minute per
+  source IP with a burst capacity of 30. Stricter endpoint limits also apply.
 - Authentication and recovery limits consider both source IP and the relevant
   account, username, invitation, or challenge identifier. Neither dimension is
   sufficient by itself.
@@ -1105,6 +1107,27 @@ required by its workload.
   dedicated limits.
 - Login failures use progressive delays and temporary throttling rather than a
   permanent account lockout that an attacker could use for denial of service.
+- Login permits five failed attempts per normalized username and 30 failed
+  attempts per source IP in a rolling 15-minute window. It applies retry delays
+  of one, two, and four seconds after failures two, three, and four. MIA returns
+  `429` with `Retry-After` during a delay instead of sleeping in the handler.
+- The fifth username failure blocks further attempts until fewer than five
+  failures remain in the rolling window. A successful login clears that
+  username's failure and backoff state but does not clear source-IP failures.
+- Password recovery permits three requests per normalized submitted identifier
+  and ten per source IP in a rolling hour. The public response is identical when
+  an account is absent, a limit applies, or email is sent.
+- Public invitation preview and acceptance permit ten attempts per submitted
+  token digest and 30 per source IP in a rolling hour.
+- Password-reset submission permits five attempts per token digest and 20 per
+  source IP in a rolling hour. Password-policy validation failures count but do
+  not consume an otherwise valid reset token.
+- MFA and recovery-code verification permit ten attempts per account and 30 per
+  source IP in a rolling 15-minute window, in addition to each challenge's
+  five-attempt limit.
+- Mobile-number verification permits ten attempts per account and 30 per source
+  IP in a rolling 15-minute window, in addition to each challenge's five-attempt
+  limit.
 - Rate-limited responses use HTTP `429 Too Many Requests`, a stable API error
   code, and `Retry-After` when a retry time is known.
 - Rate-limit behavior must not reveal whether a username, email address, mobile
@@ -1113,6 +1136,9 @@ required by its workload.
   configuration.
 - Limiter state is bounded so arbitrary identifiers cannot exhaust memory or
   persistent storage.
+- Process-level limiter state holds at most 50,000 keys. MIA removes expired keys
+  first and then evicts least-recently-used keys when necessary. Entries expire
+  after their final applicable window.
 - Limits are fixed by MIA and are not operator-configurable. Error responses
   must not disclose internal thresholds when doing so would weaken abuse
   controls.

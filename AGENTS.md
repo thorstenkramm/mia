@@ -241,7 +241,7 @@ hardening.
 - Rate limit every unauthenticated API endpoint. Authentication-sensitive routes
   use layered IP and account or challenge limits without revealing resource
   existence. Resource-intensive authenticated routes have separate user- and
-  course-scoped limits. Bound all limiter state.
+  course-scoped limits. Bound process limiter state to 50,000 expiring LRU keys.
 - Never call paid or production providers from automated tests.
 - Generated speech retention is configured in days and defaults to 30 days from
   generation. Access does not extend retention. Reuse cached speech only while

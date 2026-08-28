@@ -68,6 +68,10 @@ decisions at the end of this document must be completed before implementation.
   unknown resource.
 - Rate-limited responses use HTTP `429 Too Many Requests` and include
   `Retry-After` when known.
+- Authentication-sensitive limit responses do not identify whether the IP,
+  account, submitted identifier, token, or challenge caused the limit.
+- Progressive login backoff returns immediately with `429`; handlers never sleep
+  to enforce a retry delay.
 
 ### Authorization
 

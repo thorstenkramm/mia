@@ -442,6 +442,7 @@ Constraints:
   and remain immutable historical limiter values.
 - Queries enforce a 60-second cooldown, five sends per hour, and ten sends per
   day for both the challenge owner and destination.
+- Every row counts toward these limits regardless of `outcome`.
 
 ### Other rate-limit state
 
@@ -449,7 +450,9 @@ General unauthenticated, login, invitation, recovery, user, and course rate
 limits use a bounded process-level limiter rather than SQLite. Restart clears
 that short-window state. SMS delivery history remains in SQLite because its
 hourly and daily cost limits must survive restart. The limiter implementation
-must bound key count, entry lifetime, and memory use.
+uses the fixed product limits, holds at most 50,000 keys, removes expired entries
+first, and otherwise evicts the least-recently-used key. Submitted identifiers
+and tokens are length-bounded before becoming limiter keys.
 
 ## MFA
 
