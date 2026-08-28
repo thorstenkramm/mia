@@ -413,8 +413,7 @@ rules.
   recovery codes, the operator can perform a local server-only recovery action.
 - Local recovery resets MFA, invalidates recovery codes, restricts existing
   browser cookies, and requires password replacement at next login.
-- Local recovery is not exposed through a public web route. Its exact mechanism
-  is an architecture decision.
+- Local recovery is not exposed through a public web route.
 
 ### First administrator
 

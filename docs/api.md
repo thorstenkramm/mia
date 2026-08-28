@@ -10,7 +10,7 @@ decisions at the end of this document must be completed before implementation.
 ## Contents
 
 - [Conventions](#conventions)
-- [Frontend and bootstrap](#frontend-and-bootstrap)
+- [Frontend and local commands](#frontend-and-local-commands)
 - [Authentication and recovery](#authentication-and-recovery)
 - [Invitations](#invitations)
 - [Current user and MFA](#current-user-and-mfa)
@@ -89,7 +89,7 @@ host-only, uses path `/`, and is readable by the frontend rather than
 is required. MIA supports same-origin browser access only in the MVP and does not
 enable CORS.
 
-## Frontend and bootstrap
+## Frontend and local commands
 
 MIA serves the separately installed frontend outside `/api`. Unknown API paths
 never fall back to frontend HTML.
@@ -106,6 +106,19 @@ administrator role, records the local-operator audit event, and commits. It make
 no database change if validation fails, an administrator already exists, or any
 write fails. The supplied administrator email is marked verified because the
 local operator creates the account directly.
+
+Sole-administrator MFA recovery also has no HTTP route. With the server stopped,
+the operator runs the interactive `mia reset-admin-mfa` command locally. The
+command refuses unless exactly one administrator exists and that account has MFA
+state to reset. It displays the identified administrator and requires terminal
+confirmation before making changes.
+
+Inside one transaction, the command rechecks that exactly one administrator
+exists, ends active and pending factors, invalidates recovery codes and MFA
+challenges, requires password replacement, and records the local-operator audit
+event. It makes no database change if confirmation is withheld, a precondition
+fails, or any write fails. Current browser cookies become restricted to password
+replacement and logout when MIA next checks account state.
 
 ## Authentication and recovery
 

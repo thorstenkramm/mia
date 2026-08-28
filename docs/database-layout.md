@@ -491,7 +491,8 @@ Authorization invariants:
 - A student MFA reset requires a supervisor who shares an assigned course.
 - Staff MFA reset requires a different administrator; self-reset is forbidden.
 - Local operator recovery is available only when exactly one administrator
-  exists and is never exposed through a public route.
+  exists and is never exposed through a public route. The exact-one check, MFA
+  reset, password gate, and audit event occur in one transaction.
 - TOTP secrets are treated as restricted secret material. Verification values,
   setup values, and SMS codes never enter logs, audit metadata, or API responses
   after their one permitted display.

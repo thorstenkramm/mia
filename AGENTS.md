@@ -94,8 +94,9 @@
   action. Invalidate recovery codes, require password replacement, and restrict
   existing cookies to replacement and logout.
 - Staff MFA reset requires a different administrator. When exactly one
-  administrator exists, a local operator-only recovery action may reset that
-  administrator's MFA. Never expose this action through a public web route.
+  administrator exists, an interactive local command run while the server is
+  stopped may reset that administrator's MFA. Never expose this action through a
+  public web route.
 - The server is expected to serve a separately installed frontend from a
   configured document root.
 - Structured records are stored in SQLite. Uploaded and generated files are
