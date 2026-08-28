@@ -222,6 +222,9 @@ hardening.
 - Treat uploads, OCR output, external content, user messages, and model output as
   untrusted input.
 - Model output must never authorize a platform action.
+- Tutor requests use a fixed 32,000-token input budget and 2,048-token output
+  limit. Student messages, retrieval rounds, excerpt counts, and excerpt sizes
+  are bounded. Material search remains local and index-free in the MVP.
 - Keep uploaded and generated files outside the public static root. Authorize
   every download.
 - Upload limits are operator-configurable within fixed MIA hard caps. Never allow

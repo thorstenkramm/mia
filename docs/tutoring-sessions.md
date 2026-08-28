@@ -16,8 +16,9 @@ in this order:
    instructions.
 4. The identity and brief of approved course-wide material or student-private
    material selected by the student. Complete extracted content is included only
-   when it fits within MIA's fixed input limit; otherwise MIA supplies bounded
-   relevant excerpts. This item is omitted when no material is selected.
+   when it contains at most 8,000 Unicode code points and 32 KiB and fits within
+   MIA's fixed input limit; otherwise MIA supplies bounded relevant excerpts.
+   This item is omitted when no material is selected.
 5. Summary and follow-ups of the previous session.
 
 ## Material context and retrieval
@@ -34,15 +35,19 @@ and choose suitable material available to that student. MIA authorizes the
 selection before returning content.
 
 MIA does not send the complete content of every available material at session
-start. It may include the complete extracted content of a small selected
-material only when it fits within MIA's fixed input limit. Otherwise, it sends
-bounded relevant excerpts.
+start. It includes complete selected content only at or below 8,000 Unicode code
+points and 32 KiB and only when the content fits the 32,000-token input budget.
+Otherwise, it sends bounded relevant excerpts.
 
 The AI tutor can request additional material during the session. MIA provides
 tools that let it:
 
 - search student-selected material and other material available to the student;
 - request a bounded excerpt from a specific material, chapter, or section.
+
+One response performs at most three retrieval rounds and receives at most eight
+excerpts. An excerpt contains at most 4,000 Unicode code points and 16 KiB. The
+combined result remains within the model-input budget.
 
 Every request is authorized by MIA. The available set consists only of approved
 material from the active course and private material uploaded by the active
@@ -56,9 +61,15 @@ student to another source, for example, "Workbook XYZ, chapter 7.3 explains this
 topic." It must not present an OCR page position as the printed page number.
 
 MIA records material actually used during the session, including material
-retrieved after the session started. The retrieval implementation is not defined
-here; it may use provider-supported file search or application-controlled search
-as long as it preserves this behavior and the authorization boundaries.
+retrieved after the session started. It performs bounded streaming search over
+authorized normalized `content.txt` files. The MVP has no separate retrieval
+index and does not upload material to a provider-managed file store.
+
+One request reserves at most 32,000 input tokens and 2,048 output tokens. MIA uses
+a local tokenizer matching the configured model. It always retains required
+instructions and the current student message, then adds the newest complete
+conversation turns that fit. It omits older turns without generating a rolling
+summary.
 
 ## Response Streaming
 
@@ -80,6 +91,9 @@ the provider operation, and preserves text already received.
 Provider failures preserve partial text and produce a sanitized failed state.
 Tool calls and provider payloads remain internal to MIA. Every SSE connection is
 authorized for the requesting user and tutor response.
+
+An idle stream sends an SSE comment heartbeat every 15 seconds. Each write has a
+30-second deadline. Heartbeats do not count as authenticated session activity.
 
 ## Starting a tutoring session
 

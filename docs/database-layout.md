@@ -716,7 +716,7 @@ Columns:
 - `id`, prefix `msg_`, primary key
 - `tutoring_session_id`, session ID, not null, cascade on session deletion
 - `client_request_id`, bounded client-generated identifier, not null
-- `content`, not null
+- `content`, not null, maximum 8,000 Unicode code points and 32 KiB
 - `sequence`, positive integer, not null
 - `created_at`, not null
 

@@ -813,8 +813,14 @@ At session start, the AI tutor receives:
 5. The previous session's summary and follow-up, when available.
 
 MIA does not send the complete content of every available material at session
-start. It may include the complete extracted content of a small selected
-material only when it fits within MIA's fixed input limit.
+start. It may include complete selected-material content only when it contains at
+most 8,000 Unicode code points and 32 KiB and fits within the total input limit.
+
+One tutor request has a fixed 32,000-token model-input budget and a 2,048-token
+output limit. MIA uses a tokenizer matching the configured model before sending
+the request. Required instructions and the current message take priority. The
+remaining budget includes the newest complete conversation turns that fit; older
+turns are omitted without a hidden rolling summary.
 
 ### Material retrieval
 
@@ -829,6 +835,11 @@ material only when it fits within MIA's fixed input limit.
 - MIA authorizes every retrieval request. A model tool request never grants
   access by itself.
 - MIA records every material actually used during the session.
+- Retrieval uses bounded local search over authorized normalized source text. It
+  does not use a provider file store or a separate persisted search index.
+- One response performs at most three retrieval rounds and receives at most eight
+  excerpts. Each excerpt contains at most 4,000 Unicode code points and 16 KiB
+  and must fit the total model-input budget.
 - Retrieval results identify the material, chapter, and section when available.
 - The AI tutor should cite the material, chapter, or section when directing a
   student to another source. It must not claim an OCR page position is the
@@ -836,6 +847,8 @@ material only when it fits within MIA's fixed input limit.
 
 ### Response delivery
 
+- A student message contains at most 8,000 Unicode code points and 32 KiB of valid
+  UTF-8.
 - AI tutor responses appear incrementally while they are generated.
 - The product must not wait for the complete model response before displaying
   available text to the student.

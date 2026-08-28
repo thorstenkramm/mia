@@ -35,6 +35,8 @@ decisions at the end of this document must be completed before implementation.
   the same resource at both forms.
 - Uploads, downloads, generated audio, and tutor-response event streams use
   their explicitly documented non-JSON:API media types.
+- A non-upload request body is limited to one MiB before parsing. Oversized
+  requests return HTTP `413 Content Too Large`.
 
 ### Identifiers and time
 
@@ -337,10 +339,11 @@ event: failed
 data: {"state":"failed","code":"provider_failure"}
 ```
 
-MIA may send SSE comment heartbeats to keep an otherwise idle connection open.
-A browser disconnect closes only that subscription; it does not cancel response
-generation. Reconnecting to the same route receives a fresh snapshot followed by
-new deltas, so MIA does not need a persisted per-token event history.
+MIA sends an SSE comment heartbeat every 15 seconds while no event is available.
+Each stream write has a 30-second deadline. A browser disconnect closes only that
+subscription; it does not cancel response generation. Reconnecting to the same
+route receives a fresh snapshot followed by new deltas, so MIA does not need a
+persisted per-token event history.
 
 The reverse proxy must not buffer this route. MIA flushes complete SSE events and
 persists generated text in bounded batches rather than writing one database
