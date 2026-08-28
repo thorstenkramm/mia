@@ -1028,7 +1028,9 @@ Invariants:
   direct actor ID while preserving only `actor_fingerprint`. This lifecycle
   operation is the sole update exception to audit immutability.
 - Fingerprints are random opaque values, not hashes or encrypted identifiers.
-  They cannot be reversed or used to recover deleted identity data.
+  Deletion generates one UUID v4 fingerprint per deleted identity and applies it
+  consistently to every retained reference in the deletion transaction. No
+  mapping to the original ID survives.
 - Application code constructs each event type from an allowlisted metadata
   schema; arbitrary JSON is rejected.
 

@@ -1084,8 +1084,11 @@ required by its workload.
   records, generated speech, and pending invitations or challenges.
 - MIA preserves only a minimal, content-free audit record of the deletion.
 - The retained audit record contains the event type, time, acting user, and an
-  irreversible or de-identified subject reference. It contains no profile data,
-  message content, material content, or direct subject identifier.
+  random de-identified subject reference. It contains no profile data, message
+  content, material content, or direct subject identifier.
+- Deletion generates one random UUID v4 fingerprint for the deleted identity and
+  uses it consistently in retained historical references. MIA preserves no
+  mapping from that fingerprint to the deleted ID.
 
 ### Course deletion
 
