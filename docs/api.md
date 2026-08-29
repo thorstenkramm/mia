@@ -56,9 +56,25 @@ decisions at the end of this document must be completed before implementation.
 
 - Collection routes use offset pagination with `page[limit]` and
   `page[offset]`.
+- The default limit is 25, the maximum limit is 100, and the default offset is
+  zero. MIA rejects a negative value or an offset above 10,000.
+- Unless a route documents a more meaningful fixed order, collections sort by
+  `created_at` descending and then resource ID descending.
+- Collections fetch one row beyond the requested limit to determine whether a
+  next page exists. Responses provide offset, limit, and navigation links but do
+  not calculate or return an exact total by default.
 - Each collection documents its supported filters and stable sort order before
   implementation.
 - Limits are bounded by MIA; clients cannot request unbounded collections.
+
+### Included relationships
+
+- No relationship is included by default.
+- Each route explicitly allowlists includable direct relationships.
+- A request may include at most three relationships. Nested include paths are not
+  supported in the MVP.
+- Unsupported, nested, duplicate, or excessive includes are validation errors;
+  MIA does not silently ignore them.
 
 ### Errors and resource hiding
 
