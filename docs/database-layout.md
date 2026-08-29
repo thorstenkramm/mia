@@ -687,6 +687,7 @@ Columns:
 
 - `id`, prefix `ts_`, primary key
 - `student_user_id`, student user ID, not null
+- `client_request_id`, canonical UUID v4, not null
 - `course_id`, course ID, not null
 - `started_at`, not null
 - `completed_at`, nullable
@@ -700,6 +701,8 @@ Columns:
 Constraints:
 
 - The student must belong to the course.
+- Unique: (`student_user_id`, `client_request_id`). Replay compares the course and
+  immutable selected-material set and conflicts on a different payload.
 - A partial unique index on `student_user_id` where `completed_at IS NULL`
   enforces one active tutoring session across all courses and devices.
 - `completed_at IS NULL` means active. A non-null `completed_at` means completed
@@ -723,7 +726,7 @@ Columns:
 
 - `id`, prefix `msg_`, primary key
 - `tutoring_session_id`, session ID, not null, cascade on session deletion
-- `client_request_id`, bounded client-generated identifier, not null
+- `client_request_id`, canonical lowercase UUID v4, not null
 - `content`, not null, maximum 8,000 Unicode code points and 32 KiB
 - `sequence`, positive integer, not null
 - `created_at`, not null

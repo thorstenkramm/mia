@@ -810,6 +810,11 @@ uploader must remove or replace the failed file before processing can succeed.
 
 ### Starting a session
 
+- Session creation includes a browser-generated canonical lowercase UUID v4
+  request identifier scoped to the student.
+- Replaying the same identifier with the same course and selected material set
+  returns the existing session. Reusing it with different creation content is a
+  conflict.
 - A student starts a session in one joined, active course.
 - A student can have only one active tutoring session across all courses.
 - The student may optionally select one or more primary materials.
@@ -909,7 +914,7 @@ turns are omitted without a hidden rolling summary.
 - MIA does not automatically retry an intentionally stopped response. The
   student can continue with another message.
 - Each student-message submission includes a client-generated request
-  identifier scoped to the tutoring session.
+  identifier scoped to the tutoring session. It is a canonical lowercase UUID v4.
 - Retrying the same identifier and content returns the existing message and
   response operation without creating another provider request.
 - Reusing an identifier with different content is rejected as a conflict.

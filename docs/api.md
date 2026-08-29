@@ -334,13 +334,15 @@ are exhausted, with or without file changes. MIA has no generic job retry route.
 - `GET /api/v1/tutor-responses/{id}/events`
 - `GET /api/v1/tutoring-sessions/{id}/materials`
 
-Session creation optionally includes selected material relationships. The owning
-student can complete an active session; no abandon or staff force-completion
-route exists.
+Session creation requires a canonical lowercase UUID v4 `client_request_id` and
+optionally includes selected material relationships. Replaying the same ID and
+creation payload returns the existing session; different content is a conflict.
+The owning student can complete an active session; no abandon or staff
+force-completion route exists.
 
-Each student-message creation includes a client-generated request ID scoped to
-the session. Repeating the same ID and content returns the existing message and
-response operation. Different content is a conflict.
+Each student-message creation includes a canonical lowercase UUID v4 request ID
+scoped to the session. Repeating the same ID and content returns the existing
+message and response operation. Different content is a conflict.
 
 A session accepts at most one generating response and one queued message. A
 further message returns a conflict. Queued work begins after any terminal result
