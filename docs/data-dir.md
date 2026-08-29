@@ -25,6 +25,7 @@ require a restart.
 ```text
 <data-dir>/
 ├── mia.sqlite3
+├── mia.lock
 ├── session.key
 ├── llm-instructions/
 │   ├── init.md
@@ -54,6 +55,11 @@ require a restart.
 
 `mia.sqlite3` is MIA's fixed SQLite database. Its name is not an operator
 setting.
+
+`mia.lock` is an empty mode-`0600` file used for a non-blocking exclusive process
+lock. `mia serve` holds the lock for its lifetime, and database-using local
+commands hold it for their complete operation. The file may remain after exit;
+only the OS lock state determines ownership.
 
 `session.key` contains 64 random bytes generated on first startup. MIA creates it
 with mode `0600`, never logs it, and uses the first 32 bytes for signing and the

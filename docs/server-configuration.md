@@ -8,6 +8,11 @@ startup with exit code 1. Startup makes no external provider request.
 Audience: operators and implementers. This document is authoritative for server
 settings.
 
+`mia bootstrap-admin` and `mia reset-admin-mfa` use the same source precedence but
+semantically require only `main.data_dir` and database/account-policy settings.
+They still reject malformed input and unknown keys, but they do not require
+frontend or provider settings.
+
 See [`mia.example.toml`](../mia.example.toml) for a complete annotated
 configuration file.
 

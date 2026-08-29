@@ -173,6 +173,9 @@
   defines it.
 - MIA ships one `mia` executable with `serve`, `bootstrap-admin`, and
   `reset-admin-mfa` subcommands.
+- Every database-using command holds an exclusive OS lock on
+  `main.data_dir/mia.lock`. Offline commands validate only their required
+  configuration subset and never contact providers.
 - MIA uses `modernc.org/sqlite` with the fixed `data_dir/mia.sqlite3` path, WAL,
   `synchronous=FULL`, foreign keys, and a five-second busy timeout. Embedded
   `golang-migrate` v4 up migrations run automatically before database use.

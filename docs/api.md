@@ -109,9 +109,9 @@ never fall back to frontend HTML.
 
 The first-administrator bootstrap has no HTTP route. With the server stopped, the
 operator runs the interactive `mia bootstrap-admin` command locally. The command
-collects the required account fields, reads the password twice from a terminal,
-and refuses redirected password input. It never accepts a password through a
-command-line argument, environment variable, or input file.
+requires a terminal and prompts for username, email, language, country, time
+zone, password, and password confirmation. It refuses redirected input and never
+accepts account fields through arguments, environment variables, or input files.
 
 The command validates the normal account and password rules, verifies that no
 administrator exists inside the bootstrap transaction, creates the user and
@@ -123,8 +123,12 @@ local operator creates the account directly.
 Sole-administrator MFA recovery also has no HTTP route. With the server stopped,
 the operator runs the interactive `mia reset-admin-mfa` command locally. The
 command refuses unless exactly one administrator exists and that account has MFA
-state to reset. It displays the identified administrator and requires terminal
-confirmation before making changes.
+state to reset. It displays the identified administrator and requires the
+operator to type its exact displayed username before making changes.
+
+`mia serve` and both local commands acquire the exclusive
+`main.data_dir/mia.lock` OS lock before opening SQLite. Local commands refuse
+while the server or another database-using command holds it.
 
 Inside one transaction, the command rechecks that exactly one administrator
 exists, ends active and pending factors, invalidates recovery codes and MFA

@@ -28,6 +28,24 @@ The executable contains one shared implementation of configuration, persistence,
 account policy, and auditing. Local commands do not require a separate
 administration binary.
 
+### Process lock and local commands
+
+- Every command that opens SQLite first acquires a non-blocking exclusive OS lock
+  on `main.data_dir/mia.lock`. `mia serve` holds it for the process lifetime.
+  Another server or an offline command refuses to run while the lock is held.
+- The mode-`0600` lock file may remain on disk. Process exit releases the OS lock;
+  MIA does not infer ownership from file existence or delete a stale file.
+- Offline commands use normal configuration precedence and reject malformed or
+  unknown configuration keys, but semantically validate only `main.data_dir` and
+  settings required for database and account-policy work. They do not require a
+  document root or provider configuration.
+- The process lock is acquired before opening SQLite or applying migrations.
+- `bootstrap-admin` requires a terminal and prompts for username, email,
+  language, country, time zone, password, and password confirmation. It accepts
+  none of those account values through flags or environment variables.
+- `reset-admin-mfa` displays the sole administrator and requires the operator to
+  type its exact displayed username before making changes.
+
 ## SQLite
 
 - MIA uses the CGo-free `modernc.org/sqlite` `database/sql` driver.
