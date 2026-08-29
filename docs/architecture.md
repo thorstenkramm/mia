@@ -11,8 +11,10 @@ behavior remains defined by the
 - The Go module path is `github.com/thorstenkramm/mia`.
 - The minimum supported Go version is `1.27.0`.
 
-The package layout remains open and will be introduced incrementally as concrete
-implementation responsibilities require it.
+Initial scaffolding is limited to command wiring, configuration, process locking,
+SQLite and migrations, identity validation, the HTTP server, and the first
+authentication slice. Feature packages are added only as they are implemented;
+MIA does not pre-create a speculative domain tree.
 
 ## Executable
 
@@ -58,6 +60,8 @@ administration binary.
   than the executable. MIA does not run down migrations.
 - Every connection enables foreign-key enforcement, a five-second busy timeout,
   WAL journal mode, and `synchronous=FULL`.
+- The pool has four open and four idle connections with no connection-lifetime
+  expiry. MIA does not use separate reader and writer pools.
 
 These settings are fixed for the MVP and are not operator-configurable.
 
@@ -74,6 +78,9 @@ These settings are fixed for the MVP and are not operator-configurable.
   list is added, and MIA updates it only through normal releases.
 - Blocklist comparison uses the submitted valid UTF-8 bytes exactly. MIA does not
   trim, normalize, case-fold, or generate password mutations.
+- Course and material display names are trimmed and NFC-normalized. Their stored
+  unique keys use `cases.Fold` and a final NFC normalization; SQLite `NOCASE` is
+  not used.
 
 ## HTTP Runtime
 
@@ -86,6 +93,12 @@ These settings are fixed for the MVP and are not operator-configurable.
   comment heartbeat every 15 seconds.
 - Graceful shutdown allows 30 seconds before canceling remaining request and
   streaming work.
+- Static GET and HEAD serving permits regular files only, rejects symlink escapes,
+  dotfiles, and directory listings, and applies SPA fallback only outside `/api`.
+  Responses use `nosniff`, restrictive referrer and framing policies, and a
+  strict baseline CSP (`default-src 'self'; object-src 'none'; base-uri 'self';
+  frame-ancestors 'none'`), loosened during frontend integration only when the
+  frontend demonstrably requires it.
 
 ### Client addresses
 
@@ -122,8 +135,15 @@ These settings are fixed for the MVP and are not operator-configurable.
   most eight excerpts. Each excerpt contains at most 4,000 Unicode code points
   and 16 KiB and remains subject to the total input budget.
 - Retrieval performs bounded streaming searches over authorized normalized
-  `content.txt` files. The MVP stores no separate search index and no
+  `content.jsonl` files. Search uses NFC-normalized Unicode-folded terms and
+  deterministic match-count, frequency, material, file, and segment ordering.
+  One adjacent segment per side may be included within excerpt limits, and
+  overlapping excerpts are deduplicated. The MVP stores no separate search index and no
   provider-managed material files.
+- Retrievable content must be ready and file-backed in the session's course.
+  Course-wide material also requires approval; student-private material requires
+  ownership by the active student and no approval. Link-only metadata has no
+  retrievable source content.
 
 ## Provider Operations
 
@@ -133,8 +153,17 @@ These settings are fixed for the MVP and are not operator-configurable.
   and a two-minute total deadline.
 - Each bounded Mistral OCR chunk uses a 30-second response-header timeout and a
   five-minute total deadline.
+- Background retries use current server configuration and processing code. MIA
+  does not guarantee identical provider requests or provider-side idempotency
+  across retries, restarts, configuration changes, or upgrades. Lease-guarded
+  commits prevent duplicate durable output, but ambiguous retries may repeat paid
+  provider work.
 - SMTP delivery uses ten-second connect, TLS, and command deadlines within a
   30-second total operation.
+- A definite initial invitation-delivery failure creates a faulty invitation. An
+  SMTP timeout is ambiguous operational success: the invitation remains pending,
+  MIA logs a sanitized error, and it does not retry automatically. Email is
+  English-only plain-text UTF-8 with sanitized headers and no HTML part.
 - ClickSend uses a five-second connection timeout and a 15-second total deadline.
 - ElevenLabs uses a ten-second response-header timeout and a two-minute total
   deadline.
@@ -144,3 +173,51 @@ These settings are fixed for the MVP and are not operator-configurable.
 - Startup validates provider configuration and supported model-tokenizer mappings
   locally but makes no provider call. Provider outages do not prevent MIA from
   starting.
+- Provider adapters allowlist supported request, response, stream, and usage
+  fields. Missing or malformed required structures fail safely; unknown optional
+  fields are ignored. Raw payloads are neither retained nor exposed, and only
+  documented provider errors are classified as retryable.
+- Mistral OCR uses fixed model `mistral-ocr-4-1`. Token counting uses
+  `github.com/tiktoken-go/tokenizer` with `o200k_base` for the confirmed OpenAI
+  models.
+
+## Instruction Defaults
+
+Short tutor, material-brief, and session-summary defaults are embedded in the
+executable. Startup creates only missing instruction files and never overwrites
+operator files. There is no runtime versioning or prompt migration; Git and
+release history track the embedded source.
+
+The exact prompt body for each feature is written and reviewed with that
+feature's implementation. Prompts guide model behavior; Go code remains
+responsible for authorization, input bounds, output-schema validation, and
+security invariants.
+
+## Implementation Prerequisites
+
+Before implementing a provider adapter, its current API contract must define the
+exact outbound fields, required inbound fields, supported streaming events,
+normalized usage values, and retryable error classes. This documentation is
+written against the provider API used by that implementation rather than frozen
+prematurely during product planning.
+
+Before implementing an affected HTTP route, its API contract must define exact
+attributes, writable fields, relationships, filters, ordering, status codes,
+stable errors, authorization, redaction, idempotency, and field-level bounds. The
+authentication and session family is the first complete vertical slice.
+
+## Startup Storage Integrity
+
+Validated source uploads are atomically renamed to their deterministic path
+before the database row commits. Transaction failure removes the published file,
+and startup reconciliation removes source files without rows. Exact
+same-filesystem temporary placement and file and directory synchronization are
+specified with implementation.
+
+Startup first deletes expired generated-speech rows and files. It then changes
+speech rows stranded in generating state to failed with a sanitized restart code
+and removes associated incomplete output without repeating provider requests.
+Finally, it logs an error and exits when SQLite references a missing source file,
+processed `content.jsonl`, or unexpired available generated-speech file. Missing
+avatars and course logos are normal because their fixed-path presence defines
+availability.

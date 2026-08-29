@@ -68,10 +68,14 @@ tasks:
   the LLM. Supervisors shall give the LLM context about the students.
 - Upload learning material. Ideally, the entire text book using in class is uploaded. High-quality scans are preferred.
   AI-powered OCR will process the material and store it for further using during the tutoring sessions.
-- For each uploaded material the LLM creates a summary with the learning goals outlined. These summaries must be
-  reviewed and corrected by the supervisor.
+- For each course-wide uploaded material the LLM creates a structured material
+  brief with supported learning goals and a content outline. A supervisor reviews
+  and may correct the brief before approval. Student-private briefs require no
+  review.
 - Approve course-wide material that should be available to all students in the course. A supervisor can grant or revoke
   approval at any time. Unapproved course-wide material is not available to students or used by the AI tutor.
+  Changing an approved material brief revokes approval until a supervisor reviews
+  and approves the revised brief.
 
 **Step 3: Add students**: Once a course is prepared, a supervisor can create a
 student account with a username and temporary initial password or add an existing
@@ -85,6 +89,13 @@ require a verified email address. After the first-administrator bootstrap, their
 registration is invitation-only. Student accounts are provisioned by assigned
 supervisors, and student email is optional. New administrators, supervisors, and
 mentors choose their own username and password while accepting the invitation.
+Mentor invitations create only the account and permanent role. An assigned
+supervisor separately assigns a registered mentor to a course and its students;
+those assignments need no mentor acceptance.
+Additional permanent roles for an existing staff user are granted directly by
+user ID and need no approval from that user. Granting the supervisor role also
+grants the student role. After joining an active assigned course through the
+ordinary student-membership flow, a supervisor can test it as a student.
 With the server stopped, the operator creates the first administrator through a
 one-time interactive local command. The command is disabled after the first
 administrator exists.
@@ -110,14 +121,17 @@ that information is available. MIA authorizes every material request.
 During a session, the student can upload private material, such as homework, worksheets received in class, or an exam.
 Student-uploaded material is visible to the student who uploaded it, the AI tutor, and supervisors assigned to the
 course. Assigned supervisors can inspect the files, generated material briefs, and complete tutoring history. The
-material is available to the uploading student without approval but does not become course-wide material available to
-all students. It is not visible to mentors, other students, unrelated supervisors, or administrators who are not
-assigned as supervisors.
+material is available to the uploading student without approval after successful
+processing while it remains file-backed, but does not become course-wide material
+available to all students. It is not visible to mentors, other students, unrelated
+supervisors, or administrators who are not assigned as supervisors.
 
 The student can delete their private material. Deletion removes its files and
 generated material brief and prevents future use. Existing chat histories and
 completed-session summaries remain, including quoted content whose source is no
 longer available.
+Material selected by an active tutoring session cannot be deleted until that
+session is completed.
 
 During a session, the AI tutor tries to identify and resolve difficulties using
 clarifying questions, alternative explanations, examples, exercises, and
@@ -165,7 +179,7 @@ Fast and reliable internet access is crucial. The server constantly connects to 
 A user can have one or all of the following roles:
 
 Every user has a preferred IANA time zone used to display dates and times and to
-create server-generated communications. Students cannot change this setting;
+create server-generated communications. Student-only accounts cannot change it;
 any supervisor assigned to one of the student's courses can set it.
 
 - **administrator**: An admin is allowed to
@@ -179,36 +193,42 @@ any supervisor assigned to one of the student's courses can set it.
   - edit all details
   - activate or deactivate the course
   - upload or delete material
-  - review and correct material summaries
+  - review and correct material briefs
   - approve course-wide material or revoke its approval
   - inspect private material uploaded by students in the course
-  - review completed students' tutoring sessions, including access to the full chat history
+  - review completed students' tutoring sessions, including access to the full
+    chat history, and correct their summaries and follow-ups
   - provision student accounts and add students to a course
-  - invite mentors to the course and assign or reassign them to students
-  - view and edit non-security profile data for students in the course
-  - set a temporary student password for account recovery
-  - ban or unban a student
+  - invite mentor accounts, assign mentors to the course, and assign or reassign
+    course mentors to students
+  - view and edit non-security profile data for student-only accounts in the course
+  - set a temporary password for student-only account recovery
+  - ban or unban a student-only account
 - **mentor**: A mentor is allowed to
   - respond to questions
   - schedule a personal tutoring session using an external meeting channel
 - **student**: A student is allowed to
   - view its own profile
-  - upload an avatar
-  - change its own mobile number after confirming the new number by SMS code
   - conduct tutoring sessions
   - upload private material for use by the AI tutor
   - delete its own private material
   - view the summary of strengths and weaknesses
   - download approved learning materials of assigned courses
 
-Students cannot change other profile fields. If SMS delivery is unavailable,
-the current mobile number remains unchanged.
+Student-only accounts cannot change profile fields. An assigned supervisor
+manages them.
+Administrators, supervisors, and mentors may change their own name, nickname,
+language, country, time zone, verified mobile number, avatar, and text-to-speech
+voice, and may remove their profile mobile number. Staff email is immutable.
+Administrator, supervisor, and mentor roles remain for the lifetime of the
+account once granted.
 
-A supervisor can recover a student's account by setting a temporary password.
-MIA restricts existing browser sessions to password replacement and logout, and
-the student must replace the temporary password at the next login.
+A supervisor can recover a student-only account by setting a temporary password.
+MIA invalidates every existing student browser cookie. The student must log in
+again and replace the temporary password before using other authenticated
+features. Accounts with any staff role always use staff recovery.
 
-Supervisors, mentors, and administrators recover forgotten passwords through a
-single-use link sent to their verified email address. The link expires after 30
-minutes. Existing stateless browser cookies remain valid until their normal
-expiry in the MVP.
+Supervisors, mentors, and administrators request password recovery with their
+username. MIA sends a single-use link to the verified email address. The link
+expires after 30 minutes. Existing stateless browser cookies remain valid until
+their normal expiry in the MVP.

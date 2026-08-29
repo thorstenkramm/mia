@@ -53,21 +53,39 @@
 - Students do not require email addresses. A supervisor provisions a student
   account and chooses its username and temporary initial password. The student
   must replace it at first login before using other authenticated features.
-- Any supervisor sharing an assigned course with a student can set a temporary
-  password for recovery. Revoke all student sessions and require replacement at
-  next login. Never log or audit password values.
+- Any supervisor sharing an assigned course with a student-only account can set a
+  temporary password for recovery. Invalidate all existing student cookies and
+  require replacement after a fresh login. Never log or audit password values.
 - Administrators, supervisors, and mentors require verified email addresses.
   Acceptance of an invitation delivered to that address verifies it.
 - New administrators, supervisors, and mentors choose their own username and
   password during invitation acceptance; the inviter does not issue temporary
   credentials.
+- A mentor invitation creates only a new account and permanent mentor role; it
+  has no course or student scope. Any supervisor may invite a mentor. Only the
+  inviting supervisor or an administrator may manage that invitation.
+- Invitations register new accounts only. Additional permanent roles are granted
+  directly only to registered staff accounts by user ID, take effect immediately,
+  and require no user approval. Granting the supervisor role also grants the
+  student role in the same transaction.
+- Any staff role determines staff profile, password-recovery, MFA-recovery, ban,
+  and deletion behavior. Student administration operations target student-only
+  accounts. A banned account must be unbanned before receiving a staff role.
+- An assigned supervisor adds a registered mentor to a course and assigns a
+  course mentor to students. These assignments take effect immediately without
+  mentor acceptance, and mentors cannot reject or remove their assignments.
 - Administrator, supervisor, and mentor invitations do not expire; they remain
-  pending until accepted or revoked.
+  pending until accepted or revoked unless definite initial SMTP failure makes
+  them faulty. SMTP timeout leaves them pending and usable, is logged, and is not
+  retried automatically.
+- Invitation DELETE revokes a pending invitation, physically deletes a faulty
+  invitation, and rejects accepted or revoked invitations.
 - Invitation acceptance is single-use and permanently consumes the invitation.
 - Invitation and password-reset bearer tokens are canonical lowercase UUID v4
   values. Persist only their SHA-256 digests.
-- Supervisors, mentors, and administrators recover passwords through a
-  single-use link sent to their verified email that expires after 30 minutes.
+- Login and staff password recovery accept username only. Recovery sends a
+  single-use link to the verified email that expires after 30 minutes. New
+  requests leave earlier links valid; successful reset invalidates the rest.
   Public recovery responses do not reveal account existence. The MVP does not
   revoke other stateless browser cookies after reset; they expire normally.
 - Passwords are 12 to 128 characters, allow spaces and Unicode, and have no
@@ -89,42 +107,68 @@
   server-side browser-session records. Account ban and deletion are checked on
   every request. A student's one-active-tutoring-session rule applies across
   devices.
+- Only student-only accounts can be banned. A ban rejects the next request but
+  does not cancel provider or background work already in flight.
 - Login uses one rotated CookieStore value with restricted `mfa` and
   `password-change` stages before the full `authenticated` stage. When both are
   required, MFA precedes password replacement.
 - MFA is optional for every user and role. Do not impose role-based MFA
   enrollment.
-- Supported MFA methods are TOTP and, when ClickSend and a verified mobile number
-  are available, SMS. Enrollment requires verification before activation.
+- Supported MFA methods are TOTP and SMS. SMS enrollment or replacement requires
+  ClickSend and a verified profile mobile; active login challenges use the
+  factor's immutable destination snapshot after profile-mobile change or removal.
+  Enrollment requires verification before activation.
 - TOTP uses SHA-1, six digits, 30-second steps, one-step clock skew, and a 20-byte
   secret. SMS codes use six decimal digits. Pending enrollment expires after 30
   minutes. Five failed submissions invalidate an MFA challenge.
+- Login MFA challenges last 30 non-refreshing minutes and may coexist across
+  login attempts. A TOTP step succeeds only once per factor. Pending-enrollment
+  and login-challenge SMS resends reuse the same code, expiry, and failure count.
+- MFA disable or replacement uses a five-minute, single-use opaque
+  `mfa-management` proof stored only by SHA-256 digest and consumed atomically.
+  Password, MFA, ban-state, or account-state changes invalidate all outstanding
+  MFA challenges and proofs.
 - MFA enrollment issues single-use recovery codes shown once and stored only as
-  non-reversible values. Never log or audit recovery-code values.
-- An assigned supervisor may reset lost student MFA as a separate security
-  action. Invalidate recovery codes, require password replacement, and restrict
-  existing cookies to replacement and logout.
+  non-reversible values. There is no standalone regeneration; factor replacement
+  invalidates old codes and issues the new set. Never log or audit recovery-code
+  values.
+- An assigned supervisor may reset lost MFA for a student-only account as a
+  separate security action. Invalidate recovery codes and all existing student
+  cookies, then require password replacement after a fresh login.
 - Staff MFA reset requires a different administrator. When exactly one
   administrator exists, an interactive local command run while the server is
   stopped may reset that administrator's MFA. Never expose this action through a
   public web route.
-- Additional administrators join by invitation. Only a different administrator
-  can remove an administrator role or delete a staff account, and MIA preserves
-  the last administrator. Only administrators delete student accounts. Any staff
-  role makes the staff MFA-reset rule apply to a multi-role account.
+- Additional administrators join by invitation or direct role grant to registered
+  staff. Administrator, supervisor, and mentor roles are permanent. Only a
+  different administrator can delete a staff account. Reject deletion of the last
+  administrator or a sole course supervisor; otherwise remove current
+  assignments, triage open work, and clear historical actor references atomically.
+  Only administrators delete student-only accounts. Any staff role makes all
+  staff security and deletion rules apply.
 - The server is expected to serve a separately installed frontend from a
   configured document root.
 - Structured records are stored in SQLite. Uploaded and generated files are
   stored in the data directory. Both form one consistent data set.
+- Startup deletes expired speech rows and files first, then marks stranded speech
+  generation failed and removes incomplete output. Missing database-referenced
+  source, processed JSONL, or unexpired available speech files then make startup
+  fail. Missing avatars and course logos are normal.
 - OpenAI and Mistral are external processors. SMTP is required for email;
   ClickSend and ElevenLabs support optional features.
 - External provider availability is not a startup prerequisite. Startup validates
   provider settings locally and operations use fixed deadlines. Request-path
   provider calls do not retry automatically after ambiguous failure.
+- Background retries use current configuration and processing code. MIA does not
+  promise identical provider requests or provider-side idempotency across
+  attempts; guarded commits still prevent duplicate durable output.
 - Echo 5.3.1 is the confirmed web framework. Follow
   `.agents/rules/echo.md` for framework-specific rules.
 - Course-wide material has a revocable supervisor approval flag. Only approved
   course-wide material is visible to course students or usable by the AI tutor.
+- Changing the validated brief content of approved course-wide material
+  atomically revokes approval; unchanged content does not. The revised brief must
+  be explicitly approved again.
 - An active course with no approved, ready, file-backed course-wide material
   accepts no new tutoring sessions. Existing sessions may finish without access
   to revoked material.
@@ -146,31 +190,41 @@
   generated brief and prevent future retrieval. Preserve completed chats,
   session summaries, and a non-content audit record. Quoted historical content
   may remain without a retrievable source.
+- Material selected by an active tutoring session cannot be deleted. After the
+  session is completed, normal material-deletion rules apply.
 - Material selection at session start is optional. The AI tutor receives the
   identity and brief of material selected by the student, if any, not every
   complete source. Once the intent is clear, it may discover and request bounded
-  excerpts from approved course-wide material and the active student's private
-  material. MIA authorizes every retrieval request and records material used.
+  excerpts from ready, file-backed, approved course-wide material and ready,
+  file-backed private material owned by the active student in the session's
+  course. MIA authorizes every retrieval request and records material used.
+- Material content uses strict per-source `content.jsonl`. Search uses normalized
+  Unicode terms and deterministic ranking. Material counts as used only when
+  content reaches the tutor model, not when search merely finds it.
 - Require every API instant in requests and responses to use RFC 3339 UTC with
   the `Z` suffix. Persist instants in UTC. Every user has a preferred IANA time
   zone for display and server-generated communications. Local-time schedules
   use separate local-time and IANA time-zone fields when their meaning must
   survive daylight-saving changes.
-- Students can change only their avatar and mobile number. A mobile-number
-  change takes effect only after SMS verification of the new number. Any
-  supervisor sharing an assigned course with a student can edit that student's
-  non-security profile fields. This excludes roles, MFA, password state, ban
-  state, and course or mentor assignments.
+- Student-only accounts cannot change profile fields. Any supervisor sharing an
+  assigned course with a student-only account can edit that student's
+  non-security profile fields. A supervisor-entered student mobile is immediately
+  verified and invalidates pending mobile challenges and pending SMS factors.
+  Staff may edit their own non-security profile fields and remove their verified
+  profile mobile; removal invalidates pending SMS factors but does not change an
+  active SMS factor destination. Staff email is immutable.
 - Mentoring is a last resource after the AI tutor has tried suitable educational
   approaches and authorized material. With no assigned mentor, all
   new student-facing mentoring requests are disabled. A supervisor may remove
   any mentor; affected open work returns to supervisor triage with future schedule
   details cleared. `mentoring_requests_allowed` independently controls new
   requests.
+- Direct reassignment of open mentoring work preserves schedule, meeting details,
+  prior response, and response authorship; it is distinct from mentor removal.
 - The Go module path is `github.com/thorstenkramm/mia`, and the minimum supported
-  Go version is 1.27.0. No package layout, authentication mechanism, or deployment
-  procedure has been finalized unless a later authoritative document explicitly
-  defines it.
+  Go version is 1.27.0. Initial packages cover only command wiring,
+  configuration, locking, SQLite/migrations, identity, HTTP, and the first auth
+  slice; add feature packages only with their implementation.
 - MIA ships one `mia` executable with `serve`, `bootstrap-admin`, and
   `reset-admin-mfa` subcommands.
 - Every database-using command holds an exclusive OS lock on
@@ -179,6 +233,8 @@
 - MIA uses `modernc.org/sqlite` with the fixed `data_dir/mia.sqlite3` path, WAL,
   `synchronous=FULL`, foreign keys, and a five-second busy timeout. Embedded
   `golang-migrate` v4 up migrations run automatically before database use.
+- SQLite uses four open and four idle connections with no connection-lifetime
+  expiry.
 
 ## Product documentation
 
@@ -252,8 +308,9 @@ hardening.
   for external operations.
 - Rate limit every unauthenticated API endpoint. Authentication-sensitive routes
   use layered IP and account or challenge limits without revealing resource
-  existence. Resource-intensive authenticated routes have separate user- and
-  course-scoped limits. Bound process limiter state to 50,000 expiring LRU keys.
+  existence. The MVP has no separate authenticated tutoring, upload,
+  finalization, or speech rate limits. Bound process limiter state to 50,000
+  expiring LRU keys.
 - Trust `X-Forwarded-For` only from configured proxies, loopback peers, or the
   permission-controlled Unix listener. Parse bounded chains right-to-left and use
   a safe peer or local fallback for malformed input.
@@ -261,6 +318,8 @@ hardening.
 - Generated speech retention is configured in days and defaults to 30 days from
   generation. Access does not extend retention. Reuse cached speech only while
   its source message and requested voice match.
+- Startup marks stranded speech generation failed and removes incomplete output;
+  it never repeats the uncertain provider request automatically.
 - Do not claim that self-hosting keeps all processing local. Document data sent
   to every external provider.
 - The operator who runs a MIA server is responsible for user eligibility,
@@ -271,6 +330,9 @@ hardening.
   data but preserves user accounts. Keep only a minimal, content-free audit
   record. MIA deletes local live data only; the operator controls provider data
   and backups. MIA has no data-export feature.
+- Destructive operations do not coordinate with running workers or providers.
+  Late commits update existing targets only; zero-row updates discard results,
+  remove newly published output, and never upsert, requeue, or retry.
 - MIA is not an emergency service and does not send automated safeguarding
   alerts. The AI tutor responds supportively and must not imply that anyone was
   notified or is monitoring the conversation. Supervisors provide local
@@ -279,6 +341,8 @@ hardening.
   messages until the session is completed.
 - Tutoring sessions do not expire from inactivity. An authenticated student can
   resume the same active session from any device.
+- Completed tutoring sessions accept no new messages or response retries.
+  Request-ID history exists only while its owning data remains retained.
 - A tutoring session has at most one generating response and one queued message.
   Startup resumes queued work but fails stranded generation rather than risking a
   duplicate provider request.
@@ -391,3 +455,7 @@ Once Go code exists, run the applicable checks after code changes:
 Do not run overlapping Go build, test, vet, or lint commands against the same
 module. If a required tool or module does not exist yet, state that verification
 was not applicable rather than inventing project setup.
+
+## More rules
+
+Read and implement all rules from `.agents/rules/*.md`

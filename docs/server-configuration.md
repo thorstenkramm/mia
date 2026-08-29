@@ -14,7 +14,8 @@ They still reject malformed input and unknown keys, but they do not require
 frontend or provider settings.
 
 See [`mia.example.toml`](../mia.example.toml) for a complete annotated
-configuration file.
+configuration file. Once configuration code exists, an automated check must keep
+its key set mechanically complete with the configuration schema.
 
 ## Configuration Sources
 
@@ -43,10 +44,13 @@ The file may be a symbolic link. Its resolved target must meet all of these requ
 - It is a regular file.
 - It is owned by root or by the effective service user.
 - Its owner can read it.
+- The effective service user can read it after ownership and mode checks.
 - Owner write and group read are permitted.
 - Owner execute, group write or execute, and every permission for others are rejected.
 
-Accepted modes include `0400`, `0440`, `0600`, and `0640`.
+Conditionally accepted modes include `0400`, `0440`, `0600`, and `0640`; the
+ownership and effective group must make the selected mode readable by the
+service user.
 
 ### Override Names
 
@@ -111,6 +115,12 @@ documented internal directories with mode `0700` and files with mode `0600`.
 
 The absolute directory containing the separately installed frontend. It must already exist and be readable by the service
 user. Private data must never be placed beneath this directory.
+MIA serves regular files for GET and HEAD only, rejects symlink escapes, dotfiles,
+and directory listings, and uses `index.html` fallback only for unresolved
+non-API routes. Responses use `nosniff`, restrictive referrer and framing
+policies, and a strict baseline CSP (`default-src 'self'; object-src 'none';
+base-uri 'self'; frame-ancestors 'none'`), loosened during frontend integration
+only when the frontend demonstrably requires it.
 
 #### `main.public_url`
 
@@ -123,6 +133,8 @@ user. Private data must never be placed beneath this directory.
 The externally visible origin used for invitation and password-recovery links, for example `https://mia.example.org`. It
 must use HTTPS and contain no credentials, non-root path, query, or fragment. A trailing root slash is accepted and
 normalized. MIA never derives security-sensitive links from request or forwarded headers.
+Generated links are `<public_url>/invitation#token=<uuid>` and
+`<public_url>/password-reset#token=<uuid>`.
 
 ### `[http]`
 
@@ -258,7 +270,7 @@ jobs.
 ### `[mistral]`
 
 Mistral is required for OCR. Startup performs no live provider check. The
-supported OCR model is fixed by the MIA release and is not configurable.
+supported OCR model is fixed as `mistral-ocr-4-1` and is not configurable.
 
 #### `mistral.api_key`
 
@@ -274,6 +286,12 @@ The Mistral API key used by MIA.
 
 SMTP is required for email. Startup validates settings locally and performs no
 live connection or credential check.
+
+MIA sends English-only plain-text UTF-8 messages with sanitized headers, one
+recipient in `To`, the configured sender, and no HTML part. A definite invitation
+delivery failure creates a faulty invitation. A timeout is logged as ambiguous
+operational success, leaves the invitation pending and usable, and is not retried
+automatically.
 
 #### `smtp.host`
 
@@ -448,6 +466,8 @@ to `max_file_size_mib`.
 - Flag: `--uploads-max-material-pages`
 
 The maximum combined page count of one material. Valid values are 1 through 2000.
+Each PDF page and each JPEG or PNG file counts as one page. DOCX, text, and
+Markdown are non-paged.
 
 #### `uploads.max_material_files`
 

@@ -32,6 +32,8 @@ Every state transition that spans tables must run in one transaction.
 
 MIA uses WAL journal mode with `synchronous=FULL` and a five-second busy timeout.
 These settings and foreign-key enforcement are applied to every connection.
+The pool has four open and four idle connections and no connection-lifetime
+expiry. MIA does not use separate reader and writer pools.
 Embedded forward migrations run before the server or a database-using local
 command performs other work. A dirty or newer schema prevents the command from
 continuing.
@@ -52,6 +54,8 @@ continuing.
 ### Date and time
 
 - Every instant is stored as RFC 3339 UTC with the `Z` suffix.
+- Persisted instants use exactly six fractional digits.
+- API input accepts at most nine fractional digits.
 - `_at` identifies an event instant, `_from` and `_until` identify range
   boundaries, and `_for` identifies a scheduled instant.
 - Local-time schedules store a separate local-time value and IANA time-zone
@@ -77,9 +81,9 @@ continuing.
 - Languages are canonical BCP 47 tags, country codes are uppercase ISO 3166-1
   alpha-2 values, and time zones are `UTC` or names from MIA's embedded IANA
   database.
-- Course names are globally unique using the documented case-insensitive
-  comparison.
-- Material names are unique within a course using the same comparison.
+- Course and material display names are trimmed and NFC-normalized. Their stored
+  unique keys apply Unicode case folding and NFC normalization again. SQLite
+  `NOCASE` is not used.
 
 ### Attribution and deletion
 
@@ -98,14 +102,27 @@ continuing.
   are outside this schema.
 - SQLite and filesystem changes do not commit atomically. A deletion first makes
   a database-referenced file or file tree unreachable in SQLite and then attempts
-  to delete its deterministic filesystem entry synchronously. A rare mismatch is
-  accepted in the first version. Failures are logged, and startup reconciliation
-  removes unreferenced entries and detects missing referenced files.
+  to delete its deterministic filesystem entry synchronously. A rare orphan is
+  accepted in the first version and removed during startup reconciliation.
+- Startup first deletes expired generated-speech rows and files, then marks
+  stranded generation failed and removes incomplete output. It next logs an error
+  and exits when SQLite references a missing source file, processed
+  `content.jsonl`, or unexpired available speech file. It does not repair or
+  downgrade those remaining database states automatically.
+- Managed output is fully written and atomically published before the transaction
+  marks its row processed or available. A failed or stale database commit deletes
+  the newly published file; startup removes a crash-left orphan.
+- A validated source upload is likewise atomically published at its deterministic
+  path before its `material_files` row is inserted and committed. A failed
+  transaction removes the published source; startup removes source files with no
+  row.
 - User avatars are filesystem-only and are not database-referenced managed files.
   Their fixed path is derived from the user ID. Startup reconciliation removes
   avatar files belonging to users that no longer exist.
 - Course logos are filesystem-only and use a fixed path derived from the course
-  ID. Course deletion and startup reconciliation remove their files.
+  ID. Course deletion and startup reconciliation remove their files. Missing
+  avatars and logos are normal because filesystem presence alone represents
+  availability.
 
 ## Identity and access
 
@@ -122,6 +139,7 @@ Columns:
 - `nickname`, nullable, maximum 24 Unicode code points
 - `password_hash`, not null
 - `must_change_password`, boolean, not null, default false
+- `security_generation`, non-negative integer, not null, default 0
 - `year_of_birth`, nullable integer from 1900 through the current UTC year at
   write time
 - `email`, nullable original address
@@ -145,11 +163,21 @@ Columns:
 Invariants:
 
 - A stored `mobile` is verified. Pending values live in a verification challenge.
+- Authenticated staff mobile removal sets `mobile` null and invalidates pending
+  mobile challenges and pending SMS factors in one transaction. It does not
+  change an active factor's `sms_mobile` snapshot.
 - Optional text fields use null, not an empty string, to represent absence.
 - An administrator, supervisor, or mentor role requires a non-null verified
   email.
 - `must_change_password` gates every authenticated feature except password
   replacement and logout.
+- Every session cookie carries the user's security generation. A request with a
+  different generation is rejected and its session cookie is cleared.
+- Setting a student-only account's temporary password or resetting its MFA
+  increments the security generation in the same transaction, invalidating every
+  existing student cookie. Accounts with any staff role use staff recovery.
+- `is_banned` may be true only while the account has the student role and no staff
+  role. Ban, unban, and staff-role assignment enforce this transactionally.
 - Login throttling is not an account ban and is not stored in `users`.
 - Passwords and temporary passwords are never stored or audited in plaintext.
 
@@ -187,11 +215,25 @@ Columns:
 Constraints:
 
 - Primary key: (`user_id`, `role`).
-- Role removal cannot bypass the deletion and assignment rules in the product
-  requirements.
-- Removing an administrator role requires a different administrator and cannot
-  remove the last administrator. The authorizing actor check, last-administrator
-  check, removal, and audit event occur in one transaction.
+- Invitations create a new user and invited role in one transaction. A supervisor
+  invitation also creates the student role. Additional administrator, supervisor,
+  or mentor roles are granted directly only to an existing staff user ID by an
+  actor authorized for that role.
+- Direct role assignment takes effect immediately, requires no affected-user
+  approval, and is idempotent.
+- Administrator and supervisor role assignment requires an administrator. Mentor
+  role assignment requires a supervisor. Granting supervisor also inserts student
+  atomically when absent.
+- Staff-role assignment is rejected while `users.is_banned` is true.
+- Every administrator, supervisor, or mentor role requires the user to have a
+  verified email.
+- Administrator, supervisor, and mentor rows are never deleted independently.
+  Those permanent roles disappear only with whole-account deletion. Course and
+  student relationship rows remain independently removable.
+- Staff deletion runs as one transaction by a different administrator. It rejects
+  the last administrator and a supervisor who is the sole supervisor of any
+  course; otherwise it removes assignments, applies mentor triage, clears
+  historical actor IDs, and deletes the complete account.
 
 ## Course scope and relationships
 
@@ -220,7 +262,10 @@ Columns:
 Invariants:
 
 - A newly created course is inactive.
-- Course creation and initial supervisor assignment occur in one transaction.
+- Course creation requires one or more initial supervisor assignments. Every
+  assignee already holds the supervisor role. The inactive course and all initial
+  assignments are inserted in one transaction; any invalid assignment or failed
+  write rolls back the complete operation.
 - Activation requires at least one assigned supervisor, non-empty learning
   goals, non-empty LLM instructions, a valid language, and at least one approved,
   ready, file-backed course-wide material.
@@ -283,20 +328,24 @@ deletion does not remove them.
 
 ### `course_mentors`
 
-Acceptance of a mentor invitation creates course eligibility but no student
-assignment.
+An assigned supervisor directly assigns an existing registered mentor to a
+course. The assignment requires no mentor acceptance.
 
 Columns:
 
 - `course_id`, course ID, not null
 - `mentor_user_id`, user ID, not null
-- `joined_at`, not null
-- `invitation_id`, accepted invitation ID, nullable
+- `assigned_at`, not null
+- `assigned_by`, nullable supervisor user ID, required when the assignment is
+  created and set null only after actor deletion
 
 Constraints:
 
 - Primary key: (`course_id`, `mentor_user_id`).
 - The user must hold the mentor role.
+- The actor must be a supervisor assigned to the course.
+- An assigned supervisor may remove the assignment. The mentor cannot reject or
+  delete it.
 
 ### `mentor_assignments`
 
@@ -313,11 +362,12 @@ Constraints:
 
 - Primary key: (`course_id`, `student_user_id`, `mentor_user_id`).
 - The student must belong to `course_id`.
-- The mentor must be eligible in `course_mentors` for `course_id`.
+- The mentor must be assigned in `course_mentors` for `course_id`.
 - An assigned supervisor may remove any assignment, including the last.
-- Removing course-level mentor eligibility deletes all of that mentor's student
-  assignments in the course and returns affected open mentoring work to triage in
-  one transaction.
+- The mentor cannot reject or delete the assignment.
+- Removing a course mentor deletes all of that mentor's student assignments in
+  the course and returns affected open mentoring work to triage in one
+  transaction.
 
 ## Invitations and account recovery
 
@@ -341,12 +391,11 @@ Columns:
 
 - `id`, prefix `inv_`, primary key
 - `role`, enum `administrator`, `supervisor`, or `mentor`, not null
-- `course_id`, nullable course ID
 - `email`, intended original address, not null
 - `email_normalized`, intended normalized address, not null
-- `token_hash`, SHA-256 token digest, not null, unique
+- `token_hash`, nullable SHA-256 token digest, unique when present
 - `token_generation`, positive integer, not null, default 1
-- `state`, enum `pending`, `accepted`, or `revoked`, not null
+- `state`, enum `pending`, `accepted`, `revoked`, or `faulty`, not null
 - `created_at`, not null
 - `created_by`, nullable user ID
 - `last_sent_at`, nullable
@@ -354,24 +403,41 @@ Columns:
 - `accepted_by`, nullable user ID
 - `revoked_at`, nullable
 - `revoked_by`, nullable user ID
+- `faulted_at`, nullable
+- `failure_code`, nullable sanitized code
 
 Invariants:
 
-- Administrator and supervisor invitations have no course; mentor invitations
-  require a course.
+- Invitations have no course or student scope.
 - Invitations do not expire.
-- Only pending invitations can be resent, accepted, or revoked.
+- `token_hash` is present only while state is pending. Acceptance, revocation, or
+  definite delivery failure clears it.
+- Only pending invitations can be resent, accepted, or revoked. A definite
+  initial SMTP failure atomically makes an invitation faulty and invalidates its
+  token. A timeout leaves it pending and usable, is logged, and is not retried.
+- Definite resend failure also makes the invitation faulty. Timeout after token
+  rotation leaves the new token pending and usable.
+- Faulty invitations cannot be accepted, resent, or revoked. Authorized deletion
+  physically removes the row and writes a content-free audit event.
+- API DELETE on a pending invitation performs the revocation transaction: it
+  clears the token, records revocation attribution, and writes the revocation
+  audit event. API DELETE on a faulty invitation physically deletes it. Accepted
+  and revoked invitations reject API DELETE without changing state; foreign-key
+  cascades required by account deletion remain unaffected.
 - Resend replaces `token_hash`, increments `token_generation`, and invalidates
   every earlier link in the same transaction.
-- Acceptance is single-use and binds to one new or authenticated existing
-  account.
-- Existing-account acceptance atomically assigns and verifies the intended email
-  when the account has no email or the same normalized email. A different
-  existing email or uniqueness conflict rejects acceptance without consuming the
-  invitation.
-- Mentor acceptance creates course eligibility, not a student assignment.
+- Acceptance is single-use and creates one new account and invited role in one
+  transaction.
+- Invitation creation rejects an intended email already used by a registered
+  account. An email uniqueness conflict at acceptance rejects the request without
+  consuming the invitation.
+- Mentor acceptance creates only the account and permanent mentor role.
 - Any administrator can revoke an administrator or supervisor invitation. Any
-  current course supervisor can revoke a mentor invitation for that course.
+  supervisor may create a mentor invitation; only its creating supervisor or an
+  administrator may resend or revoke it.
+- A mentor invitation requires `created_by` at creation. Actor deletion may later
+  set it to null, after which only an administrator can manage the invitation.
+- Those same actors can delete a corresponding faulty invitation.
 - Tokens follow the shared bearer-token contract above.
 
 ### `password_reset_challenges`
@@ -393,8 +459,12 @@ Columns:
 Invariants:
 
 - A challenge expires 30 minutes after issuance and is single-use.
-- Successful reset consumes the challenge. Stateless browser cookies issued
-  before the reset remain valid until their normal expiry in the MVP.
+- Requests identify an account by complete normalized username. Several
+  unexpired challenges may coexist; creating one does not invalidate earlier
+  rows. Successful reset consumes the used challenge and invalidates every other
+  outstanding challenge. Stateless browser cookies issued before the reset
+  remain valid until their normal expiry in the MVP.
+- Banned accounts cannot create or consume a reset challenge.
 - Public request behavior never reveals whether an account exists. Requests for
   nonexistent accounts create no user-linked row.
 
@@ -418,12 +488,19 @@ Columns:
 
 Invariants:
 
-- The current verified `users.mobile` remains unchanged until consumption.
+- This challenge supports staff self-service. The current verified `users.mobile`
+  remains unchanged until consumption.
 - Expiry is 30 minutes after issuance.
 - Five incorrect submissions invalidate the challenge.
 - A successful challenge atomically moves `pending_mobile` to `users.mobile`.
+  It also deletes any pending SMS factor whose destination snapshot is now stale.
 - A replacement challenge invalidates an earlier pending challenge for the user.
+- Resend sends the same code and preserves expiry and `failed_attempts`.
 - MIA sends no notice to the previous mobile number.
+- An authorized supervisor profile update sets or clears a student's verified
+  mobile directly and invalidates all of that student's pending challenges in the
+  same transaction. It also deletes pending SMS factors and does not change an
+  active factor's `sms_mobile`.
 
 ### `sms_delivery_attempts`
 
@@ -433,20 +510,25 @@ limits and are then removed as operational limiter data.
 Columns:
 
 - `id`, prefix `sms_`, primary key
-- `purpose`, enum `mobile-verification` or `mfa`, not null
+- `purpose`, enum `mobile-verification`, `mfa`, or `mfa-enrollment`, not null
 - `user_id`, user ID at send time, not null, cascade on user deletion
 - `destination_mobile`, E.164 destination at send time, not null
 - `mobile_verification_id`, nullable challenge ID
 - `mfa_challenge_id`, nullable challenge ID
+- `mfa_factor_id`, nullable immutable factor ID snapshot without a foreign key
 - `attempted_at`, not null
 - `outcome`, enum `sent` or `failed`, not null
 - `error_code`, nullable sanitized code
 
 Constraints:
 
-- Exactly one challenge foreign key is present and matches `purpose`.
-- `user_id` and `destination_mobile` match the referenced challenge at creation
-  and remain immutable historical limiter values.
+- Exactly one purpose-appropriate challenge reference or factor ID snapshot is
+  present and matches `purpose`.
+- `user_id` and `destination_mobile` match the referenced challenge or pending
+  SMS factor at creation and remain immutable historical limiter values.
+- At creation, an `mfa-enrollment` row's factor ID identifies the requesting
+  user's pending SMS factor and its immutable enrollment destination. The ID
+  remains as limiter history after factor expiry or deletion.
 - Queries enforce a 60-second cooldown, five sends per hour, and ten sends per
   day for both the challenge owner and destination.
 - Every row counts toward these limits regardless of `outcome`.
@@ -460,6 +542,9 @@ hourly and daily cost limits must survive restart. The limiter implementation
 uses the fixed product limits, holds at most 50,000 keys, removes expired entries
 first, and otherwise evicts the least-recently-used key. Submitted identifiers
 and tokens are length-bounded before becoming limiter keys.
+The MVP has no authenticated tutoring, upload, material-finalization, or speech
+rate-limit keys. An unauthenticated request to a protected route remains subject
+to ordinary source-IP limits and creates no key derived from a hidden resource.
 
 ## MFA
 
@@ -475,6 +560,7 @@ Columns:
 - `type`, enum `totp` or `sms`, not null
 - `status`, enum `pending`, `active`, `replaced`, `disabled`, or `reset`, not null
 - `totp_secret`, nullable plaintext TOTP secret, present only for TOTP
+- `last_used_step`, nullable TOTP time-step number
 - `sms_mobile`, nullable E.164 destination snapshot, present only for SMS
 - `enrollment_sms_code`, nullable plaintext six-digit code, present only for a
   pending SMS factor
@@ -491,12 +577,21 @@ Constraints:
 - A partial unique index permits at most one active factor per user.
 - A partial unique index permits at most one pending factor per user.
 - TOTP requires a 20-byte secret and forbids SMS fields. SMS requires an immutable
-  verified `sms_mobile` snapshot and forbids a TOTP secret.
+  `sms_mobile` snapshot and forbids a TOTP secret. Creating a pending SMS factor
+  requires that snapshot to equal the current verified profile mobile. Profile
+  mobile change or removal deletes pending SMS factors but not an active factor.
+- TOTP verification atomically rejects reuse of `last_used_step` and stores the
+  successfully accepted step.
 - A pending factor expires 30 minutes after creation. Activation clears the
   enrollment SMS code and expiry. Expiry deletes the pending factor without
   changing an active factor.
 - Five failed enrollment verifications delete the pending factor.
-- Activation of a replacement and ending of the old factor occur atomically.
+- Resending a pending SMS factor sends its existing enrollment code and preserves
+  `expires_at` and `failed_attempts`. Every attempt is recorded in
+  `sms_delivery_attempts`.
+- Activation of a replacement, ending the old factor, invalidating its unused
+  recovery codes, consuming the MFA-management proof, and issuing the new factor's
+  codes occur atomically.
 - Disabling or replacing an active factor requires a current-password check and
   fresh current-factor or recovery-code verification.
 - Sensitive factor values are never logged or returned after enrollment setup.
@@ -514,9 +609,26 @@ Columns:
 
 Each activated factor receives ten independently generated 80-bit recovery codes.
 Input normalization removes display hyphens and folds ASCII letters to uppercase
-before hashing. Generating a replacement set invalidates all unused codes from
-the previous set in one transaction. Plaintext codes are never persisted or
-audited.
+before hashing. Replacing the factor invalidates all unused old codes. There is no
+standalone code-set replacement. Plaintext codes are never persisted or audited;
+loss of the one activation response requires complete factor replacement.
+
+### `mfa_management_proofs`
+
+Columns:
+
+- `id`, prefix `mfp_`, primary key
+- `user_id`, user ID, not null, cascade on user deletion
+- `token_hash`, 32-byte SHA-256 digest, not null, unique
+- `action`, fixed value `mfa-management`, not null
+- `created_at`, not null
+- `expires_at`, not null
+- `consumed_at`, nullable
+
+The random opaque plaintext token is returned once and never persisted. A proof
+expires after five minutes and is consumed atomically with one MFA disable or
+replacement. Password, MFA configuration, ban-state, or account-state changes
+delete every outstanding proof and MFA challenge for the user.
 
 ### `mfa_challenges`
 
@@ -536,26 +648,30 @@ Columns:
 
 Invariants:
 
-- SMS challenge expiry is 30 minutes after issuance.
+- Every challenge expires 30 minutes after issuance. Separate login attempts may
+  have concurrent challenges; completion consumes only the challenge used.
 - `factor_id` belongs to `user_id` and is that user's active factor when the
   challenge is created.
-- Login challenge verification also requires a signed and encrypted cookie in
-  the `mfa` stage bound to the same user and challenge ID. The challenge ID alone
-  grants no authority.
+- Login challenge verification, recovery-code consumption, and SMS resend also
+  require a signed and encrypted cookie in the `mfa` stage bound to the same user
+  and challenge ID. The challenge ID alone grants no authority.
 - TOTP secrets and active SMS codes rely on SQLite and data-directory access
   controls rather than application-layer encryption or keyed transformation.
 - Five incorrect TOTP or SMS submissions invalidate the challenge.
 - SMS resend limits use `sms_delivery_attempts`.
+- SMS resend preserves the challenge code, expiry, and failure count.
 - TOTP values are verified against the active factor and are never stored.
 - A recovery code can consume a challenge and itself in one transaction.
 
 MFA reset ends active and pending factors, invalidates recovery codes and
 challenges, sets `must_change_password`, and writes a safe audit event in one
-transaction. The password gate restricts existing stateless cookies.
+transaction. A student-only MFA reset also increments `security_generation` in
+that transaction. The next student login uses the current generation and enters
+the password-change stage.
 
 Authorization invariants:
 
-- A student MFA reset requires a supervisor who shares an assigned course.
+- A student-only MFA reset requires a supervisor who shares an assigned course.
 - Staff MFA reset requires a different administrator; self-reset is forbidden.
 - Local operator recovery is available only when exactly one administrator
   exists and is never exposed through a public route. The exact-one check, MFA
@@ -605,36 +721,66 @@ Constraints:
 - Student-private material requires at least one source file before finalization.
 - Student-private material can never be approved.
 - Approval requires course-wide scope, `state = ready`, a non-empty brief, and an
-  assigned approving supervisor. Approval records the review; there is no
-  separate reviewed flag.
+  approving supervisor assigned at action time. Approval records the review;
+  there is no separate reviewed flag. Later assignment removal leaves historical
+  attribution intact, and actor deletion may set `approved_by` null.
 - Revocation sets `is_approved` false and clears approval attribution in one
   transaction.
+- Changing the validated brief content of approved course-wide material stores
+  the correction and atomically sets `is_approved` false and clears `approved_at`
+  and `approved_by`. The transaction writes content-free brief-correction and
+  approval-revocation audit effects. A semantically identical validated brief is
+  a no-op and does not revoke approval.
 - All files in one material have the same detected format, equal to `file_type`.
 - Link-only material may have no file type. A separately uploaded supported file
   supplies AI-readable content.
-- External URLs use HTTPS. YouTube material uses a recognized YouTube host.
+- External URLs are ASCII HTTPS values of at most 2,048 bytes, contain no user
+  credentials, and preserve path, query, fragment, and normal explicit port while
+  lowercasing the host. YouTube hosts are `youtube.com`, `www.youtube.com`,
+  `m.youtube.com`, and `youtu.be`. URLs are not unique or canonicalized for
+  uniqueness.
 - External URLs are metadata only and are never fetched by the server.
-- Finalization of file-backed material requires at least one uploaded file and
-  atomically changes `draft` to `processing`, freezes the file set, and queues
-  extraction. Duplicate finalization does not queue duplicate work.
-- Every file and brief must succeed before `processing` becomes `ready`; any
-  required failure makes the material `failed`.
+- File-backed finalization accepts only `draft` or authorized retryable `failed`
+  material and requires at least one uploaded file. In one transaction it
+  validates and freezes the complete file set, changes every file and the
+  material to `processing`, and inserts exactly one queued extraction job per
+  file. Any failure rolls back every state change and insertion.
+- A partial unique index on active material-extraction jobs per file prevents
+  duplicate queued or running work. A later retry may create fresh jobs only
+  after earlier jobs are terminal.
+- Successful material-summary completion validates and stores the brief, verifies
+  every file is processed, marks the summary job succeeded, and changes the
+  material from `processing` to `ready` in one transaction.
+- Any terminal extraction or material-summary failure marks the job and material
+  `failed` and cancels all remaining material-owned jobs in one transaction.
 - Adding or removing files is allowed only in `draft` or `failed`. The first file
   mutation in `failed` returns the material to `draft`. A `ready` material cannot
   be reopened.
 - Finalizing a failed material again creates fresh extraction jobs and returns it
   to `processing`, whether or not its file set changed.
 - Course-wide link-only website and YouTube material becomes `ready` only with a
-  non-empty supervisor-authored brief. Even when approved, it does not satisfy
-  course activation or new-session material readiness.
+  valid URL, no source files, and a non-empty supervisor-authored brief.
+  Finalization validates those requirements and changes `draft` to `ready` in one
+  transaction without creating extraction or summary jobs. Even when approved,
+  it does not satisfy course activation or new-session material readiness.
 - MIA derives a source file's safe download media type from `file_type`; detected
   upload values are validation inputs and are not persisted separately.
 - Brief fields are either all absent, or `brief_json`, `brief_source`, and
-  `brief_updated_at` are present. `brief_source = supervisor` requires
-  `brief_updated_by` to be an assigned supervisor. Generated briefs have no
-  `brief_updated_by`.
+  `brief_updated_at` are present. A supervisor-authored update requires an
+  assigned supervisor at action time and initially records `brief_updated_by`.
+  Later assignment removal leaves it intact; actor deletion may set it null.
+  Generated briefs have no `brief_updated_by`.
 - A generated job may populate an absent brief. It cannot overwrite a
   supervisor-edited brief without an explicit authorized supervisor action.
+- `brief_json` is a strict version-1 object requiring `version`, `summary`,
+  `subjects`, `learning_goals`, `sections`, and `warnings`, with nullable
+  `educational_level`. Each section requires `sequence`, nullable `label`,
+  `title`, `description`, and `search_terms`. Unknown fields are rejected and the
+  encoded object is limited to 256 KiB.
+- Material deletion cascades all material-owned jobs and is rejected only while
+  the material is selected by an active tutoring session. It does not wait for a
+  running worker or provider call. Tutoring-session-summary jobs are session-owned
+  and omit deleted material identity when retrieval pointers no longer exist.
 
 ### `material_files`
 
@@ -648,7 +794,7 @@ Columns:
 
 - `id`, prefix `mf_`, primary key
 - `material_id`, material ID, not null, cascade on material deletion
-- `original_file_name`, bounded display name, not null
+- `original_file_name`, validated display basename, not null
 - `size_bytes`, positive integer, not null
 - `page_count`, non-negative integer, nullable for non-paged formats
 - `state`, enum `uploaded`, `processing`, `processed`, or `faulty`, not null
@@ -658,28 +804,48 @@ Columns:
 
 Constraints:
 
-- Before creating a source file row or retaining its file, MIA validates the
-  signature and detected media type and requires the detected format to equal the
-  parent material's `file_type`.
+- MIA validates a source upload into a temporary file, including signature and
+  detected media type, and requires the format to equal the parent material's
+  `file_type`. It atomically renames the validated file to its deterministic path
+  before inserting and committing the source row. A failed transaction removes
+  the published file; startup removes source files with no row.
+- Multi-file material uses ascending (`created_at`, `id`) as its canonical file
+  order. Segments within a file use their positive sequence.
 - File and combined-material sizes and page counts respect configured defaults
   and fixed hard caps before external processing.
+- Each PDF page and JPEG or PNG file counts as one page. DOCX, text, and Markdown
+  are non-paged.
 - A material respects the configured file-count limit, which cannot exceed 200.
 - JPEG and PNG dimensions and decoded pixels respect the configured megapixel
   limit and fixed 100-megapixel and 20,000-pixel-per-dimension hard caps.
 - DOCX validation rejects more than 10,000 archive entries, more than 512 MiB of
   total expanded data, an entry larger than 100 MiB, or an entry expansion ratio
   above 100:1.
+- DOCX parsing disables entities and external relationships; extracts the main
+  document, tables, headers, footers, footnotes, endnotes, and inserted tracked
+  changes; and ignores comments, deletions, hidden text, macros, embedded
+  objects, and active content.
+- Bounded PDF parsing rejects encryption, malformed cross-references, embedded
+  files, JavaScript, launch actions, and excessive pages before OCR.
+- Original filenames are valid NFC UTF-8 basenames of at most 255 code points and
+  1 KiB after path removal and whitespace trimming. NUL, controls, bidi controls,
+  `/`, `\`, and empty basenames are rejected. The value is never a path.
 - Encrypted, password-protected, macro-enabled, signature-mismatched, and
   unsupported uploads are rejected without a durable source file or
   `material_files` row.
-- `state = processed` requires normalized extracted content at the deterministic
-  path for the source file. Missing content discovered during reconciliation
-  returns the file to processing or marks it faulty.
+- `state = processed` requires `content.jsonl` at the deterministic path. Each
+  line is a strict object with `version: 1`, positive contiguous `sequence`,
+  nullable `chapter_label`, nullable `section_label`, and `text`. Unknown fields
+  are rejected. Total decoded segment text and encoded JSONL are each limited to
+  512 MiB per material. Missing content at startup is fatal.
 - If any file is faulty, the whole material is treated as faulty and cannot be
   approved or used until the file is removed or replaced.
-- A transition to faulty atomically revokes existing approval. Every activation,
-  course-availability, session-start, and retrieval check requires material to
-  be approved, ready, and file-backed.
+- A transition to faulty atomically revokes existing approval.
+- Retrievable source content must belong to the tutoring session's course and be
+  ready and file-backed. Course-wide content additionally requires approval;
+  student-private content instead requires ownership by the active student.
+  Link-only identity and brief metadata may be visible when authorized, but it
+  has no retrievable source content.
 
 ## Tutoring
 
@@ -703,8 +869,13 @@ Columns:
 Constraints:
 
 - The student must belong to the course.
-- Unique: (`student_user_id`, `client_request_id`). Replay compares the course and
-  immutable selected-material set and conflicts on a different payload.
+- Unique: (`student_user_id`, `client_request_id`). While the session is active,
+  replay compares the course and immutable selected-material set, returns the
+  existing session for the same payload, and conflicts on a different payload.
+  After completion, every reuse of the request ID conflicts.
+- The uniqueness guarantee lasts only while the session row is retained.
+  Authorized cascading deletion removes the request-ID history without creating
+  a tombstone.
 - A partial unique index on `student_user_id` where `completed_at IS NULL`
   enforces one active tutoring session across all courses and devices.
 - `completed_at IS NULL` means active. A non-null `completed_at` means completed
@@ -712,10 +883,14 @@ Constraints:
   `completed_by`.
 - Summary fields are either all absent, or `summary`, `follow_up`,
   `summary_source`, and `summary_updated_at` are present. A supervisor-sourced
-  summary requires `summary_updated_by` to be an assigned supervisor. Generated
-  summaries have no `summary_updated_by`.
+  update requires an assigned supervisor at action time and initially records
+  `summary_updated_by`. Later assignment removal leaves it intact; actor deletion
+  may set it null. Generated summaries have no `summary_updated_by`.
 - A generated job may populate an absent summary. It cannot overwrite a
   supervisor-corrected summary without an explicit authorized supervisor action.
+- Only an assigned supervisor may correct `summary` and `follow_up`, and only on a
+  completed session. The transaction sets supervisor source and attribution and
+  writes exactly one content-free correction audit event.
 - Sessions do not expire and cannot be abandoned.
 - Only the owning student can transition the session to completed.
 - Completion requires no queued or generating tutor response.
@@ -738,7 +913,12 @@ Constraints:
 - Unique: (`tutoring_session_id`, `client_request_id`).
 - Unique: (`tutoring_session_id`, `sequence`).
 - Reuse of a request ID compares the submitted content with the stored immutable
-  content. A different value is a conflict.
+  content. The same value returns the existing message and response without
+  mutation even after session completion; a different value is a conflict.
+- Documented account, course, or membership cascades may delete the owning
+  session and this request-ID history; MIA persists no tombstone.
+- Creation after no existing request-ID match requires an active tutoring session
+  and checks that state in the message-and-response creation transaction.
 - Message content is immutable.
 
 ### `tutor_responses`
@@ -767,17 +947,25 @@ Constraints:
 - In one tutoring session, at most one response is generating and at most one is
   queued. Message creation, sequence allocation, response creation, and these
   checks occur in one transaction.
-- Retry rows link to a terminal failed response for the same message.
+- Retry rows link to a terminal failed or interrupted response for the same
+  message.
 - A retry can be created only when the session has no queued or generating work;
-  it starts in queued state.
+  it also requires the session to remain active and starts in queued state.
 - Queued responses have no start time, provider, or model. Claiming one records
   those values and changes it to generating before the provider request starts.
-- Streaming updates content while state is `generating`. Terminal content and
+- Streaming persists content after 16 KiB of new UTF-8 output or one second,
+  whichever occurs first, and before terminal state commit. Terminal content and
   state are immutable.
+- If a bounded persistence update affects zero rows, the operation marks its
+  synchronized in-memory response stale, closes subscriber queues, and discards
+  every later provider event. It does not recreate deleted state or cancel the
+  provider request solely because of deletion.
 - Client disconnect does not change response state or create another response.
 - Student cancellation transitions generating to interrupted and cancels the
   provider operation. Canceling queued work makes no provider request and
   preserves its student message.
+- Cancellation failure does not change the interrupted state. Late provider
+  events are discarded and only a sanitized failure is logged.
 - A terminal transition starts the sole queued response, if any. Preserved
   partial content from the earlier response is eligible conversation context.
 - Startup changes stranded generating responses to failed with a sanitized
@@ -803,10 +991,13 @@ Invariants:
 - Selection rows are inserted only in the transaction that creates the session
   and are immutable afterward.
 - The material belongs to the session's course.
-- Course-wide material is approved at selection time.
-- Student-private material is owned by the session student.
-- Deleting material cascades the selection pointer without deleting the session
-  or chat.
+- Selected source material is ready and file-backed. Course-wide material is
+  approved at selection time; student-private material is owned by the session
+  student and requires no approval. Authorized link-only identity and brief
+  context has no retrievable source content.
+- Material deletion is rejected while its selection belongs to an active
+  session. After completion, deleting material cascades the selection pointer
+  without deleting the session or chat.
 
 ### `material_retrievals`
 
@@ -818,7 +1009,7 @@ Columns:
 
 - `id`, prefix `ret_`, primary key
 - `tutoring_session_id`, session ID, not null, cascade on session deletion
-- `tutor_response_id`, nullable response ID, cascade on response deletion
+- `tutor_response_id`, response ID, not null, cascade on response deletion
 - `material_id`, material ID, not null, cascade on material deletion
 - `chapter_label`, nullable
 - `section_label`, nullable
@@ -827,12 +1018,17 @@ Columns:
 Invariants:
 
 - At retrieval time, material belongs to the tutoring session's course and is
-  either approved course-wide material or private material owned by the session
-  student. Course activity is required when starting a session, not while an
-  existing session continues after deactivation.
+  ready and file-backed. Course-wide material is approved; private material is
+  owned by the session student and requires no approval. Course activity is
+  required when starting a session, not while an existing session continues
+  after deactivation.
+- A row is created only when complete small content or an authorized excerpt is
+  returned to the tutor model. Search candidates do not create retrieval rows.
 - OCR page positions are never stored or presented as printed page numbers.
-- A non-null `tutor_response_id` must resolve through its student message to the
-  same `tutoring_session_id`.
+- `tutor_response_id` resolves through its student message to the same
+  `tutoring_session_id`.
+- (`tutor_response_id`, `material_id`) is unique. One material-use row is stored
+  per response and material, not per excerpt.
 
 ### `generated_speech`
 
@@ -851,9 +1047,15 @@ Constraints:
 
 - Reuse requires matching response content hash and requested voice.
 - Speech generation requires a completed tutor response.
+- `voice_id` contains at most 128 printable ASCII characters. Missing selection
+  is a stable validation failure; there is no provider voice discovery.
 - Unique cache identity: (`tutor_response_id`, `source_content_hash`, `voice_id`).
 - The MP3 path is derived as `tts-cache/<speech-id>.mp3`; no second storage key is
   persisted.
+- MP3 is limited to 25 MiB, signature-validated after a complete bounded read,
+  written through a mode-`0600` temporary file, and published by atomic rename.
+  Failure retains no partial file. An unexpired available row with no file is
+  fatal at startup.
 - Concurrent POST requests return the same cache row. An authorized retry changes
   that row from failed to generating instead of creating another row.
 - `expires_at` is the configured number of days after generation, default 30.
@@ -861,6 +1063,14 @@ Constraints:
 - Expiry or mismatch makes the row unavailable. Cleanup removes the row and
   synchronously deletes the generated file. A deletion failure is logged;
   startup reconciliation removes an unreferenced file left behind.
+- Startup first removes expired speech rows and files. It then changes every
+  remaining `generating` row to `failed` with a
+  sanitized restart code and removes any associated partial or published MP3. A
+  later authorized request retries the same row through the ordinary
+  failed-to-generating transition; startup never repeats the uncertain provider
+  request.
+- After cleanup and stranded-generation recovery, startup checks that every
+  remaining available row has its file.
 
 ## Mentoring
 
@@ -876,12 +1086,10 @@ Columns:
 - `student_user_id`, student user ID, not null
 - `course_id`, course ID, not null
 - `mentor_user_id`, nullable current mentor user ID
-- `mentor_fingerprint`, nullable de-identified historical mentor reference
 - `topic`, not null
 - `response`, nullable
 - `responded_at`, nullable
 - `responded_by`, nullable mentor user ID
-- `responded_by_fingerprint`, nullable de-identified actor reference
 - `proposed_for`, nullable student-proposed UTC instant
 - `scheduled_for`, nullable
 - `meeting_instructions`, nullable
@@ -903,20 +1111,25 @@ Constraints:
   current mentor assignments. Mentor response and scheduling require that
   selection. A student may set `proposed_for` at creation; only the assigned
   mentor confirms or changes `scheduled_for`.
+- An assigned supervisor may directly replace `mentor_user_id` on an open row
+  with another assigned mentor. The update preserves proposed and scheduled
+  times, meeting details, response, and immutable response authorship.
 - The student or assigned mentor may reschedule a future scheduled row.
-- `response`, `responded_at`, and `responded_by` are either all absent or all
-  present. At response creation, the mentor must be the current mentor and hold
-  the student-course assignment. Response content and original authorship remain
-  immutable after later triage.
-- `closed_at`, `closed_by`, and `closure_reason` are either all absent or all
-  present. The student or an assigned supervisor may cancel an unscheduled
+- `response` and `responded_at` are either both absent or both present. At response
+  creation, `responded_by` is the current mentor and holds the student-course
+  assignment. Actor deletion may later set `responded_by` null without changing
+  the immutable response.
+- `closed_at` and `closure_reason` are either both absent or both present. At
+  closure, `closed_by` identifies the authorized actor. Actor deletion may later
+  set it null. The student or an assigned supervisor may cancel an unscheduled
   request. The student or assigned mentor may cancel a future schedule. Only the
   assigned mentor may mark completion after `scheduled_for`.
 - Removing the current mentor from the student or course clears
   `mentor_user_id`, `proposed_for`, `scheduled_for`, meeting details, and schedule
-  attribution on every open row. Topic and immutable response authorship remain
-  for supervisor triage. Closed rows retain a de-identified historical mentor
-  reference.
+  data on every open row. Topic, response, and any still-present response actor
+  remain for supervisor triage. Closed rows remain without requiring retained
+  mentor identity.
+- The clearing rule applies only to removal, not direct reassignment.
 - Course deactivation blocks creation but does not block changes to existing
   rows.
 - Rescheduling overwrites `scheduled_for`; the required audit event records the
@@ -965,27 +1178,48 @@ Constraints:
   counter enforces the three-attempt bound and survives restart.
 - Result commits require matching running state and lease token. An expired or
   cancelled attempt cannot commit output.
+- Destructive operations do not coordinate with a running worker or provider
+  call. Late commits update an existing target only. A zero-row guarded update
+  discards the result, removes output newly published by that attempt, and never
+  upserts, requeues, or retries the provider request.
 - Transient failures retry after one and five minutes. A valid provider
   `Retry-After` may extend a delay up to one hour. Permanent failures do not
   retry.
 - Startup requeues an expired running lease if attempts remain and otherwise
-  marks it failed. Stable job-derived provider idempotency keys are used where
-  supported.
+  performs the job subject's terminal-failure transition. Every new attempt uses
+  current server configuration and processing code. Jobs persist no provider,
+  model, processing-version snapshot, or provider idempotency key.
 - Graceful shutdown stops claims, allows 30 seconds for the running job, and then
   cancels and requeues it if attempts remain. The interrupted attempt stays
-  counted.
+  counted. Without an attempt remaining, it performs the job subject's terminal
+  failure transition.
 - A partial unique index prevents more than one queued or running job for one
   type and subject.
 - Finalization creates one extraction job per file. The last extraction success
-  creates one material-summary job transactionally. A permanent extraction
-  failure marks the material failed and cancels sibling jobs.
+  creates one material-summary job transactionally. Successful material-summary
+  completion marks the job succeeded and material ready in one transaction.
+  Every terminal extraction or material-summary failure marks the job and
+  material failed and cancels remaining material-owned jobs transactionally.
+- Each OCR attempt processes its source using current processing code. Retries
+  need not reproduce earlier request boundaries or provider payloads. Material
+  summarization reads completed files by ascending (`created_at`, `id`) and then
+  segment sequence.
 - Session completion creates one tutoring-session-summary job in the same
   transaction. An assigned supervisor may create another only while the summary
-  is absent and no summary job is queued or running.
+  is absent, the session is completed, no summary job is queued or running, and
+  an earlier summary job is terminally failed.
 - `input_units` and `output_units` accumulate available usage reported across all
-  attempts. MIA does not persist per-attempt provider request IDs or diagnostics.
+  attempts. They are unattributed, model-agnostic operational counters and may
+  span configuration changes. MIA does not persist per-attempt provider request
+  IDs or diagnostics.
 - `failure_code` contains only the latest sanitized failure. Detailed attempt
   diagnostics belong in redacted operational logs.
+- Material and session summaries use canonical 24,000-token chunks, at most 64
+  chunks, at most two reduction rounds, and 2,048 output tokens per call. MIA
+  checks complete coverage before the first provider call and uses
+  `summary_input_too_large` when it cannot fit. Intermediate summaries are never
+  persisted; retries restart from the beginning with current configuration while
+  cumulative usage remains.
 
 ## Audit
 
@@ -1041,16 +1275,23 @@ Invariants:
   mapping to the original ID survives.
 - Application code constructs each event type from an allowlisted metadata
   schema; arbitrary JSON is rejected.
+- Event types use stable dotted names. Each vertical slice adds only its required
+  event names and bounded typed metadata schemas.
+- Ordinary denied reads, including private-material and audit-log probes, do not
+  create audit rows. Authentication failures, throttling, denied mutations,
+  security changes, destructive actions, and provider or job failures do.
 
 Required event families:
 
 - authentication login, logout, failure, and throttling;
 - account creation, profile change, ban, unban, password recovery, password
-  replacement, MFA enrollment, MFA replacement, MFA reset, and account deletion;
+  replacement, role assignment, MFA enrollment, MFA replacement, MFA reset, and
+  account deletion;
 - invitation creation, delivery, token rotation, acceptance, and revocation;
+- invitation faulting and faulty-invitation deletion;
 - course creation, supervisor assignment, activation, deactivation, membership
-  change, mentor eligibility, mentor assignment, mentor reassignment, and course
-  deletion;
+  change, course mentor assignment, student mentor assignment, mentor
+  reassignment, and course deletion;
 - material creation, upload, processing failure, brief correction, approval,
   revocation, and deletion;
 - tutoring session start, completion, summary correction, and failed provider
@@ -1069,22 +1310,23 @@ behavior.
 - User-owned security data cascades with the user: roles, password-reset
   challenges, mobile challenges, SMS history, MFA factors, recovery codes, and
   MFA challenges.
-- Course supervisor, student, and mentor eligibility rows cascade with the course
-  or referenced user.
-- Mentor assignments cascade with the student or course. Deleting a mentor user
-  first performs the same open-work triage as mentor removal.
-- Deleting a multi-role account first performs required mentor triage.
-  Course-wide resources created by that user remain with nullable attribution;
-  completed mentoring history keeps only a de-identified mentor fingerprint.
-- Invitations scoped to a deleted course cascade. Deleting an accepting or
-  intended account removes invitations containing that person's email; inviter
-  attribution alone uses `SET NULL`.
+- Course supervisor, student, and course mentor assignment rows cascade with the
+  course or referenced user. Staff deletion first rejects a sole course
+  supervisor and otherwise removes current assignments.
+- Mentor assignments cascade with the student or course. Deleting staff performs
+  the same open-work triage as mentor removal in the deletion transaction.
+- Course-wide resources created by deleted staff remain with nullable
+  attribution. Retained domain history clears deleted actor IDs and stores no
+  separate actor fingerprint; audit records follow their own fingerprint rules.
+- Deleting an accepting or intended account removes invitations containing that
+  person's email; inviter attribution alone uses `SET NULL`. API DELETE rejection
+  for accepted or revoked invitations does not block these required cascades.
 - Materials cascade with their course. Student-private materials also cascade
   with their owner. Course-wide material survives creator deletion with
   `created_by` set null.
 - Material files, selections, and retrieval pointers cascade with their owning
-  material according to the private-material deletion contract. Brief data is
-  deleted with the `materials` row.
+  material according to the material-deletion contract. Brief data is deleted
+  with the `materials` row.
 - Tutoring sessions cascade with the owning student or course. Messages,
   responses, selections, retrievals, generated speech, and session-summary jobs
   cascade with the session. Summary and follow-up data are deleted with the
@@ -1092,8 +1334,8 @@ behavior.
 - Mentoring sessions cascade with the student or course. Open rows are reassigned
   before mentor deletion; closed historical references are de-identified.
 - Jobs cascade with their subject.
-- Historical attribution fields use `SET NULL` and a de-identified fingerprint
-  where the product requires retained authorship.
+- Historical domain attribution fields use `SET NULL`. De-identified fingerprints
+  are retained only where the audit contract requires them.
 - Audit events follow their dedicated deletion and de-identification rules, not
   general cascading behavior.
 
@@ -1105,18 +1347,23 @@ Migrations add `CHECK` constraints for state and timestamp combinations:
   and `activated_by`. An active course requires `activated_at` but permits
   `activated_by` to become null after actor deletion. Deactivation changes
   `is_active` and records attribution atomically.
-- Pending invitations have no accepted or revoked attribution; accepted and
-  revoked states require their matching terminal fields and forbid the other.
+- Pending invitations require a token and have no terminal attribution. Accepted,
+  revoked, and faulty states clear the token, require their matching terminal
+  fields, and forbid fields belonging to another terminal state. A pending SMTP
+  timeout is operational log data, not invitation failure metadata.
 - Pending MFA factors are unverified and inactive; active factors are verified
   and activated; ended factors require `ended_at`.
 - A tutoring session is active when `completed_at` is null. A completed session
   requires `completed_at` and the owning student as `completed_by`.
 - Generating tutor responses have no `finished_at`; terminal states require it.
   Only failed responses have a failure code.
-- Available speech requires generation and expiry times.
+- Available speech requires generation and expiry times. Generating speech has no
+  generation, expiry, or failure fields. Failed speech requires a sanitized
+  failure code and has no generation or expiry time.
 - Open mentoring sessions have no closure fields. Closed sessions require
-  `closed_at`, `closed_by`, and `closure_reason`. Response fields are either all
-  absent or all present.
+  `closed_at` and `closure_reason`; `closed_by` may become null after actor
+  deletion. Response content and time are either both absent or both present;
+  `responded_by` may become null after actor deletion.
 - Running jobs require a lease and start time. Terminal jobs require completion
   time and no live lease. Failed jobs require a sanitized failure code.
 
@@ -1143,20 +1390,31 @@ not part of these transactions:
 
 - first-administrator bootstrap, including the no-administrator check, user and
   role creation, and audit event;
-- username and email assignment;
-- course creation with initial supervisor assignment, activation, and deletion;
+- username, email, and permanent-role assignment;
+- course creation with one or more initial supervisor assignments, activation,
+  and deletion;
 - course supervisor removal and student membership removal;
-- course mentor removal and open-work triage;
+- course and student mentor assignment, and course mentor removal with open-work
+  triage;
 - creation and completion of the one active tutoring session;
 - tutoring-session completion and summary-job creation;
-- invitation resend, acceptance, and revocation;
-- password and MFA replacement and account-state changes;
-- mobile-number verification and SMS-limit accounting;
-- MFA replacement, recovery-code use, and reset;
-- material approval, revocation, and private-material deletion;
+- completed-session summary correction and its audit event;
+- invitation resend, acceptance, revocation, faulting, and faulty deletion;
+- student temporary-password recovery, password and MFA replacement, MFA reset,
+  and account-state changes;
+- mobile-number verification or removal and SMS-limit accounting;
+- MFA replacement and recovery-code use;
+- material finalization with all file transitions and extraction-job insertion;
+- material brief correction with approval revocation, approval, and explicit
+  revocation;
+- material deletion with its active-session selection check;
 - idempotent student-message creation, attempt allocation, and response retry;
 - tutor-response claim, terminal transition, and queued-response handoff;
 - mentoring cancellation and rescheduling;
-- job claim, retry, completion, and lease recovery;
+- direct mentoring reassignment, replacement-mentor validation, and audit event;
+- job claim, retry, completion, lease recovery, and material subject transition;
 - student and course cascading deletion with mentor triage and audit
-  de-identification.
+  de-identification;
+- staff deletion with checks for a different administrator, the last
+  administrator, and sole course supervisors, plus assignment cleanup, mentor
+  triage, historical attribution clearing, and account deletion.

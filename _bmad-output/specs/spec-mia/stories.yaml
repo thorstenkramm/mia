@@ -1,0 +1,99 @@
+- id: "1"
+  title: Kernel foundation and serve skeleton
+  description: >-
+    Build the shared kernel per the spine's structural seed: cmd/mia subcommand
+    wiring, config, lock, sqlite with embedded migrations, identity validation,
+    the httpserver kernel (CSRF, rate limiting, client-IP trust, static serving,
+    JSON:API error mapping), and structured logging. mia serve starts, holds the
+    data-dir lock, migrates, and serves static content — no feature routes yet.
+  done_checkpoint: true
+- id: "2"
+  title: First auth slice with user package and bootstrap-admin
+  description: >-
+    Deliver user and auth together (AD-13): account and role storage, the
+    bootstrap-admin command, password login with staged stateless sessions,
+    logout, and the forced password-change gate; the audit kernel arrives with
+    this first audited slice. Covers CAP-1 and CAP-5 plus the bootstrap part of
+    CAP-2 and the password policy of CAP-4.
+  done_checkpoint: true
+- id: "3"
+  title: Staff password recovery over SMTP
+  description: >-
+    Add the SMTP adapter and staff self-service recovery: reset challenges with
+    30-minute single-use links, existence-hiding responses, and plain-text
+    recovery email handling per CAP-4.
+  done_checkpoint: true
+- id: "4"
+  title: Multi-factor authentication
+  description: >-
+    Implement CAP-6: TOTP and SMS factors with the ClickSend adapter, login
+    challenges, recovery codes, single-use mfa-management proofs, supervisor and
+    administrator MFA resets, and the reset-admin-mfa command.
+  done_checkpoint: true
+- id: "5"
+  title: Invitations and direct role grants
+  description: >-
+    Complete CAP-2: invitation creation, preview, acceptance, revocation, faulty
+    handling and resend with token rotation, plus idempotent direct role grants
+    to registered staff.
+  done_checkpoint: true
+- id: "6"
+  title: Profiles, avatars, and mobile verification
+  description: >-
+    Implement CAP-7: staff self-service profile editing, the bounded
+    JPEG/PNG-to-normalized-PNG avatar and logo pipeline, and SMS-confirmed staff
+    mobile changes.
+  done_checkpoint: true
+- id: "7"
+  title: Course lifecycle
+  description: >-
+    Implement CAP-8's course package: administrator course creation with
+    supervisor assignment, activation gating, deactivation, course deletion, and
+    the lifecycle deletion registry (AD-14). Activation succeeds only once
+    story 9 delivers approved material; the gating logic ships here.
+  done_checkpoint: true
+- id: "8"
+  title: Student provisioning, membership, and bans
+  description: >-
+    Implement CAP-3 and CAP-13 plus FR-19: supervisor provisioning with
+    temporary passwords, add-by-username and removal with course-scoped data
+    deletion, cookie invalidation via security generation, and ban/unban of
+    student-only accounts.
+  done_checkpoint: true
+- id: "9"
+  title: Learning material and processing pipeline
+  description: >-
+    Implement CAP-9 and CAP-16: the material package with bounded uploads and
+    validation, the jobs-table worker, Mistral OCR and local parsers producing
+    content.jsonl, grounded briefs with supervisor correction and approval,
+    authorized downloads, link-only material, and the jobs oversight API.
+  done_checkpoint: true
+- id: "10"
+  title: Tutoring sessions and streaming tutor
+  description: >-
+    Implement CAP-10: session lifecycle with the one-active-session rule, the
+    in-memory tutor-response manager with SSE streaming and budgeted authorized
+    retrieval, request-ID idempotency, completion summaries, and supervisor
+    review with attributed summary correction.
+  done_checkpoint: true
+- id: "11"
+  title: Mentoring
+  description: >-
+    Implement CAP-11: mentor course and student assignment, last-resource
+    request creation, supervisor triage, mentor response and scheduling,
+    cancellation, completion, and mentor removal returning open work to triage.
+  done_checkpoint: true
+- id: "12"
+  title: Text-to-speech
+  description: >-
+    Implement CAP-12: the ElevenLabs adapter and the speech cache lifecycle with
+    shared generation, retention-based expiry, and explicit-retry-only failures.
+  done_checkpoint: true
+- id: "13"
+  title: Account deletion and audit log API
+  description: >-
+    Implement CAP-14 and the CAP-15 API: student and staff account deletion with
+    last-administrator and sole-supervisor safeguards, cascades through the
+    lifecycle registry, de-identified audit fingerprints, and the administrator
+    audit-log endpoint.
+  done_checkpoint: true

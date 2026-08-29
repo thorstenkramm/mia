@@ -16,9 +16,12 @@ creates internal directories with mode `0700` and files with mode `0600`.
 Anyone who can bypass these permissions, including a root backup process, can
 read all live MIA data and must be treated as fully trusted.
 
-MIA creates default AI tutor instruction files but never overwrites existing
-ones. Operators may edit these files. MIA reads them only at startup, so changes
-require a restart.
+Short default tutor, material-brief, and session-summary instructions are
+embedded in the executable. At startup MIA creates each missing instruction file
+independently and never overwrites an existing file. Operators may edit these
+files; changes require a restart. There is no runtime prompt version, migration,
+or automatic replacement mechanism. Git and release history track revisions to
+the embedded defaults.
 
 ## Directory Structure
 
@@ -45,7 +48,7 @@ require a restart.
 │       └── files/
 │           └── <file-id>/
 │               ├── file
-│               └── content.txt
+│               └── content.jsonl
 ├── users/
 │   └── <user-id>
 │       └── avatar.png
@@ -74,15 +77,27 @@ text-to-speech is available.
 
 Each `<speech-id>.mp3` path is derived directly from its generated-speech row ID.
 MIA stores and serves only MP3 (`audio/mpeg`) and keeps no separate storage key.
+One file is limited to 25 MiB, signature-validated, written through a mode-`0600`
+temporary file, and published by atomic rename.
 
 Cached speech can be reused only while its completed tutor-response content hash
 and requested voice match.
 
 Each material-file directory is one managed filesystem unit. `file` is the
-validated source upload and `content.txt` is its normalized extracted content.
-MIA writes generated content atomically and does not retain raw OCR responses,
-separate content outlines, or retrieval indexes. Deleting a material file removes
-the complete directory.
+validated source upload and `content.jsonl` is its normalized extracted content.
+Each line is a strict version-1 segment object with positive contiguous sequence,
+nullable chapter and section labels, and text. Encoded JSONL and decoded segment
+text are each bounded to 512 MiB per material. MIA writes generated content
+atomically and does not retain raw OCR responses, separate content outlines, or
+retrieval indexes. Deleting a material file removes the complete directory.
+MIA validates a source upload into a temporary file and atomically renames it to
+`file` before inserting and committing the database row. Transaction failure
+removes the published source, and startup removes a source with no row. Exact
+same-filesystem temporary placement and file and directory synchronization are
+specified with implementation.
+Generated output is fully written and atomically renamed before SQLite marks it
+processed or available. A stale or failed database commit removes that output;
+startup removes crash-left orphan files.
 
 An avatar has no database metadata row. Its presence is determined by the fixed
 `users/<user-id>/avatar.png` path. MIA validates an uploaded image before writing
@@ -98,3 +113,10 @@ by `courses/<course-id>/logo.png`. It uses the same validated JPEG/PNG input,
 limits, orientation, metadata stripping, aspect-preserving resize, atomic
 replacement, and PNG output as avatars. Course deletion removes the course
 directory, and startup reconciliation removes directories for missing courses.
+
+Startup first deletes expired speech rows and files. It then marks every remaining
+speech row stranded in generating state failed with a sanitized restart code and
+removes associated incomplete output. Finally, it logs an error and exits if
+SQLite references a missing source file, processed `content.jsonl`, or unexpired
+available speech file. Missing avatar and logo files are normal and mean no image
+is set.

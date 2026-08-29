@@ -1,7 +1,8 @@
 ## TOML-based configuration for the mia server
 ##
 ## Default location: /etc/mia/mia.toml
-## The file may contain secrets. Restrict its mode to 0400, 0440, 0600, or 0640.
+## The file may contain secrets. Use 0400, 0440, 0600, or 0640 only when the
+## effective service user can read the file through its owner or group.
 
 [main]
   ## Base data directory, string, mandatory
@@ -204,3 +205,15 @@
   ## Example: 500
   ## Default: 1000
   #max_material_pages = 1000
+
+  ## Maximum source-file count in one material, integer, optional
+  ## Can be overridden with --uploads-max-material-files or MIA_UPLOADS_MAX_MATERIAL_FILES
+  ## Valid range: 1 through 200
+  ## Default: 200
+  #max_material_files = 200
+
+  ## Maximum decoded JPEG or PNG megapixels, integer, optional
+  ## Can be overridden with --uploads-max-image-megapixels or MIA_UPLOADS_MAX_IMAGE_MEGAPIXELS
+  ## Valid range: 1 through 100; neither dimension may exceed 20,000 pixels
+  ## Default: 40
+  #max_image_megapixels = 40

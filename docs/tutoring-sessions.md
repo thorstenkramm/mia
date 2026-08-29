@@ -14,12 +14,15 @@ in this order:
    instructions, and language.
 3. Student brief with nickname, year of birth, language, country, and AI tutor
    instructions.
-4. The identity and brief of approved course-wide material or student-private
-   material selected by the student. Complete extracted content is included only
-   when it contains at most 8,000 Unicode code points and 32 KiB and fits within
-   MIA's fixed input limit; otherwise MIA supplies bounded relevant excerpts.
-   This item is omitted when no material is selected.
-5. Summary and follow-ups of the previous session.
+4. The identity and brief of authorized course-wide or student-private material
+   selected by the student. Complete extracted content is included only for
+   ready, file-backed material when it contains at most 8,000 Unicode code points
+   and 32 KiB and fits within MIA's fixed input limit; otherwise MIA supplies
+   bounded relevant excerpts. Link-only material provides no source content. This
+   item is omitted when no material is selected.
+5. Summary and follow-ups of the previous completed session for the same student
+   in the same course. When a supervisor has corrected them, the corrected
+   version is used.
 
 ## Material context and retrieval
 
@@ -49,21 +52,28 @@ One response performs at most three retrieval rounds and receives at most eight
 excerpts. An excerpt contains at most 4,000 Unicode code points and 16 KiB. The
 combined result remains within the model-input budget.
 
-Every request is authorized by MIA. The available set consists only of approved
-material from the active course and private material uploaded by the active
-student. A request made by the model never grants access by itself. MIA rejects
-requests for unapproved course-wide material, another student's private
-material, or material outside the active course.
+Every request is authorized by MIA. Retrievable source content belongs to the
+session's course and is either ready, file-backed, approved course-wide material
+or ready, file-backed private material owned by the active student. Course
+activity is required when starting the session, not while it continues after
+deactivation. A request made by the model never grants access by itself.
 
 Search and excerpt results include the material identity, chapter, and section
 when available. The AI tutor should use this information when referring the
 student to another source, for example, "Workbook XYZ, chapter 7.3 explains this
 topic." It must not present an OCR page position as the printed page number.
 
-MIA records material actually used during the session, including material
-retrieved after the session started. It performs bounded streaming search over
-authorized normalized `content.txt` files. The MVP has no separate retrieval
-index and does not upload material to a provider-managed file store.
+MIA records a material as used only when complete small content or an authorized
+excerpt is returned to the tutor model. Search-only candidates do not count. It
+performs bounded streaming search over authorized `content.jsonl` files. Search
+NFC-normalizes and Unicode-case-folds terms, tokenizes on Unicode letter/number
+boundaries, ranks by matched-term count and frequency, and tie-breaks by material
+ID, file ID, and segment sequence. No term match returns no result.
+
+One excerpt may include at most one adjacent segment on each side while the
+combined result remains within 4,000 code points and 16 KiB. Overlapping excerpts
+are deduplicated. The MVP has no retrieval index and does not upload material to
+a provider-managed file store.
 
 One request reserves at most 32,000 input tokens and 2,048 output tokens. MIA uses
 a local tokenizer matching the configured model. It always retains required
@@ -85,11 +95,18 @@ retry the uncertain provider request.
 After creating a student message, the frontend connects to the tutor response's
 SSE route. MIA first sends a snapshot of current content and state, followed by
 new text deltas and one terminal event. It persists generated text in bounded
-batches while generation continues.
+batches after 16 KiB of new UTF-8 output or one second, whichever occurs first,
+and always before committing a terminal state.
 
 Subscriber registration and snapshot capture occur atomically under
 per-response synchronization. Later deltas enter the subscriber queue, so a
 connection cannot miss text in the transition from snapshot to live delivery.
+
+If a bounded persistence update affects zero rows, MIA marks the synchronized
+in-memory response stale, closes every subscriber queue, and discards later
+provider events. It delivers and persists no further content or terminal event.
+The provider request may finish or reach its existing deadline; deletion does not
+add cross-goroutine cancellation signaling.
 
 Each subscriber queue is bounded to 64 events or 256 KiB. A slow subscriber that
 exceeds either bound is disconnected without affecting generation or other
@@ -100,6 +117,8 @@ the OpenAI operation. A reconnect to the same tutor response receives a fresh
 snapshot and continues with new deltas without creating another provider
 response. An explicit student interruption uses the interruption API, cancels
 the provider operation, and preserves text already received.
+If cancellation cannot be confirmed, MIA keeps the response interrupted,
+discards late events, and logs only a sanitized cancellation failure.
 
 Provider failures preserve partial text and produce a sanitized failed state.
 Tool calls and provider payloads remain internal to MIA. Every SSE connection is
@@ -118,8 +137,8 @@ available.
 
 The student may interrupt queued work before it starts. The immutable student
 message remains, its response becomes interrupted, and MIA makes no provider
-request. Retrying a failed response is allowed only while the session is idle and
-creates its sole queued response.
+request. Retrying a failed or interrupted response is allowed only while the
+session is idle and creates its sole queued response.
 
 At startup, queued work remains safe to dispatch. A response left in generating
 state is failed with a safe restart code because MIA cannot know whether its
@@ -139,7 +158,11 @@ its generated brief, and the completed session's full chat history. It does not
 require supervisor approval and must not be exposed to mentors, other students,
 unrelated supervisors, or administrators who are not assigned as supervisors.
 Student-private material remains available to its uploading student but cannot
-be converted into course-wide material for all students.
+be converted into course-wide material for all students. Its source content is
+usable only after processing succeeds and while it remains ready and file-backed.
+
+Material selected by an active tutoring session cannot be deleted. Normal
+deletion rules apply after the session is completed.
 
 If the student later deletes private material used in a completed session, MIA
 removes the source and generated brief and prevents future retrieval. Existing
