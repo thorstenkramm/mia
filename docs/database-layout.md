@@ -104,6 +104,8 @@ continuing.
 - User avatars are filesystem-only and are not database-referenced managed files.
   Their fixed path is derived from the user ID. Startup reconciliation removes
   avatar files belonging to users that no longer exist.
+- Course logos are filesystem-only and use a fixed path derived from the course
+  ID. Course deletion and startup reconciliation remove their files.
 
 ## Identity and access
 

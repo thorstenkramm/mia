@@ -92,3 +92,9 @@ limited to 10 MiB, 40 decoded megapixels, and 10,000 pixels per dimension. MIA
 replaces an existing avatar through a temporary file and atomic rename. Startup
 reconciliation removes avatar files and user directories whose user no longer
 exists.
+
+A course logo likewise has no database metadata row. Its presence is determined
+by `courses/<course-id>/logo.png`. It uses the same validated JPEG/PNG input,
+limits, orientation, metadata stripping, aspect-preserving resize, atomic
+replacement, and PNG output as avatars. Course deletion removes the course
+directory, and startup reconciliation removes directories for missing courses.

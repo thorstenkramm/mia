@@ -541,6 +541,19 @@ Only an administrator creates a course. Creation means adding the course record
 to MIA and assigning one or more supervisors. Creation does not make the course
 available to students.
 
+### Course logo
+
+- A course may have one optional logo.
+- An administrator or a supervisor assigned to the course may upload, replace,
+  or remove it.
+- Logo upload uses the avatar image pipeline: signature-validated JPEG or PNG,
+  at most 10 MiB, 40 decoded megapixels, and 10,000 pixels per source dimension.
+- MIA applies orientation, strips metadata, preserves aspect ratio, fits the logo
+  within 512 by 512 pixels, and stores one non-animated PNG.
+- Anyone authorized to view the course may download its logo. Logo access never
+  broadens course visibility.
+- Course deletion removes the logo. MIA never serves the untrusted source image.
+
 ### Preparation
 
 An assigned supervisor prepares the course by defining its learning goals,

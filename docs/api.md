@@ -259,6 +259,7 @@ role. Protected course and mentor relationships must be resolved first.
 
 - `GET|POST /api/v1/courses`
 - `GET|PATCH|DELETE /api/v1/courses/{id}`
+- `GET|PUT|DELETE /api/v1/courses/{id}/logo`
 - `POST /api/v1/courses/{id}/activations`
 - `POST /api/v1/courses/{id}/deactivations`
 - `GET|POST /api/v1/courses/{id}/supervisors`
@@ -286,6 +287,11 @@ cannot be removed. An assigned supervisor may remove a student only when that
 student has no active tutoring session in the course. Removal atomically deletes
 all data owned by that student in the course while preserving the account and
 other-course data.
+
+An administrator or assigned supervisor may mutate the course logo. GET uses the
+same authorization as viewing the course and returns the normalized PNG with a
+strong content ETag and `Cache-Control: private, no-cache`. Upload limits and
+normalization match avatars.
 
 Mentor removal drops affected student assignments and returns open mentoring work
 to supervisor triage in one transaction. Course deletion remains restricted to
