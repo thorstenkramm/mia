@@ -26,6 +26,7 @@ const (
 	CodeLoginThrottled         Code = "auth_login_throttled"
 	CodeRequestTooLarge        Code = "auth_request_too_large"
 	CodeUnsupportedMediaType   Code = "auth_unsupported_media_type"
+	CodeInvalidResetToken      Code = "auth_invalid_reset_token"
 )
 
 type definition struct {
@@ -47,6 +48,7 @@ var errorRegistry = map[Code]definition{
 	CodeLoginThrottled:         {http.StatusTooManyRequests, "Too Many Requests", "The request could not be completed."},
 	CodeRequestTooLarge:        {http.StatusRequestEntityTooLarge, "Request Too Large", "The request could not be completed."},
 	CodeUnsupportedMediaType:   {http.StatusUnsupportedMediaType, "Unsupported Media Type", "The request could not be completed."},
+	CodeInvalidResetToken:      {http.StatusUnprocessableEntity, "Invalid Reset Token", "The request could not be completed."},
 }
 
 // Error is a registered domain error translated centrally to a JSON:API response.

@@ -3,9 +3,12 @@ package auth
 
 import (
 	"bytes"
+	"context"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"mime"
 	"net/http"
@@ -13,6 +16,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/google/uuid"
 	"github.com/labstack/echo/v5"
 	"github.com/thorstenkramm/mia/internal/audit"
 	"github.com/thorstenkramm/mia/internal/httpserver"
@@ -23,9 +27,15 @@ import (
 
 const cookieName = "__Host-mia_session"
 
-// Register attaches the first auth slice's routes to the API server.
-func Register(server *httpserver.Server, routes httpserver.AuthRouteRegistrar, database *sql.DB) {
+type recoveryMailer interface {
+	SendPasswordRecovery(context.Context, string, string) error
+}
+
+// Register attaches auth routes using the configured recovery-mail adapter.
+func Register(server *httpserver.Server, routes httpserver.AuthRouteRegistrar, database *sql.DB, publicURL string, deliveries *DeliveryManager) {
 	server.Echo.POST("/api/v1/auth/login", login(server, database))
+	server.Echo.POST("/api/v1/auth/password-recovery-requests", passwordRecoveryRequest(server, database, publicURL, deliveries))
+	server.Echo.POST("/api/v1/auth/password-resets", passwordReset(server, database))
 	routes.POST("/api/v1/auth/logout", "any", logout(server, database))
 	routes.POST("/api/v1/auth/password-changes", "password-change", changePassword(server, database))
 }
@@ -182,6 +192,199 @@ func changePassword(server *httpserver.Server, database *sql.DB) echo.HandlerFun
 		return sessionResponse(c, accountID, "authenticated")
 	}
 }
+
+func passwordRecoveryRequest(server *httpserver.Server, database *sql.DB, publicURL string, deliveries *DeliveryManager) echo.HandlerFunc {
+	return func(c *echo.Context) error {
+		limit := server.CheckRecoveryIP(c)
+		if limit.Transitioned {
+			if err := writeAudit(c.Request().Context(), database, audit.ActionAuthPasswordRecoveryThrottled, ""); err != nil {
+				return err
+			}
+		}
+		if !limit.Allowed {
+			return c.NoContent(http.StatusNoContent)
+		}
+		var request struct {
+			Data struct {
+				Type       string `json:"type"`
+				Attributes struct {
+					Username string `json:"username"`
+				} `json:"attributes"`
+			} `json:"data"`
+		}
+		if err := decode(c, &request); err != nil {
+			return decodeErrorCode(err)
+		}
+		if request.Data.Type != "password-recovery-requests" {
+			return httpserver.NewError(httpserver.CodeInvalidRequest)
+		}
+		limit = server.CheckRecoveryIdentifier(request.Data.Attributes.Username)
+		if limit.Transitioned {
+			if err := writeAudit(c.Request().Context(), database, audit.ActionAuthPasswordRecoveryThrottled, ""); err != nil {
+				return err
+			}
+		}
+		if !limit.Allowed {
+			return c.NoContent(http.StatusNoContent)
+		}
+		account, err := user.FindStaffForRecovery(c.Request().Context(), database, request.Data.Attributes.Username)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) || errors.Is(err, identity.ErrInvalidUsername) {
+				return c.NoContent(http.StatusNoContent)
+			}
+			return err
+		}
+		token := uuid.NewString()
+		digest := sha256.Sum256([]byte(token))
+		challengeID := "prc_" + uuid.NewString()
+		now := time.Now().UTC()
+		if err := miSQLite.WithTx(c.Request().Context(), database, func(tx *sql.Tx) error {
+			_, err := tx.ExecContext(c.Request().Context(), `INSERT INTO password_reset_challenges
+				(id, user_id, token_digest, expires_at, created_at) VALUES (?, ?, ?, ?, ?)`, challengeID, account.ID,
+				digest[:], instant(now.Add(30*time.Minute)), instant(now))
+			if err != nil {
+				return fmt.Errorf("create password reset challenge: %w", err)
+			}
+			return audit.Write(c.Request().Context(), tx, audit.ActionAuthPasswordRecoveryRequested, "", account.ID)
+		}); err != nil {
+			return err
+		}
+		// Admission fails only during shutdown. The undelivered challenge expires
+		// on its own and the response stays indistinguishable from delivery.
+		deliveries.Admit(c.Request().Context(), account.ID, account.Email, publicURL+"/password-reset#token="+token, challengeID)
+		return c.NoContent(http.StatusNoContent)
+	}
+}
+
+func passwordReset(server *httpserver.Server, database *sql.DB) echo.HandlerFunc {
+	return func(c *echo.Context) error {
+		var request struct {
+			Data struct {
+				Type       string `json:"type"`
+				Attributes struct {
+					Token        string `json:"token"`
+					Password     string `json:"password"`
+					Confirmation string `json:"password_confirmation"`
+				} `json:"attributes"`
+			} `json:"data"`
+		}
+		if err := decode(c, &request); err != nil {
+			return decodeErrorCode(err)
+		}
+		if request.Data.Type != "password-resets" {
+			return httpserver.NewError(httpserver.CodeInvalidRequest)
+		}
+		if limit := server.CheckReset(c, request.Data.Attributes.Token); limit.Transitioned || !limit.Allowed {
+			if limit.Transitioned {
+				if err := writeAudit(c.Request().Context(), database, audit.ActionAuthPasswordResetThrottled, ""); err != nil {
+					return err
+				}
+			}
+			if !limit.Allowed {
+				return httpserver.NewError(httpserver.CodeInvalidResetToken)
+			}
+		}
+		parsed, err := uuid.Parse(request.Data.Attributes.Token)
+		if err != nil || parsed.Version() != 4 || parsed.String() != request.Data.Attributes.Token {
+			return httpserver.NewError(httpserver.CodeInvalidResetToken)
+		}
+		digest := sha256.Sum256([]byte(request.Data.Attributes.Token))
+		var challengeID, accountID, expires string
+		var consumed any
+		err = database.QueryRowContext(c.Request().Context(), `SELECT id, user_id, expires_at, consumed_at
+			FROM password_reset_challenges WHERE token_digest = ?`, digest[:]).Scan(&challengeID, &accountID, &expires, &consumed)
+		if errors.Is(err, sql.ErrNoRows) {
+			return invalidResetToken(c, database)
+		}
+		if err != nil {
+			return fmt.Errorf("load password reset challenge: %w", err)
+		}
+		live, err := beforeExpiry(expires)
+		if err != nil {
+			return err
+		}
+		if consumed != nil || !live {
+			return invalidResetToken(c, database)
+		}
+		eligible, err := user.IsEligibleForRecovery(c.Request().Context(), database, accountID)
+		if err != nil {
+			return err
+		}
+		if !eligible {
+			return invalidResetToken(c, database)
+		}
+		var hash string
+		if request.Data.Attributes.Password == request.Data.Attributes.Confirmation {
+			hash, err = identity.Password(request.Data.Attributes.Password)
+		}
+		if err != nil || request.Data.Attributes.Password != request.Data.Attributes.Confirmation {
+			if auditErr := writeAudit(c.Request().Context(), database, audit.ActionAuthPasswordResetFailed, ""); auditErr != nil {
+				return auditErr
+			}
+			return httpserver.NewError(httpserver.CodeInvalidPassword)
+		}
+		err = miSQLite.WithTx(c.Request().Context(), database, func(tx *sql.Tx) error {
+			result, err := tx.ExecContext(c.Request().Context(), "UPDATE password_reset_challenges SET consumed_at = ? WHERE id = ? AND consumed_at IS NULL AND expires_at > ?", instant(time.Now()), challengeID, instant(time.Now()))
+			if err != nil {
+				return fmt.Errorf("consume password reset challenge: %w", err)
+			}
+			rows, err := result.RowsAffected()
+			if err != nil {
+				return fmt.Errorf("count consumed password reset challenge: %w", err)
+			}
+			if rows != 1 {
+				return errInvalidResetToken
+			}
+			eligible, err := user.IsEligibleForRecovery(c.Request().Context(), tx, accountID)
+			if err != nil {
+				return err
+			}
+			if !eligible {
+				return errInvalidResetToken
+			}
+			if err := user.ChangePassword(c.Request().Context(), tx, accountID, hash); err != nil {
+				return err
+			}
+			if _, err := tx.ExecContext(c.Request().Context(), "UPDATE password_reset_challenges SET consumed_at = ? WHERE user_id = ? AND consumed_at IS NULL", instant(time.Now()), accountID); err != nil {
+				return fmt.Errorf("invalidate password reset challenges: %w", err)
+			}
+			return audit.Write(c.Request().Context(), tx, audit.ActionAuthPasswordReset, accountID, accountID)
+		})
+		if errors.Is(err, errInvalidResetToken) {
+			if auditErr := writeAudit(c.Request().Context(), database, audit.ActionAuthPasswordResetFailed, ""); auditErr != nil {
+				return auditErr
+			}
+			return httpserver.NewError(httpserver.CodeInvalidResetToken)
+		}
+		if err != nil {
+			return err
+		}
+		return c.NoContent(http.StatusNoContent)
+	}
+}
+
+var errInvalidResetToken = errors.New("invalid password reset token")
+
+func writeAudit(ctx context.Context, database *sql.DB, action audit.Action, subjectID string) error {
+	return miSQLite.WithTx(ctx, database, func(tx *sql.Tx) error { return audit.Write(ctx, tx, action, "", subjectID) })
+}
+
+func beforeExpiry(value string) (bool, error) {
+	expires, err := time.Parse("2006-01-02T15:04:05.000000Z", value)
+	if err != nil {
+		return false, fmt.Errorf("parse password reset challenge expiry: %w", err)
+	}
+	return time.Now().Before(expires), nil
+}
+
+func invalidResetToken(c *echo.Context, database *sql.DB) error {
+	if err := writeAudit(c.Request().Context(), database, audit.ActionAuthPasswordResetFailed, ""); err != nil {
+		return err
+	}
+	return httpserver.NewError(httpserver.CodeInvalidResetToken)
+}
+
+func instant(value time.Time) string { return value.UTC().Format("2006-01-02T15:04:05.000000Z") }
 
 func decode(c *echo.Context, destination any) error {
 	const maximumRequestBody = 1 << 20

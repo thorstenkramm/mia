@@ -3,6 +3,7 @@ package user
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"time"
@@ -31,10 +32,45 @@ type CreateInput struct {
 
 type Account struct {
 	ID                 string
+	Email              string
 	PasswordHash       string
 	SecurityGeneration int64
 	MustChangePassword bool
 	Banned             bool
+}
+
+// FindStaffForRecovery returns an eligible staff account for a complete username.
+func FindStaffForRecovery(ctx context.Context, query miSQLite.Querier, username string) (Account, error) {
+	key, err := identity.Username(username)
+	if err != nil {
+		return Account{}, err
+	}
+	var account Account
+	var banned, staff int
+	err = query.QueryRowContext(ctx, `SELECT u.id, u.email, u.is_banned,
+		EXISTS(SELECT 1 FROM user_roles r WHERE r.user_id = u.id AND r.role IN ('administrator', 'supervisor', 'mentor'))
+		FROM users u WHERE u.username_key = ? AND u.email_verified_at IS NOT NULL`, key).
+		Scan(&account.ID, &account.Email, &banned, &staff)
+	if err != nil {
+		return Account{}, fmt.Errorf("find recovery account: %w", err)
+	}
+	account.Banned = banned != 0
+	if staff == 0 || account.Banned || account.Email == "" {
+		return Account{}, sql.ErrNoRows
+	}
+	return account, nil
+}
+
+// IsEligibleForRecovery checks staff recovery eligibility without exposing state to callers.
+func IsEligibleForRecovery(ctx context.Context, query miSQLite.Querier, id string) (bool, error) {
+	var eligible int
+	err := query.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM users u WHERE u.id = ? AND u.is_banned = 0
+		AND u.email_verified_at IS NOT NULL AND EXISTS(SELECT 1 FROM user_roles r WHERE r.user_id = u.id
+		AND r.role IN ('administrator', 'supervisor', 'mentor')))`, id).Scan(&eligible)
+	if err != nil {
+		return false, fmt.Errorf("check recovery eligibility: %w", err)
+	}
+	return eligible != 0, nil
 }
 
 // Create inserts one account and all initial roles through one owning API.

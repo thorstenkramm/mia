@@ -87,6 +87,35 @@ func (server *Server) RecordLoginFailure(c *echo.Context, username string) Resul
 	return server.CheckLogin(c, username, true)
 }
 
+// CheckRecoveryIP consumes the recovery source-IP limit before parsing input.
+func (server *Server) CheckRecoveryIP(c *echo.Context) Result {
+	return server.limiter.Check(LimitRecoveryIP, server.resolver.Resolve(c.Request()), time.Now())
+}
+
+// CheckRecoveryIdentifier consumes the recovery identifier limit after parsing.
+func (server *Server) CheckRecoveryIdentifier(username string) Result {
+	key, err := UsernameKey(username)
+	if err != nil {
+		key = "username:invalid"
+	}
+	return server.limiter.Check(LimitRecoveryIdentifier, key, time.Now())
+}
+
+// CheckReset consumes both fixed reset submission dimensions.
+func (server *Server) CheckReset(c *echo.Context, token string) Result {
+	key, err := TokenKey(token)
+	if err != nil {
+		key = "token:invalid"
+	}
+	now := time.Now()
+	ip := server.limiter.Check(LimitResetIP, server.resolver.Resolve(c.Request()), now)
+	challenge := server.limiter.Check(LimitResetToken, key, now)
+	if !ip.Allowed {
+		return ip
+	}
+	return challenge
+}
+
 // IdentityState is the database-authoritative state needed to validate a browser session.
 type IdentityState struct {
 	SecurityGeneration         int64

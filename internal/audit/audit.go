@@ -14,15 +14,23 @@ import (
 type Action string
 
 const (
-	ActionOperatorAdministratorBootstrapped Action = "operator.administrator.bootstrapped"
-	ActionAuthSessionLoggedIn               Action = "auth.session.logged_in"
-	ActionAuthSessionLoggedOut              Action = "auth.session.logged_out"
-	ActionAuthPasswordChanged               Action = "auth.password.changed"
-	ActionAuthSessionFailed                 Action = "auth.session.failed"
-	ActionAuthSessionThrottled              Action = "auth.session.throttled"
+	ActionOperatorAdministratorBootstrapped  Action = "operator.administrator.bootstrapped"
+	ActionAuthSessionLoggedIn                Action = "auth.session.logged_in"
+	ActionAuthSessionLoggedOut               Action = "auth.session.logged_out"
+	ActionAuthPasswordChanged                Action = "auth.password.changed"
+	ActionAuthSessionFailed                  Action = "auth.session.failed"
+	ActionAuthSessionThrottled               Action = "auth.session.throttled"
+	ActionAuthPasswordRecoveryRequested      Action = "auth.password_recovery.requested"
+	ActionAuthPasswordReset                  Action = "auth.password.reset"
+	ActionAuthPasswordRecoveryDeliveryFailed Action = "auth.password_recovery.delivery_failed"
+	ActionAuthPasswordRecoveryTimedOut       Action = "auth.password_recovery.timed_out"
+	ActionAuthPasswordRecoveryThrottled      Action = "auth.password_recovery.throttled"
+	ActionAuthPasswordResetThrottled         Action = "auth.password_reset.throttled"
+	ActionAuthPasswordResetFailed            Action = "auth.password_reset.failed"
+	ActionAuthPasswordRecoveryAmbiguous      Action = "auth.password_recovery.ambiguous"
 )
 
-var actions = map[Action]struct{}{ActionOperatorAdministratorBootstrapped: {}, ActionAuthSessionLoggedIn: {}, ActionAuthSessionLoggedOut: {}, ActionAuthPasswordChanged: {}, ActionAuthSessionFailed: {}, ActionAuthSessionThrottled: {}}
+var actions = map[Action]struct{}{ActionOperatorAdministratorBootstrapped: {}, ActionAuthSessionLoggedIn: {}, ActionAuthSessionLoggedOut: {}, ActionAuthPasswordChanged: {}, ActionAuthSessionFailed: {}, ActionAuthSessionThrottled: {}, ActionAuthPasswordRecoveryRequested: {}, ActionAuthPasswordReset: {}, ActionAuthPasswordRecoveryDeliveryFailed: {}, ActionAuthPasswordRecoveryTimedOut: {}, ActionAuthPasswordRecoveryThrottled: {}, ActionAuthPasswordResetThrottled: {}, ActionAuthPasswordResetFailed: {}, ActionAuthPasswordRecoveryAmbiguous: {}}
 
 // Write records one registered action in the same transaction as its mutation.
 func Write(ctx context.Context, query miSQLite.Querier, action Action, actorID, subjectID string) error {

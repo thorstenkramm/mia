@@ -3,6 +3,7 @@ package auth
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
 	"net/http"
@@ -10,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -271,7 +273,274 @@ func TestBanDeletionAndSecurityGenerationInvalidateCookies(t *testing.T) {
 	}
 }
 
+func TestStaffPasswordRecoveryAndReset(t *testing.T) {
+	mailer := newMailRecorder(nil)
+	server, database := testServerWithMailer(t, mailer)
+	account := createStaffAccount(t, database)
+	csrf := csrfToken(t, server)
+	response := serve(t, server, http.MethodPost, "/api/v1/auth/password-recovery-requests", csrf, nil, recoveryBody("staff"))
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("recovery response=%d", response.Code)
+	}
+	link := mailer.wait(t)
+	if strings.Contains(link, "?") {
+		t.Fatalf("recovery link leaks a query component: %q", link)
+	}
+	token := strings.TrimPrefix(link, "https://mia.test/password-reset#token=")
+	digest := sha256.Sum256([]byte(token))
+	var stored int
+	if err := database.QueryRow("SELECT COUNT(*) FROM password_reset_challenges WHERE token_digest = ?", digest[:]).Scan(&stored); err != nil {
+		t.Fatal(err)
+	}
+	if stored != 1 {
+		t.Fatalf("digest-stored challenges=%d", stored)
+	}
+	unknown := serve(t, server, http.MethodPost, "/api/v1/auth/password-recovery-requests", csrf, nil, recoveryBody("unknown"))
+	if unknown.Code != http.StatusNoContent || challengeCount(t, database) != 1 {
+		t.Fatalf("hidden recovery response=%d challenges=%d", unknown.Code, challengeCount(t, database))
+	}
+	reset := resetBody(token, "new correct horse battery", "new correct horse battery")
+	response = serve(t, server, http.MethodPost, "/api/v1/auth/password-resets", csrf, nil, reset)
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("reset response=%d body=%s", response.Code, response.Body.String())
+	}
+	var remaining int
+	if err := database.QueryRow("SELECT COUNT(*) FROM password_reset_challenges WHERE user_id = ? AND consumed_at IS NULL", account.ID).Scan(&remaining); err != nil {
+		t.Fatal(err)
+	}
+	if remaining != 0 {
+		t.Fatalf("unconsumed reset challenges=%d", remaining)
+	}
+	assertAuditCount(t, database, "auth.password_recovery.requested", 1)
+	assertAuditCount(t, database, "auth.password.reset", 1)
+	var sensitive int
+	if err := database.QueryRow("SELECT COUNT(*) FROM audit_events WHERE metadata <> '{}' OR metadata LIKE '%'||?||'%' OR metadata LIKE '%new correct horse battery%'", token).Scan(&sensitive); err != nil {
+		t.Fatal(err)
+	}
+	if sensitive != 0 {
+		t.Fatal("audit retained recovery token or password content")
+	}
+	replay := serve(t, server, http.MethodPost, "/api/v1/auth/password-resets", csrf, nil, reset)
+	assertCode(t, replay, http.StatusUnprocessableEntity, "auth_invalid_reset_token")
+}
+
+func TestPasswordRecoveryHiddenStatesCreateNoChallenge(t *testing.T) {
+	mailer := newMailRecorder(nil)
+	server, database := testServerWithMailer(t, mailer)
+	createAccount(t, database, false)
+	staff := createStaffAccount(t, database)
+	if _, err := database.Exec("UPDATE users SET is_banned = 1 WHERE id = ?", staff.ID); err != nil {
+		t.Fatal(err)
+	}
+	csrf := csrfToken(t, server)
+	for _, username := range []string{"student", "staff", "bad name!"} {
+		response := serve(t, server, http.MethodPost, "/api/v1/auth/password-recovery-requests", csrf, nil, recoveryBody(username))
+		if response.Code != http.StatusNoContent || response.Header().Get("Retry-After") != "" {
+			t.Fatalf("hidden recovery for %q: status=%d", username, response.Code)
+		}
+	}
+	if challengeCount(t, database) != 0 || mailer.count() != 0 {
+		t.Fatalf("hidden states created challenges=%d deliveries=%d", challengeCount(t, database), mailer.count())
+	}
+}
+
+func TestPasswordRecoveryThrottleStaysHiddenAndIsAuditedOnce(t *testing.T) {
+	mailer := newMailRecorder(nil)
+	server, database := testServerWithMailer(t, mailer)
+	createStaffAccount(t, database)
+	csrf := csrfToken(t, server)
+	for range 4 {
+		response := serve(t, server, http.MethodPost, "/api/v1/auth/password-recovery-requests", csrf, nil, recoveryBody("staff"))
+		if response.Code != http.StatusNoContent || response.Header().Get("Retry-After") != "" {
+			t.Fatalf("throttled recovery: status=%d retry-after=%q", response.Code, response.Header().Get("Retry-After"))
+		}
+	}
+	if challengeCount(t, database) != 3 {
+		t.Fatalf("challenges after throttle=%d", challengeCount(t, database))
+	}
+	assertAuditCount(t, database, "auth.password_recovery.throttled", 1)
+	for range 3 {
+		mailer.wait(t)
+	}
+}
+
+func TestPasswordResetValidationAndLifecycle(t *testing.T) {
+	mailer := newMailRecorder(nil)
+	server, database := testServerWithMailer(t, mailer)
+	createStaffAccount(t, database)
+	csrf := csrfToken(t, server)
+	for range 2 {
+		response := serve(t, server, http.MethodPost, "/api/v1/auth/password-recovery-requests", csrf, nil, recoveryBody("staff"))
+		if response.Code != http.StatusNoContent {
+			t.Fatalf("recovery response=%d", response.Code)
+		}
+		mailer.wait(t)
+	}
+	links := mailer.snapshot()
+	first := strings.TrimPrefix(links[0], "https://mia.test/password-reset#token=")
+	second := strings.TrimPrefix(links[1], "https://mia.test/password-reset#token=")
+	if challengeCount(t, database) != 2 {
+		t.Fatalf("live challenges=%d", challengeCount(t, database))
+	}
+	tooShort := serve(t, server, http.MethodPost, "/api/v1/auth/password-resets", csrf, nil, resetBody(second, "short", "short"))
+	assertCode(t, tooShort, http.StatusUnprocessableEntity, "auth_invalid_password")
+	mismatch := serve(t, server, http.MethodPost, "/api/v1/auth/password-resets", csrf, nil, resetBody(second, "a long enough password", "a different long password"))
+	assertCode(t, mismatch, http.StatusUnprocessableEntity, "auth_invalid_password")
+	uppercase := serve(t, server, http.MethodPost, "/api/v1/auth/password-resets", csrf, nil, resetBody(strings.ToUpper(second), "new correct horse battery", "new correct horse battery"))
+	assertCode(t, uppercase, http.StatusUnprocessableEntity, "auth_invalid_reset_token")
+	firstDigest := sha256.Sum256([]byte(first))
+	if _, err := database.Exec("UPDATE password_reset_challenges SET expires_at = '2000-01-01T00:00:00.000000Z' WHERE token_digest = ?", firstDigest[:]); err != nil {
+		t.Fatal(err)
+	}
+	expired := serve(t, server, http.MethodPost, "/api/v1/auth/password-resets", csrf, nil, resetBody(first, "new correct horse battery", "new correct horse battery"))
+	assertCode(t, expired, http.StatusUnprocessableEntity, "auth_invalid_reset_token")
+	success := serve(t, server, http.MethodPost, "/api/v1/auth/password-resets", csrf, nil, resetBody(second, "new correct horse battery", "new correct horse battery"))
+	if success.Code != http.StatusNoContent {
+		t.Fatalf("reset after failed validations=%d body=%s", success.Code, success.Body.String())
+	}
+	login := serve(t, server, http.MethodPost, "/api/v1/auth/login", csrf, nil, loginBody("staff", "new correct horse battery"))
+	assertCode(t, login, http.StatusOK, "")
+}
+
+func TestPasswordResetRejectsAccountBannedAfterIssue(t *testing.T) {
+	mailer := newMailRecorder(nil)
+	server, database := testServerWithMailer(t, mailer)
+	staff := createStaffAccount(t, database)
+	csrf := csrfToken(t, server)
+	response := serve(t, server, http.MethodPost, "/api/v1/auth/password-recovery-requests", csrf, nil, recoveryBody("staff"))
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("recovery response=%d", response.Code)
+	}
+	link := mailer.wait(t)
+	token := strings.TrimPrefix(link, "https://mia.test/password-reset#token=")
+	if _, err := database.Exec("UPDATE users SET is_banned = 1 WHERE id = ?", staff.ID); err != nil {
+		t.Fatal(err)
+	}
+	var hashBefore string
+	if err := database.QueryRow("SELECT password_hash FROM users WHERE id = ?", staff.ID).Scan(&hashBefore); err != nil {
+		t.Fatal(err)
+	}
+	banned := serve(t, server, http.MethodPost, "/api/v1/auth/password-resets", csrf, nil, resetBody(token, "new correct horse battery", "new correct horse battery"))
+	assertCode(t, banned, http.StatusUnprocessableEntity, "auth_invalid_reset_token")
+	var hashAfter string
+	if err := database.QueryRow("SELECT password_hash FROM users WHERE id = ?", staff.ID).Scan(&hashAfter); err != nil {
+		t.Fatal(err)
+	}
+	if hashAfter != hashBefore {
+		t.Fatal("banned account password was reset")
+	}
+}
+
+func TestPasswordResetThrottleAuditedOnce(t *testing.T) {
+	server, database := testServer(t)
+	csrf := csrfToken(t, server)
+	const unknownToken = "3f2a1b4c-9d8e-4f6a-8b7c-1d2e3f4a5b6c"
+	for range 6 {
+		response := serve(t, server, http.MethodPost, "/api/v1/auth/password-resets", csrf, nil, resetBody(unknownToken, "new correct horse battery", "new correct horse battery"))
+		assertCode(t, response, http.StatusUnprocessableEntity, "auth_invalid_reset_token")
+	}
+	assertAuditCount(t, database, "auth.password_reset.throttled", 1)
+}
+
+func TestConcurrentResetProducesOneSuccess(t *testing.T) {
+	mailer := newMailRecorder(nil)
+	server, database := testServerWithMailer(t, mailer)
+	createStaffAccount(t, database)
+	csrf := csrfToken(t, server)
+	response := serve(t, server, http.MethodPost, "/api/v1/auth/password-recovery-requests", csrf, nil, recoveryBody("staff"))
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("recovery response=%d", response.Code)
+	}
+	token := strings.TrimPrefix(mailer.wait(t), "https://mia.test/password-reset#token=")
+	reset := resetBody(token, "new correct horse battery", "new correct horse battery")
+	codes := make(chan int, 2)
+	for range 2 {
+		go func() {
+			codes <- serve(t, server, http.MethodPost, "/api/v1/auth/password-resets", csrf, nil, reset).Code
+		}()
+	}
+	first, second := <-codes, <-codes
+	if min(first, second) != http.StatusNoContent || max(first, second) != http.StatusUnprocessableEntity {
+		t.Fatalf("concurrent reset codes=%d,%d", first, second)
+	}
+}
+
+type mailRecorder struct {
+	mu        sync.Mutex
+	links     []string
+	delivered chan struct{}
+	err       error
+}
+
+func newMailRecorder(err error) *mailRecorder {
+	return &mailRecorder{delivered: make(chan struct{}, 16), err: err}
+}
+
+func (recorder *mailRecorder) SendPasswordRecovery(_ context.Context, _, link string) error {
+	recorder.mu.Lock()
+	recorder.links = append(recorder.links, link)
+	recorder.mu.Unlock()
+	recorder.delivered <- struct{}{}
+	return recorder.err
+}
+
+func (recorder *mailRecorder) wait(t *testing.T) string {
+	t.Helper()
+	select {
+	case <-recorder.delivered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("recovery delivery did not happen")
+	}
+	recorder.mu.Lock()
+	defer recorder.mu.Unlock()
+	return recorder.links[len(recorder.links)-1]
+}
+
+func (recorder *mailRecorder) count() int {
+	recorder.mu.Lock()
+	defer recorder.mu.Unlock()
+	return len(recorder.links)
+}
+
+func (recorder *mailRecorder) snapshot() []string {
+	recorder.mu.Lock()
+	defer recorder.mu.Unlock()
+	return append([]string(nil), recorder.links...)
+}
+
+func recoveryBody(username string) string {
+	return `{"data":{"type":"password-recovery-requests","attributes":{"username":"` + username + `"}}}`
+}
+
+func resetBody(token, password, confirmation string) string {
+	return `{"data":{"type":"password-resets","attributes":{"token":"` + token + `","password":"` + password + `","password_confirmation":"` + confirmation + `"}}}`
+}
+
+func challengeCount(t *testing.T, database *sql.DB) int {
+	t.Helper()
+	var count int
+	if err := database.QueryRow("SELECT COUNT(*) FROM password_reset_challenges").Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	return count
+}
+
+func assertAuditCount(t *testing.T, database *sql.DB, action string, expected int) {
+	t.Helper()
+	var count int
+	if err := database.QueryRow("SELECT COUNT(*) FROM audit_events WHERE action = ?", action).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != expected {
+		t.Fatalf("audit rows for %s = %d, expected %d", action, count, expected)
+	}
+}
+
 func testServer(t *testing.T) (*httpserver.Server, *sql.DB) {
+	return testServerWithMailer(t, recoveryMailerFunc(func(context.Context, string, string) error { return nil }))
+}
+
+func testServerWithMailer(t *testing.T, mailer recoveryMailer) (*httpserver.Server, *sql.DB) {
 	t.Helper()
 	directory := t.TempDir()
 	docRoot := filepath.Join(directory, "public")
@@ -301,8 +570,33 @@ func testServer(t *testing.T) (*httpserver.Server, *sql.DB) {
 		}
 		return httpserver.IdentityState{SecurityGeneration: account.SecurityGeneration, MustChangePassword: account.MustChangePassword, Banned: account.Banned}, nil
 	})
-	Register(server, routes, database)
+	deliveries := NewDeliveryManager(database, mailer, nil)
+	t.Cleanup(deliveries.Close)
+	Register(server, routes, database, "https://mia.test", deliveries)
 	return server, database
+}
+
+func createStaffAccount(t *testing.T, database *sql.DB) user.Account {
+	t.Helper()
+	hash, err := identity.Password("correct horse battery")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var account user.Account
+	if err := miSQLite.WithTx(context.Background(), database, func(tx *sql.Tx) error {
+		var createErr error
+		account, createErr = user.Create(context.Background(), tx, user.CreateInput{Username: "staff", Email: "staff@example.test", PasswordHash: hash, Language: "en", Country: "DE", TimeZone: "UTC", EmailVerified: true, Roles: []user.Role{user.Administrator}})
+		return createErr
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return account
+}
+
+type recoveryMailerFunc func(context.Context, string, string) error
+
+func (function recoveryMailerFunc) SendPasswordRecovery(ctx context.Context, recipient, link string) error {
+	return function(ctx, recipient, link)
 }
 
 func createAccount(t *testing.T, database *sql.DB, gated bool) user.Account {

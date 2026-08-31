@@ -68,6 +68,7 @@ type limitEntry struct {
 type Result struct {
 	Allowed           bool
 	RetryAfter, Delay time.Duration
+	Transitioned      bool
 }
 
 func NewLimiter(capacity int) *Limiter {
@@ -120,9 +121,12 @@ func (limiter *Limiter) record(name LimitName, definition limitDefinition, key s
 		entry.at = now
 	} else {
 		entry.events = append(entry.events, now)
+		if len(entry.events) == definition.Limit {
+			result.Transitioned = true
+		}
 	}
 	if definition.BlockAtLimit && len(entry.events) >= definition.Limit {
-		return Result{RetryAfter: entry.events[0].Add(definition.Window).Sub(now)}
+		return Result{RetryAfter: entry.events[0].Add(definition.Window).Sub(now), Transitioned: result.Transitioned}
 	}
 	if definition.Progressive {
 		switch len(entry.events) {
@@ -242,6 +246,11 @@ func rateLimitMiddleware(limiter *Limiter, resolver *ClientIPResolver) echo.Midd
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c *echo.Context) error {
 			if !isAPIPath(c.Request().URL.Path) {
+				return next(c)
+			}
+			// Recovery requests have a dedicated limiter whose denial must remain
+			// indistinguishable from accepted delivery.
+			if c.Request().URL.Path == "/api/v1/auth/password-recovery-requests" {
 				return next(c)
 			}
 			result := limiter.Check(LimitUnauthenticatedAPI, resolver.Resolve(c.Request()), time.Now())

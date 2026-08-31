@@ -212,6 +212,19 @@ clears the password gate, rotates into a fresh authenticated session and CSRF st
 `auth-sessions` resource. A missing or different stage returns `403 auth_password_change_required`; invalid or
 non-compliant input returns `422 auth_invalid_password` without echoing the submitted value.
 
+`POST /api/v1/auth/password-recovery-requests` accepts a `password-recovery-requests` resource with the complete
+`username` attribute. It always returns `204` for a well-formed request, including for unknown, banned, student-only,
+syntactically invalid usernames, and rate-limited requests; it does not send `Retry-After`. An invalid resource shape
+returns `422 auth_invalid_request`, oversized input returns `413 auth_request_too_large`, and an unsupported media type
+returns `415 auth_unsupported_media_type`.
+
+`POST /api/v1/auth/password-resets` accepts a `password-resets` resource with `token`, `password`, and
+`password_confirmation` attributes. It returns `204` after a valid reset and never creates a browser session. Unknown,
+expired, consumed, malformed, banned, or deleted-token owners return `422 auth_invalid_reset_token` uniformly; throttled
+submissions return the same error without `Retry-After`. A valid token with non-compliant or mismatched passwords
+returns `422 auth_invalid_password` and leaves the token usable; request shape, body size, and media type errors use the
+same codes as recovery requests.
+
 ### Password blocklist provenance
 
 MIA embeds `Passwords/Common-Credentials/xato-net-10-million-passwords-100000.txt` from

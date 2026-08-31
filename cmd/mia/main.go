@@ -25,6 +25,7 @@ import (
 	"github.com/thorstenkramm/mia/internal/identity"
 	"github.com/thorstenkramm/mia/internal/lock"
 	"github.com/thorstenkramm/mia/internal/logging"
+	"github.com/thorstenkramm/mia/internal/provider/smtp"
 	miSQLite "github.com/thorstenkramm/mia/internal/sqlite"
 	"github.com/thorstenkramm/mia/internal/user"
 	"golang.org/x/term"
@@ -187,7 +188,9 @@ func newServeCommand() *cobra.Command {
 			}
 			return httpserver.IdentityState{SecurityGeneration: account.SecurityGeneration, MustChangePassword: account.MustChangePassword, Banned: account.Banned}, err
 		})
-		auth.Register(server, authRoutes, database)
+		deliveries := auth.NewDeliveryManager(database, smtp.New(configuration, logger.Slog()), logger.Slog())
+		defer deliveries.Close()
+		auth.Register(server, authRoutes, database, configuration.Main.PublicURL, deliveries)
 		return serve(command.Context(), configuration.HTTP.Listen, configuration.HTTP.SocketGroup, server.Echo, logger)
 	}}
 }
