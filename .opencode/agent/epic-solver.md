@@ -41,12 +41,12 @@ For each story:
    `_bmad-output/specs/spec-mia/SPEC.md`, and the companion PRD, addendum, and
    architecture spine listed in its frontmatter. Require the worker report
    format defined in its agent instructions.
-3. If the worker reports `blocked`, halt.
+3. If the worker reports `blocked`, solve obvious issues. If you have a clear recommendation, solve the issue
+   autonomously. Answer the questions of the worker and instruct to continue.
 4. Set the story to `review`. Dispatch `epic-reviewer` with the story identity,
-   worker summary, and changed-file list.
+   worker summary, and changed-file list. Give `epic-reviewer` instruction to auto-fix findings.
 5. If the reviewer reports findings, resume the worker's task with mode `fix`
-   and the findings verbatim, then dispatch the reviewer again. Allow at most
-   three fix cycles per story; halt when exhausted.
+   and the findings verbatim, then dispatch the reviewer again.
 6. On a passing review, resume the worker with mode `commit` and the message
    `story <key>: <title>`. Then set the story to `done`.
 7. Report one concise line to the user with the story, cycles used, and result.
