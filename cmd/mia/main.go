@@ -25,6 +25,7 @@ import (
 	"github.com/thorstenkramm/mia/internal/identity"
 	"github.com/thorstenkramm/mia/internal/lock"
 	"github.com/thorstenkramm/mia/internal/logging"
+	"github.com/thorstenkramm/mia/internal/provider/sms"
 	"github.com/thorstenkramm/mia/internal/provider/smtp"
 	miSQLite "github.com/thorstenkramm/mia/internal/sqlite"
 	"github.com/thorstenkramm/mia/internal/user"
@@ -41,7 +42,7 @@ func main() {
 func newRootCommand() *cobra.Command {
 	command := &cobra.Command{Use: "mia", SilenceUsage: true}
 	config.AddFlags(command.PersistentFlags())
-	command.AddCommand(newServeCommand(), newBootstrapAdminCommand(), unavailableOfflineCommand("reset-admin-mfa"))
+	command.AddCommand(newServeCommand(), newBootstrapAdminCommand(), newResetAdminMFACommand())
 	return command
 }
 
@@ -69,6 +70,66 @@ func newBootstrapAdminCommand() *cobra.Command {
 		}
 		defer func() { returnErr = errors.Join(returnErr, database.Close()) }()
 		return miSQLite.WithTx(command.Context(), database, func(transaction *sql.Tx) error { return bootstrapAdministrator(command.Context(), transaction, input) })
+	}}
+}
+
+func newResetAdminMFACommand() *cobra.Command {
+	return &cobra.Command{Use: "reset-admin-mfa", Args: cobra.NoArgs, RunE: func(command *cobra.Command, _ []string) (returnErr error) {
+		if !term.IsTerminal(int(os.Stdin.Fd())) || !term.IsTerminal(int(os.Stdout.Fd())) {
+			return errors.New("reset-admin-mfa requires an interactive terminal")
+		}
+		configuration, err := config.Load(command.Flags(), false)
+		if err != nil {
+			return err
+		}
+		dataLock, err := lock.Acquire(configuration.Main.DataDir)
+		if err != nil {
+			return err
+		}
+		defer func() { returnErr = errors.Join(returnErr, dataLock.Close()) }()
+		database, err := miSQLite.Open(configuration.Main.DataDir)
+		if err != nil {
+			return err
+		}
+		defer func() { returnErr = errors.Join(returnErr, database.Close()) }()
+		administrator, err := user.SoleAdministrator(command.Context(), database)
+		if err != nil {
+			return err
+		}
+		hasMFA, err := auth.HasMFA(command.Context(), database, administrator.ID)
+		if err != nil {
+			return err
+		}
+		if !hasMFA {
+			return errors.New("sole administrator has no MFA state to reset")
+		}
+		if _, err := fmt.Fprintf(os.Stdout, "Reset MFA for administrator %s. Type the exact username to continue: ", administrator.Username); err != nil {
+			return err
+		}
+		value, err := bufio.NewReader(os.Stdin).ReadString('\n')
+		if err != nil {
+			return fmt.Errorf("read administrator confirmation: %w", err)
+		}
+		if strings.TrimSpace(value) != administrator.Username {
+			return errors.New("administrator confirmation does not match")
+		}
+		return miSQLite.WithTx(command.Context(), database, func(tx *sql.Tx) error {
+			administrator, err := user.SoleAdministrator(command.Context(), tx)
+			if err != nil {
+				return err
+			}
+			hasMFA, err := auth.HasMFA(command.Context(), tx, administrator.ID)
+			if err != nil {
+				return err
+			}
+			if !hasMFA {
+				return errors.New("sole administrator has no MFA state to reset")
+			}
+			if err := auth.ResetMFA(command.Context(), tx, administrator.ID); err != nil {
+				return err
+			}
+			return audit.Write(command.Context(), tx, audit.ActionOperatorAdministratorMFAReset, "", administrator.ID)
+		})
 	}}
 }
 
@@ -190,14 +251,8 @@ func newServeCommand() *cobra.Command {
 		})
 		deliveries := auth.NewDeliveryManager(database, smtp.New(configuration, logger.Slog()), logger.Slog())
 		defer deliveries.Close()
-		auth.Register(server, authRoutes, database, configuration.Main.PublicURL, deliveries)
+		auth.Register(server, authRoutes, database, configuration.Main.PublicURL, deliveries, sms.Unavailable{})
 		return serve(command.Context(), configuration.HTTP.Listen, configuration.HTTP.SocketGroup, server.Echo, logger)
-	}}
-}
-
-func unavailableOfflineCommand(name string) *cobra.Command {
-	return &cobra.Command{Use: name, Args: cobra.NoArgs, RunE: func(_ *cobra.Command, _ []string) error {
-		return errors.New(name + " is unavailable until the authentication slice is installed")
 	}}
 }
 

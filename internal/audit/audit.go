@@ -28,9 +28,21 @@ const (
 	ActionAuthPasswordResetThrottled         Action = "auth.password_reset.throttled"
 	ActionAuthPasswordResetFailed            Action = "auth.password_reset.failed"
 	ActionAuthPasswordRecoveryAmbiguous      Action = "auth.password_recovery.ambiguous"
+	ActionAuthMFAEnrolled                    Action = "auth.mfa.enrolled"
+	ActionAuthMFADisabled                    Action = "auth.mfa.disabled"
+	ActionAuthMFAReplaced                    Action = "auth.mfa.replaced"
+	ActionAuthMFARecoveryCodeUsed            Action = "auth.mfa.recovery_code.used"
+	ActionAuthMFAChallengeCreated            Action = "auth.mfa.challenge.created"
+	ActionAuthMFAChallengeVerified           Action = "auth.mfa.challenge.verified"
+	ActionAuthMFAChallengeFailed             Action = "auth.mfa.challenge.failed"
+	ActionAuthMFAChallengeReplayed           Action = "auth.mfa.challenge.replayed"
+	ActionAuthMFAChallengeThrottled          Action = "auth.mfa.challenge.throttled"
+	ActionAuthMFAEnrollmentFailed            Action = "auth.mfa.enrollment.failed"
+	ActionAuthMFAEnrollmentThrottled         Action = "auth.mfa.enrollment.throttled"
+	ActionOperatorAdministratorMFAReset      Action = "operator.administrator.mfa_reset"
 )
 
-var actions = map[Action]struct{}{ActionOperatorAdministratorBootstrapped: {}, ActionAuthSessionLoggedIn: {}, ActionAuthSessionLoggedOut: {}, ActionAuthPasswordChanged: {}, ActionAuthSessionFailed: {}, ActionAuthSessionThrottled: {}, ActionAuthPasswordRecoveryRequested: {}, ActionAuthPasswordReset: {}, ActionAuthPasswordRecoveryDeliveryFailed: {}, ActionAuthPasswordRecoveryTimedOut: {}, ActionAuthPasswordRecoveryThrottled: {}, ActionAuthPasswordResetThrottled: {}, ActionAuthPasswordResetFailed: {}, ActionAuthPasswordRecoveryAmbiguous: {}}
+var actions = map[Action]struct{}{ActionOperatorAdministratorBootstrapped: {}, ActionAuthSessionLoggedIn: {}, ActionAuthSessionLoggedOut: {}, ActionAuthPasswordChanged: {}, ActionAuthSessionFailed: {}, ActionAuthSessionThrottled: {}, ActionAuthPasswordRecoveryRequested: {}, ActionAuthPasswordReset: {}, ActionAuthPasswordRecoveryDeliveryFailed: {}, ActionAuthPasswordRecoveryTimedOut: {}, ActionAuthPasswordRecoveryThrottled: {}, ActionAuthPasswordResetThrottled: {}, ActionAuthPasswordResetFailed: {}, ActionAuthPasswordRecoveryAmbiguous: {}, ActionAuthMFAEnrolled: {}, ActionAuthMFADisabled: {}, ActionAuthMFAReplaced: {}, ActionAuthMFARecoveryCodeUsed: {}, ActionAuthMFAChallengeCreated: {}, ActionAuthMFAChallengeVerified: {}, ActionAuthMFAChallengeFailed: {}, ActionAuthMFAChallengeReplayed: {}, ActionAuthMFAChallengeThrottled: {}, ActionAuthMFAEnrollmentFailed: {}, ActionAuthMFAEnrollmentThrottled: {}, ActionOperatorAdministratorMFAReset: {}}
 
 // Write records one registered action in the same transaction as its mutation.
 func Write(ctx context.Context, query miSQLite.Querier, action Action, actorID, subjectID string) error {

@@ -31,12 +31,85 @@ type CreateInput struct {
 }
 
 type Account struct {
-	ID                 string
+	ID, Username       string
 	Email              string
 	PasswordHash       string
 	SecurityGeneration int64
 	MustChangePassword bool
 	Banned             bool
+}
+
+// MFAProfile contains the account data auth needs for MFA flows. user owns
+// these account-record reads even when auth owns the MFA tables.
+type MFAProfile struct {
+	Username, PasswordHash string
+	MustChangePassword     bool
+	VerifiedMobile         string
+}
+
+// LoadMFAProfile returns the account security and verified-mobile state used by MFA.
+func LoadMFAProfile(ctx context.Context, query miSQLite.Querier, id string) (MFAProfile, error) {
+	var profile MFAProfile
+	var gate int
+	var mobile any
+	err := query.QueryRowContext(ctx, `SELECT username, password_hash, must_change_password,
+		CASE WHEN mobile_verified_at IS NOT NULL THEN mobile END FROM users WHERE id = ?`, id).
+		Scan(&profile.Username, &profile.PasswordHash, &gate, &mobile)
+	if err != nil {
+		return MFAProfile{}, fmt.Errorf("load MFA profile: %w", err)
+	}
+	profile.MustChangePassword = gate != 0
+	if mobile != nil {
+		value, ok := mobile.(string)
+		if !ok {
+			return MFAProfile{}, errors.New("verified mobile has an invalid stored type")
+		}
+		profile.VerifiedMobile = value
+	}
+	return profile, nil
+}
+
+// SoleAdministrator returns the only administrator when precisely one exists.
+func SoleAdministrator(ctx context.Context, query miSQLite.Querier) (Account, error) {
+	rows, err := query.QueryContext(ctx, `SELECT u.id, u.username FROM users u JOIN user_roles r ON r.user_id = u.id
+		WHERE r.role = 'administrator' ORDER BY u.id`)
+	if err != nil {
+		return Account{}, fmt.Errorf("list administrators: %w", err)
+	}
+	var accounts []Account
+	for rows.Next() {
+		var account Account
+		if err := rows.Scan(&account.ID, &account.Username); err != nil {
+			return Account{}, fmt.Errorf("scan administrator: %w", err)
+		}
+		accounts = append(accounts, account)
+	}
+	if err := rows.Err(); err != nil {
+		return Account{}, fmt.Errorf("iterate administrators: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return Account{}, fmt.Errorf("close administrator rows: %w", err)
+	}
+	if len(accounts) != 1 {
+		return Account{}, errors.New("exactly one administrator is required")
+	}
+	return accounts[0], nil
+}
+
+// RequirePasswordChangeAfterMFAReset invalidates browser cookies and enables the password gate.
+func RequirePasswordChangeAfterMFAReset(ctx context.Context, query miSQLite.Querier, id string) error {
+	result, err := query.ExecContext(ctx, "UPDATE users SET must_change_password = 1, security_generation = security_generation + 1 WHERE id = ?", id)
+	if err != nil {
+		return fmt.Errorf("require password change after MFA reset: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("count MFA reset user update: %w", err)
+	}
+	if rows != 1 {
+		return errors.New("account missing while resetting MFA")
+	}
+	return nil
 }
 
 // FindStaffForRecovery returns an eligible staff account for a complete username.

@@ -15,9 +15,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/labstack/echo/v5"
 	"github.com/thorstenkramm/mia/internal/httpserver"
 	"github.com/thorstenkramm/mia/internal/identity"
+	"github.com/thorstenkramm/mia/internal/provider/sms"
 	miSQLite "github.com/thorstenkramm/mia/internal/sqlite"
 	"github.com/thorstenkramm/mia/internal/user"
 )
@@ -465,6 +467,185 @@ func TestConcurrentResetProducesOneSuccess(t *testing.T) {
 	}
 }
 
+func TestTOTPEnrollmentLoginAndStepReplay(t *testing.T) {
+	server, database := testServer(t)
+	account := createAccount(t, database, false)
+	csrf := csrfToken(t, server)
+	login := serve(t, server, http.MethodPost, "/api/v1/auth/login", csrf, nil, loginBody("student", "correct horse battery"))
+	session, csrf := authCookies(t, login)
+	enrollment := serve(t, server, http.MethodPost, "/api/v1/users/me/mfa-enrollments", csrf, []*http.Cookie{session}, `{"data":{"type":"mfa-enrollments","attributes":{"method":"totp"}}}`)
+	if enrollment.Code != http.StatusCreated {
+		t.Fatalf("enrollment status=%d body=%s", enrollment.Code, enrollment.Body.String())
+	}
+	var result struct {
+		Data struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(enrollment.Body.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	var secret []byte
+	if err := database.QueryRow("SELECT totp_secret FROM mfa_enrollments WHERE id = ?", result.Data.ID).Scan(&secret); err != nil {
+		t.Fatal(err)
+	}
+	code := totpCode(secret, time.Now().Unix()/30)
+	verified := serve(t, server, http.MethodPost, "/api/v1/users/me/mfa-enrollments/"+result.Data.ID+"/verifications", csrf, []*http.Cookie{session}, `{"data":{"type":"mfa-enrollment-verifications","attributes":{"code":"`+code+`"}}}`)
+	if verified.Code != http.StatusOK {
+		t.Fatalf("verification status=%d body=%s", verified.Code, verified.Body.String())
+	}
+	login = serve(t, server, http.MethodPost, "/api/v1/auth/login", csrf, nil, loginBody("student", "correct horse battery"))
+	if stage(t, login.Body.Bytes()) != "mfa" {
+		t.Fatalf("stage=%q", stage(t, login.Body.Bytes()))
+	}
+	mfaSession, csrf := authCookies(t, login)
+	var challenge struct {
+		Data struct {
+			Attributes struct {
+				Challenge string `json:"mfa_challenge_id"`
+			} `json:"attributes"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(login.Body.Bytes(), &challenge); err != nil {
+		t.Fatal(err)
+	}
+	// Enrollment claims the accepted step, so it cannot immediately authenticate
+	// a login challenge for the same factor.
+	replayed := serve(t, server, http.MethodPost, "/api/v1/auth/mfa-challenges/"+challenge.Data.Attributes.Challenge+"/verifications", csrf, []*http.Cookie{mfaSession}, `{"data":{"type":"mfa-verifications","attributes":{"code":"`+code+`"}}}`)
+	assertCode(t, replayed, http.StatusForbidden, "auth_mfa_step_used")
+	_ = account
+}
+
+func TestMFAChallengeFailuresPersistAndInvalidateAtFive(t *testing.T) {
+	_, database := testServer(t)
+	account := createAccount(t, database, false)
+	secret := []byte("12345678901234567890")
+	challengeID := "mfc_" + uuid.NewString()
+	now := instant(time.Now())
+	if _, err := database.Exec(`INSERT INTO mfa_factors (user_id, method, totp_secret, created_at) VALUES (?, 'totp', ?, ?)`, account.ID, secret, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`INSERT INTO mfa_challenges (id, user_id, method, expires_at, created_at) VALUES (?, ?, 'totp', ?, ?)`, challengeID, account.ID, instant(time.Now().Add(time.Minute)), now); err != nil {
+		t.Fatal(err)
+	}
+	for attempt := 1; attempt <= 5; attempt++ {
+		code, _, err := verifyLiveChallenge(context.Background(), database, account.ID, challengeID, "000000")
+		if err != nil || code != httpserver.CodeInvalidMFACode {
+			t.Fatalf("attempt %d code=%q err=%v", attempt, code, err)
+		}
+	}
+	var remaining, failures int
+	if err := database.QueryRow("SELECT COUNT(*), COALESCE(MAX(failures), 0) FROM mfa_challenges WHERE id = ?", challengeID).Scan(&remaining, &failures); err != nil {
+		t.Fatal(err)
+	}
+	if remaining != 0 || failures != 0 {
+		t.Fatalf("remaining challenge/failures = %d/%d", remaining, failures)
+	}
+	assertAuditCount(t, database, "auth.mfa.challenge.failed", 5)
+}
+
+func TestInvalidRecoveryCodeCountsAsChallengeFailure(t *testing.T) {
+	server, database := testServer(t)
+	account := createAccount(t, database, false)
+	challengeID := "mfc_" + uuid.NewString()
+	if _, err := database.Exec(`INSERT INTO mfa_factors (user_id, method, totp_secret, created_at) VALUES (?, 'totp', ?, ?)`, account.ID, []byte("12345678901234567890"), instant(time.Now())); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`INSERT INTO mfa_challenges (id, user_id, method, expires_at, created_at) VALUES (?, ?, 'totp', ?, ?)`, challengeID, account.ID, instant(time.Now().Add(time.Minute)), instant(time.Now())); err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "http://mia.test/", nil)
+	recorder := httptest.NewRecorder()
+	context := server.Echo.NewContext(request, recorder)
+	if err := server.StartMFASession(context, account.ID, account.SecurityGeneration, challengeID, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	response := serve(t, server, http.MethodPost, "/api/v1/auth/mfa-challenges/"+challengeID+"/recovery-code-consumptions", csrfToken(t, server), []*http.Cookie{sessionCookie(t, recorder)}, `{"data":{"type":"mfa-recovery-code-consumptions","attributes":{"code":"invalid"}}}`)
+	assertCode(t, response, http.StatusUnprocessableEntity, "auth_invalid_recovery_code")
+	var failures int
+	if err := database.QueryRow("SELECT failures FROM mfa_challenges WHERE id = ?", challengeID).Scan(&failures); err != nil {
+		t.Fatal(err)
+	}
+	if failures != 1 {
+		t.Fatalf("recovery-code failures=%d", failures)
+	}
+}
+
+func TestMFAVerificationPrecedesPasswordChange(t *testing.T) {
+	_, database := testServer(t)
+	account := createAccount(t, database, true)
+	secret := []byte("12345678901234567890")
+	challengeID := "mfc_" + uuid.NewString()
+	if _, err := database.Exec(`INSERT INTO mfa_factors (user_id, method, totp_secret, created_at) VALUES (?, 'totp', ?, ?)`, account.ID, secret, instant(time.Now())); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`INSERT INTO mfa_challenges (id, user_id, method, expires_at, created_at) VALUES (?, ?, 'totp', ?, ?)`, challengeID, account.ID, instant(time.Now().Add(time.Minute)), instant(time.Now())); err != nil {
+		t.Fatal(err)
+	}
+	code, transition, err := verifyLiveChallenge(context.Background(), database, account.ID, challengeID, totpCode(secret, time.Now().Unix()/30))
+	if err != nil || code != "" || transition != "password-change" {
+		t.Fatalf("verification code=%q transition=%q err=%v", code, transition, err)
+	}
+}
+
+func TestSMSEnrollmentDeliversAndVerifiesOneCode(t *testing.T) {
+	sender := &smsRecorder{}
+	server, database := testServerWithSMS(t, sender)
+	account := createAccount(t, database, false)
+	if _, err := database.Exec("UPDATE users SET mobile = ?, mobile_verified_at = ? WHERE id = ?", "+49123456789", instant(time.Now()), account.ID); err != nil {
+		t.Fatal(err)
+	}
+	csrf := csrfToken(t, server)
+	login := serve(t, server, http.MethodPost, "/api/v1/auth/login", csrf, nil, loginBody("student", "correct horse battery"))
+	session, csrf := authCookies(t, login)
+	enrollment := serve(t, server, http.MethodPost, "/api/v1/users/me/mfa-enrollments", csrf, []*http.Cookie{session}, `{"data":{"type":"mfa-enrollments","attributes":{"method":"sms"}}}`)
+	if enrollment.Code != http.StatusCreated {
+		t.Fatalf("SMS enrollment=%d %s", enrollment.Code, enrollment.Body.String())
+	}
+	var result struct {
+		Data struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(enrollment.Body.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	code := sender.last(t)
+	verified := serve(t, server, http.MethodPost, "/api/v1/users/me/mfa-enrollments/"+result.Data.ID+"/verifications", csrf, []*http.Cookie{session}, `{"data":{"type":"mfa-enrollment-verifications","attributes":{"code":"`+code+`"}}}`)
+	if verified.Code != http.StatusOK {
+		t.Fatalf("SMS verification=%d %s", verified.Code, verified.Body.String())
+	}
+	var method, destination string
+	if err := database.QueryRow("SELECT method, sms_destination FROM mfa_factors WHERE user_id = ?", account.ID).Scan(&method, &destination); err != nil {
+		t.Fatal(err)
+	}
+	if method != "sms" || destination != "+49123456789" {
+		t.Fatalf("SMS factor=%q/%q", method, destination)
+	}
+}
+
+type smsRecorder struct {
+	mu    sync.Mutex
+	codes []string
+}
+
+func (recorder *smsRecorder) Send(_ context.Context, _ string, code string) error {
+	recorder.mu.Lock()
+	defer recorder.mu.Unlock()
+	recorder.codes = append(recorder.codes, code)
+	return nil
+}
+
+func (recorder *smsRecorder) last(t *testing.T) string {
+	t.Helper()
+	recorder.mu.Lock()
+	defer recorder.mu.Unlock()
+	if len(recorder.codes) == 0 {
+		t.Fatal("SMS sender received no code")
+	}
+	return recorder.codes[len(recorder.codes)-1]
+}
+
 type mailRecorder struct {
 	mu        sync.Mutex
 	links     []string
@@ -537,10 +718,18 @@ func assertAuditCount(t *testing.T, database *sql.DB, action string, expected in
 }
 
 func testServer(t *testing.T) (*httpserver.Server, *sql.DB) {
-	return testServerWithMailer(t, recoveryMailerFunc(func(context.Context, string, string) error { return nil }))
+	return testServerWithMailerAndSMS(t, recoveryMailerFunc(func(context.Context, string, string) error { return nil }), sms.Unavailable{})
 }
 
 func testServerWithMailer(t *testing.T, mailer recoveryMailer) (*httpserver.Server, *sql.DB) {
+	return testServerWithMailerAndSMS(t, mailer, sms.Unavailable{})
+}
+
+func testServerWithSMS(t *testing.T, sender sms.Sender) (*httpserver.Server, *sql.DB) {
+	return testServerWithMailerAndSMS(t, recoveryMailerFunc(func(context.Context, string, string) error { return nil }), sender)
+}
+
+func testServerWithMailerAndSMS(t *testing.T, mailer recoveryMailer, sender sms.Sender) (*httpserver.Server, *sql.DB) {
 	t.Helper()
 	directory := t.TempDir()
 	docRoot := filepath.Join(directory, "public")
@@ -572,7 +761,7 @@ func testServerWithMailer(t *testing.T, mailer recoveryMailer) (*httpserver.Serv
 	})
 	deliveries := NewDeliveryManager(database, mailer, nil)
 	t.Cleanup(deliveries.Close)
-	Register(server, routes, database, "https://mia.test", deliveries)
+	Register(server, routes, database, "https://mia.test", deliveries, sender)
 	return server, database
 }
 

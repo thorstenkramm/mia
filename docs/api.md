@@ -282,6 +282,29 @@ It is valid for five minutes and one MFA disable or replacement. The mutation
 consumes it atomically. Password, MFA, ban-state, or account-state changes
 invalidate all outstanding MFA challenges and management proofs for the user.
 
+### MFA request resources
+
+`POST /api/v1/users/me/mfa-enrollments` accepts an `mfa-enrollments` resource
+with `method`. TOTP enrollment returns an `mfa-enrollments` resource containing
+the provisioning URI. SMS enrollment is unavailable until ClickSend and verified
+profile-mobile support are configured. Verification accepts an
+`mfa-enrollment-verifications` resource with `code`; success returns exactly ten
+`mfa-recovery-codes` once. Codes are 16-character uppercase Crockford Base32
+values and cannot be retrieved again.
+
+MFA challenge verification accepts `mfa-verifications` with `code`; recovery
+consumption accepts `mfa-recovery-code-consumptions` with `code`. Both require a
+matching `mfa` session cookie and challenge ID. Invalid values return
+`auth_invalid_mfa_code` or `auth_invalid_recovery_code`; replayed TOTP steps
+return `auth_mfa_step_used`.
+
+`POST /api/v1/auth/mfa-management-proofs` accepts an
+`mfa-management-proofs` resource with the current password and MFA `code`. It
+returns an opaque UUID proof. Supplying that proof in `X-MFA-Management-Proof`
+allows one factor disable through `DELETE /api/v1/users/me/mfa-enrollments/{id}`
+or one replacement enrollment. A missing, expired, or consumed proof returns
+`auth_mfa_proof_required`.
+
 ## Invitations
 
 Authenticated invitation management uses stable invitation IDs:
@@ -372,6 +395,9 @@ content headers, a strong content ETag, and `Cache-Control: private, no-cache`.
 These routes do not create a generic administrator override. Each operation
 enforces its role, course, student, and protected-field rules. Student
 provisioning and course membership use the course routes below.
+
+`POST /api/v1/users/{id}/mfa-resets` is deferred until story 1-8 supplies the
+course-membership authorization required for student-only and staff reset paths.
 
 Every user can retrieve self. Assigned supervisors can list students and staff
 relationships in assigned courses. Mentors receive only minimal identity —

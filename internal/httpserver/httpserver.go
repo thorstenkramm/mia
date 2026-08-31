@@ -116,6 +116,21 @@ func (server *Server) CheckReset(c *echo.Context, token string) Result {
 	return challenge
 }
 
+// CheckMFA consumes MFA verification limits for both account and source IP.
+func (server *Server) CheckMFA(c *echo.Context, accountID string) Result {
+	key, err := AccountKey(accountID)
+	if err != nil {
+		key = "account:invalid"
+	}
+	now := time.Now()
+	ip := server.limiter.Check(LimitMFAIP, server.resolver.Resolve(c.Request()), now)
+	account := server.limiter.Check(LimitMFAAccount, key, now)
+	if !ip.Allowed {
+		return ip
+	}
+	return account
+}
+
 // IdentityState is the database-authoritative state needed to validate a browser session.
 type IdentityState struct {
 	SecurityGeneration         int64
@@ -146,10 +161,23 @@ func (registrar AuthRouteRegistrar) POST(path, stage string, next echo.HandlerFu
 	registrar.server.authenticatedPOST(path, stage, next)
 }
 
+// DELETE registers an auth route and centrally validates its allowed login stage.
+func (registrar AuthRouteRegistrar) DELETE(path, stage string, next echo.HandlerFunc) {
+	if stage != "authenticated" && stage != "mfa" && stage != "password-change" && stage != "any" {
+		panic("invalid auth route stage")
+	}
+	registrar.server.authenticatedDELETE(path, stage, next)
+}
+
 // StartSession creates a new login-stage cookie. It is used after successful
 // login and stage transitions, each of which starts with a fresh CSRF token.
 func (server *Server) StartSession(c *echo.Context, userID string, generation int64, stage string, now time.Time) error {
-	return saveSession(c, server.Sessions, userID, generation, stage, now)
+	return saveSession(c, server.Sessions, userID, generation, stage, "", now)
+}
+
+// StartMFASession creates the restricted MFA stage bound to one server-side challenge.
+func (server *Server) StartMFASession(c *echo.Context, userID string, generation int64, challengeID string, now time.Time) error {
+	return saveSession(c, server.Sessions, userID, generation, "mfa", challengeID, now)
 }
 
 // TransitionSession moves the validated current session to another stage.
@@ -159,7 +187,7 @@ func (server *Server) TransitionSession(c *echo.Context, stage string, now time.
 	if !userOK || !generationOK || userID == "" || generation == 0 {
 		return NewError(CodeUnauthenticated)
 	}
-	return saveSession(c, server.Sessions, userID, generation, stage, now)
+	return saveSession(c, server.Sessions, userID, generation, stage, "", now)
 }
 
 // EndSession clears the validated current browser session.
@@ -168,7 +196,15 @@ func (server *Server) EndSession(c *echo.Context) error {
 }
 
 func (server *Server) authenticatedPOST(path, stage string, next echo.HandlerFunc) {
-	server.Echo.POST(path, func(c *echo.Context) error {
+	server.authenticated(path, stage, next, server.Echo.POST)
+}
+
+func (server *Server) authenticatedDELETE(path, stage string, next echo.HandlerFunc) {
+	server.authenticated(path, stage, next, server.Echo.DELETE)
+}
+
+func (server *Server) authenticated(path, stage string, next echo.HandlerFunc, register func(string, echo.HandlerFunc, ...echo.MiddlewareFunc) echo.RouteInfo) {
+	register(path, func(c *echo.Context) error {
 		if server.identityLoader == nil {
 			return NewError(CodeInternalError)
 		}
@@ -200,7 +236,9 @@ func (server *Server) authenticatedPOST(path, stage string, next echo.HandlerFun
 			}
 			return NewError(CodePasswordChangeRequired)
 		}
-		if state.MustChangePassword && stage != "password-change" && stage != "any" {
+		// MFA always precedes password replacement. A password gate therefore must
+		// not block the challenge-bound MFA actions that advance to that gate.
+		if state.MustChangePassword && stage != "password-change" && stage != "any" && (stage != "mfa" || current != "mfa") {
 			return NewError(CodePasswordChangeRequired)
 		}
 		if stage != "any" && current != stage && (stage != "password-change" || !state.MustChangePassword || current != "authenticated") {
@@ -209,6 +247,9 @@ func (server *Server) authenticatedPOST(path, stage string, next echo.HandlerFun
 		c.Set("mia.auth.user_id", userID)
 		c.Set("mia.auth.security_generation", generation)
 		c.Set("mia.auth.stage", current)
+		if challengeID, ok := session.Values["mfa_challenge_id"].(string); ok {
+			c.Set("mia.auth.mfa_challenge_id", challengeID)
+		}
 		response, unwrapErr := echo.UnwrapResponse(c.Response())
 		if unwrapErr != nil {
 			return fmt.Errorf("unwrap authenticated response: %w", unwrapErr)
@@ -234,7 +275,7 @@ func (server *Server) clearedStageError(c *echo.Context, stage string) error {
 	return NewError(CodeUnauthenticated)
 }
 
-func saveSession(c *echo.Context, store *sessions.CookieStore, userID string, generation int64, stage string, now time.Time) error {
+func saveSession(c *echo.Context, store *sessions.CookieStore, userID string, generation int64, stage, challengeID string, now time.Time) error {
 	session, err := store.New(c.Request(), "__Host-mia_session")
 	if err != nil {
 		return err
@@ -246,6 +287,9 @@ func saveSession(c *echo.Context, store *sessions.CookieStore, userID string, ge
 	session.Values["user_id"] = userID
 	session.Values["stage"] = stage
 	session.Values["security_generation"] = generation
+	if challengeID != "" {
+		session.Values["mfa_challenge_id"] = challengeID
+	}
 	session.Values["expires_at"] = expires.Unix()
 	idleUntil := now.Add(30 * time.Minute)
 	if idleUntil.After(expires) {

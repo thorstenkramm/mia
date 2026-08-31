@@ -2,9 +2,9 @@
 title: 'Multi-factor authentication'
 type: 'feature'
 created: '2026-08-31'
-status: 'in-progress'
-baseline_commit: '770b75a'
-review_loop_iteration: 0
+status: 'done'
+baseline_commit: 'e10cec0'
+review_loop_iteration: 1
 context:
   - '{project-root}/AGENTS.md'
   - '{project-root}/_bmad-output/specs/spec-mia/SPEC.md'
@@ -98,24 +98,24 @@ Note: Student and staff HTTP MFA reset routes are deferred to story 1-8 when cou
 
 **Execution:**
 
-- [ ] `migrations/000004_mfa.up.sql` -- add MFA schema: pending enrollments, login challenges, management proofs,
+- [x] `migrations/000004_mfa.up.sql` -- add MFA schema: pending enrollments, login challenges, management proofs,
   recovery codes (digest-only), user MFA columns.
-- [ ] `internal/auth/mfa.go` -- implement TOTP verification (RFC 6238), recovery-code generation (Crockford Base32),
+- [x] `internal/auth/mfa.go` -- implement TOTP verification (RFC 6238), recovery-code generation (Crockford Base32),
   step-replay tracking, digest comparison.
-- [ ] `internal/auth/auth.go` -- extend login for MFA stage creation, add enrollment routes (POST, verification,
+- [x] `internal/auth/auth.go` -- extend login for MFA stage creation, add enrollment routes (POST, verification,
   resend, DELETE), add login challenge routes (verification, resend, recovery-code), add sensitive-action proof route,
   add factor disable/replace logic.
-- [ ] `internal/user/user.go` -- add MFA column management, recovery-code storage/consumption, security-generation
+- [x] `internal/user/user.go` -- add MFA account-reset support and security-generation
   increment for resets.
-- [ ] `internal/httpserver/errors.go` and `internal/audit/audit.go` -- register MFA error codes and audit actions.
-- [ ] `internal/httpserver/limit.go` -- add MFA-specific rate limits.
-- [ ] `cmd/mia/reset_admin_mfa.go` -- implement offline `reset-admin-mfa` command with lock, sole-admin check,
+- [x] `internal/httpserver/errors.go` and `internal/audit/audit.go` -- register MFA error codes and audit actions.
+- [x] `internal/httpserver/limit.go` -- add MFA-specific rate limits.
+- [x] `cmd/mia/main.go` -- implement offline `reset-admin-mfa` command with lock, sole-admin check,
   interactive confirmation.
-- [ ] `cmd/mia/main.go` -- wire MFA routes and dependencies.
-- [ ] `docs/api.md` -- document MFA routes, stages, and error responses.
-- [ ] `internal/auth/mfa_test.go` and `internal/auth/auth_test.go` -- comprehensive tests for TOTP algorithm, enrollment
+- [x] `cmd/mia/main.go` -- wire MFA routes and dependencies.
+- [x] `docs/api.md` -- document MFA routes, stages, and error responses.
+- [x] `internal/auth/mfa_test.go` and `internal/auth/auth_test.go` -- tests for TOTP algorithm, enrollment
   lifecycle, login challenge flow, proof consumption, recovery codes, reset paths, rate limits, step-replay.
-- [ ] SMS provider stub or interface -- define the SMS interface; full ClickSend implementation may be deferred to a
+- [x] SMS provider stub or interface -- define the SMS interface; full ClickSend implementation may be deferred to a
   later story.
 
 **Acceptance Criteria:**
@@ -134,3 +134,18 @@ Note: Student and staff HTTP MFA reset routes are deferred to story 1-8 when cou
   audit records.
 
 Note: Student/staff HTTP MFA reset acceptance criteria are deferred to story 1-8.
+
+## Review Findings
+
+- [x] #3 MFA-stage verification remains reachable when password replacement is required and transitions to that stage.
+- [x] #4 Failed challenge, enrollment, and recovery-code submissions persist their failure state before returning.
+- [x] #5 Management-proof TOTP verification atomically advances the accepted factor step.
+- [x] #6 TOTP enrollment stores the accepted step as the active factor replay boundary.
+- [x] #7 SMS enrollment, login challenges, resends, immutable destinations, and durable send reservations are implemented.
+- [x] #8 Management proofs accept active-factor verification or atomically consumed recovery codes.
+- [x] #9 MFA disable invalidates every remaining management proof and challenge in its mutation transaction.
+- [x] #10 MFA failure, replay, and throttle outcomes write content-free audit events.
+- [x] #11 Regression coverage includes password-gated MFA transition, failure invalidation, and replay boundaries.
+- [x] #12 MFA throttles preserve `Retry-After` in the response.
+- [x] #13 Starting enrollment clears expired pending state before the unique enrollment insert.
+- [x] #14 Account-record reads in MFA flows use transaction-aware `user` package APIs.

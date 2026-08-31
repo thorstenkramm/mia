@@ -27,6 +27,13 @@ const (
 	CodeRequestTooLarge        Code = "auth_request_too_large"
 	CodeUnsupportedMediaType   Code = "auth_unsupported_media_type"
 	CodeInvalidResetToken      Code = "auth_invalid_reset_token"
+	CodeMFARequired            Code = "auth_mfa_required"
+	CodeInvalidMFACode         Code = "auth_invalid_mfa_code"
+	CodeMFAStepUsed            Code = "auth_mfa_step_used"
+	CodeInvalidRecoveryCode    Code = "auth_invalid_recovery_code"
+	CodeMFAChallengeExpired    Code = "auth_mfa_challenge_expired"
+	CodeMFAProofRequired       Code = "auth_mfa_proof_required"
+	CodeMFAUnavailable         Code = "auth_mfa_unavailable"
 )
 
 type definition struct {
@@ -49,6 +56,13 @@ var errorRegistry = map[Code]definition{
 	CodeRequestTooLarge:        {http.StatusRequestEntityTooLarge, "Request Too Large", "The request could not be completed."},
 	CodeUnsupportedMediaType:   {http.StatusUnsupportedMediaType, "Unsupported Media Type", "The request could not be completed."},
 	CodeInvalidResetToken:      {http.StatusUnprocessableEntity, "Invalid Reset Token", "The request could not be completed."},
+	CodeMFARequired:            {http.StatusForbidden, "MFA Required", "The request could not be completed."},
+	CodeInvalidMFACode:         {http.StatusUnprocessableEntity, "Invalid MFA Code", "The request could not be completed."},
+	CodeMFAStepUsed:            {http.StatusForbidden, "MFA Step Used", "The request could not be completed."},
+	CodeInvalidRecoveryCode:    {http.StatusUnprocessableEntity, "Invalid Recovery Code", "The request could not be completed."},
+	CodeMFAChallengeExpired:    {http.StatusUnprocessableEntity, "MFA Challenge Expired", "The request could not be completed."},
+	CodeMFAProofRequired:       {http.StatusUnprocessableEntity, "MFA Proof Required", "The request could not be completed."},
+	CodeMFAUnavailable:         {http.StatusUnprocessableEntity, "MFA Unavailable", "The request could not be completed."},
 }
 
 // Error is a registered domain error translated centrally to a JSON:API response.
