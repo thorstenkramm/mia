@@ -3,7 +3,7 @@ description: >-
   Adversarial, read-only code review of exactly one MIA story via
   bmad-code-review on GPT-5.6 Sol. Dispatched by epic-solver only.
 mode: subagent
-model: openai/gpt-5.6-sol
+model: openai/gpt-5.6-terra
 permission:
   edit: deny
 ---

@@ -3,7 +3,7 @@ description: >-
   Implements exactly one MIA story via bmad-build on GPT-5.6 Terra. Supports
   implement, fix, and commit modes. Dispatched by epic-solver only.
 mode: subagent
-model: openai/gpt-5.6-terra
+model: openai/gpt-5.6-sol
 ---
 
 # Epic Worker
