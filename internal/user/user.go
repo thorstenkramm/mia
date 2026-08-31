@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -13,7 +14,14 @@ import (
 	miSQLite "github.com/thorstenkramm/mia/internal/sqlite"
 )
 
-var ErrAdministratorExists = errors.New("administrator already exists")
+var (
+	ErrAdministratorExists     = errors.New("administrator already exists")
+	ErrUsernameTaken           = errors.New("username already taken")
+	ErrRoleInvalid             = errors.New("invalid role")
+	ErrRoleActorRequired       = errors.New("role grant actor is required")
+	ErrRoleActorUnauthorized   = errors.New("role grant actor is not authorized")
+	ErrRoleRecipientIneligible = errors.New("role recipient does not meet staff role requirements")
+)
 
 type Role string
 
@@ -195,6 +203,9 @@ func Create(ctx context.Context, query miSQLite.Querier, input CreateInput) (Acc
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, id, input.Username, usernameKey, nullable(email), nullable(emailKey), verified,
 		input.PasswordHash, language, country, timeZone, now)
 	if err != nil {
+		if isUsernameUniqueViolation(err) {
+			return Account{}, ErrUsernameTaken
+		}
 		return Account{}, fmt.Errorf("create user: %w", err)
 	}
 	for _, role := range roles {
@@ -258,35 +269,48 @@ func ChangePassword(ctx context.Context, query miSQLite.Querier, userID, hash st
 }
 
 // GrantRole idempotently grants a permanent role while enforcing account-level invariants.
+// Returns ErrRoleActorUnauthorized when the actor lacks the required role (403).
+// Returns ErrRoleRecipientIneligible for both missing and ineligible targets (404) to avoid
+// existence leaks per AD-4.
 func GrantRole(ctx context.Context, query miSQLite.Querier, userID string, role Role, grantedBy string) error {
 	if role != Administrator && role != Supervisor && role != Mentor {
-		return errors.New("invalid role")
+		return ErrRoleInvalid
 	}
 	if grantedBy == "" {
-		return errors.New("role grant actor is required")
+		return ErrRoleActorRequired
 	}
-	var authorized int
-	requiredRole := Supervisor
+	requiredRole := string(Supervisor)
 	if role == Administrator || role == Supervisor {
-		requiredRole = Administrator
+		requiredRole = string(Administrator)
 	}
+	// First check actor authorization independently - this determines 403 vs 404.
+	var authorized int
 	if err := query.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM user_roles WHERE user_id = ? AND role = ?)", grantedBy, requiredRole).Scan(&authorized); err != nil {
-		return fmt.Errorf("load role grant actor: %w", err)
+		return fmt.Errorf("check role grant actor: %w", err)
 	}
 	if authorized == 0 {
-		return errors.New("role grant actor is not authorized")
+		return ErrRoleActorUnauthorized
 	}
-	var verified any
-	var banned int
-	var staff int
-	if err := query.QueryRowContext(ctx, "SELECT email_verified_at, is_banned FROM users WHERE id = ?", userID).Scan(&verified, &banned); err != nil {
-		return fmt.Errorf("load role recipient: %w", err)
+	// Now check target existence and eligibility in one scoped query.
+	// Returns 1 if eligible, 0 if exists but ineligible, no rows if not found.
+	// We return the same error for not-found and ineligible to avoid existence leak.
+	var eligible int
+	err := query.QueryRowContext(ctx, `
+		SELECT CASE
+			WHEN u.email_verified_at IS NOT NULL AND u.is_banned = 0
+				AND EXISTS(SELECT 1 FROM user_roles r WHERE r.user_id = u.id AND r.role IN ('administrator', 'supervisor', 'mentor'))
+			THEN 1 ELSE 0
+		END AS eligible
+		FROM users u
+		WHERE u.id = ?`, userID).Scan(&eligible)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrRoleRecipientIneligible
 	}
-	if err := query.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM user_roles WHERE user_id = ? AND role IN ('administrator', 'supervisor', 'mentor'))", userID).Scan(&staff); err != nil {
-		return fmt.Errorf("check role recipient staff status: %w", err)
+	if err != nil {
+		return fmt.Errorf("check role grant recipient: %w", err)
 	}
-	if verified == nil || banned != 0 || staff == 0 {
-		return errors.New("role recipient does not meet staff role requirements")
+	if eligible == 0 {
+		return ErrRoleRecipientIneligible
 	}
 	now := instant(time.Now())
 	if _, err := query.ExecContext(ctx, "INSERT OR IGNORE INTO user_roles (user_id, role, granted_at, granted_by) VALUES (?, ?, ?, ?)", userID, role, now, nullable(grantedBy)); err != nil {
@@ -329,4 +353,47 @@ func nullable(value string) any {
 		return nil
 	}
 	return value
+}
+
+// EmailExists checks if a user with the given normalized email key exists.
+func EmailExists(ctx context.Context, query miSQLite.Querier, emailKey string) (bool, error) {
+	var exists int
+	if err := query.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM users WHERE email_key = ?)", emailKey).Scan(&exists); err != nil {
+		return false, fmt.Errorf("check email existence: %w", err)
+	}
+	return exists != 0, nil
+}
+
+// isUsernameUniqueViolation checks if the error is a SQLite UNIQUE constraint violation
+// on the username_key column.
+func isUsernameUniqueViolation(err error) bool {
+	if err == nil {
+		return false
+	}
+	errStr := err.Error()
+	return strings.Contains(errStr, "UNIQUE constraint failed: users.username_key") ||
+		strings.Contains(errStr, "UNIQUE constraint failed") && strings.Contains(errStr, "username_key")
+}
+
+// HasRole checks if a user has a specific role.
+func HasRole(ctx context.Context, query miSQLite.Querier, userID string, role Role) (bool, error) {
+	var exists int
+	if err := query.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM user_roles WHERE user_id = ? AND role = ?)", userID, string(role)).Scan(&exists); err != nil {
+		return false, fmt.Errorf("check role: %w", err)
+	}
+	return exists != 0, nil
+}
+
+// HasAnyRole checks if a user has any of the specified roles.
+func HasAnyRole(ctx context.Context, query miSQLite.Querier, userID string, roles ...Role) (bool, error) {
+	for _, role := range roles {
+		has, err := HasRole(ctx, query, userID, role)
+		if err != nil {
+			return false, err
+		}
+		if has {
+			return true, nil
+		}
+	}
+	return false, nil
 }

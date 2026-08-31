@@ -3,6 +3,7 @@ package audit
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -40,12 +41,82 @@ const (
 	ActionAuthMFAEnrollmentFailed            Action = "auth.mfa.enrollment.failed"
 	ActionAuthMFAEnrollmentThrottled         Action = "auth.mfa.enrollment.throttled"
 	ActionOperatorAdministratorMFAReset      Action = "operator.administrator.mfa_reset"
+
+	ActionInvitationInvitationCreated           Action = "invitation.invitation.created"
+	ActionInvitationInvitationCreationDenied    Action = "invitation.invitation.creation_denied"
+	ActionInvitationInvitationAccepted          Action = "invitation.invitation.accepted"
+	ActionInvitationInvitationRevoked           Action = "invitation.invitation.revoked"
+	ActionInvitationInvitationRevocationDenied  Action = "invitation.invitation.revocation_denied"
+	ActionInvitationInvitationResent            Action = "invitation.invitation.resent"
+	ActionInvitationInvitationResendDenied      Action = "invitation.invitation.resend_denied"
+	ActionInvitationInvitationMarkedFaulty      Action = "invitation.invitation.marked_faulty"
+	ActionInvitationInvitationFaultyDeleted     Action = "invitation.invitation.faulty_deleted"
+	ActionInvitationInvitationDeliveryTimeout   Action = "invitation.invitation.delivery_timeout"
+	ActionInvitationInvitationDeliveryAmbiguous Action = "invitation.invitation.delivery_ambiguous"
+	ActionInvitationInvitationDelivered         Action = "invitation.invitation.delivered"
+
+	ActionUserUserRoleGranted     Action = "user.user.role_granted"
+	ActionUserUserRoleGrantDenied Action = "user.user.role_grant_denied"
 )
 
-var actions = map[Action]struct{}{ActionOperatorAdministratorBootstrapped: {}, ActionAuthSessionLoggedIn: {}, ActionAuthSessionLoggedOut: {}, ActionAuthPasswordChanged: {}, ActionAuthSessionFailed: {}, ActionAuthSessionThrottled: {}, ActionAuthPasswordRecoveryRequested: {}, ActionAuthPasswordReset: {}, ActionAuthPasswordRecoveryDeliveryFailed: {}, ActionAuthPasswordRecoveryTimedOut: {}, ActionAuthPasswordRecoveryThrottled: {}, ActionAuthPasswordResetThrottled: {}, ActionAuthPasswordResetFailed: {}, ActionAuthPasswordRecoveryAmbiguous: {}, ActionAuthMFAEnrolled: {}, ActionAuthMFADisabled: {}, ActionAuthMFAReplaced: {}, ActionAuthMFARecoveryCodeUsed: {}, ActionAuthMFAChallengeCreated: {}, ActionAuthMFAChallengeVerified: {}, ActionAuthMFAChallengeFailed: {}, ActionAuthMFAChallengeReplayed: {}, ActionAuthMFAChallengeThrottled: {}, ActionAuthMFAEnrollmentFailed: {}, ActionAuthMFAEnrollmentThrottled: {}, ActionOperatorAdministratorMFAReset: {}}
+var actions = map[Action]struct{}{
+	ActionOperatorAdministratorBootstrapped:     {},
+	ActionAuthSessionLoggedIn:                   {},
+	ActionAuthSessionLoggedOut:                  {},
+	ActionAuthPasswordChanged:                   {},
+	ActionAuthSessionFailed:                     {},
+	ActionAuthSessionThrottled:                  {},
+	ActionAuthPasswordRecoveryRequested:         {},
+	ActionAuthPasswordReset:                     {},
+	ActionAuthPasswordRecoveryDeliveryFailed:    {},
+	ActionAuthPasswordRecoveryTimedOut:          {},
+	ActionAuthPasswordRecoveryThrottled:         {},
+	ActionAuthPasswordResetThrottled:            {},
+	ActionAuthPasswordResetFailed:               {},
+	ActionAuthPasswordRecoveryAmbiguous:         {},
+	ActionAuthMFAEnrolled:                       {},
+	ActionAuthMFADisabled:                       {},
+	ActionAuthMFAReplaced:                       {},
+	ActionAuthMFARecoveryCodeUsed:               {},
+	ActionAuthMFAChallengeCreated:               {},
+	ActionAuthMFAChallengeVerified:              {},
+	ActionAuthMFAChallengeFailed:                {},
+	ActionAuthMFAChallengeReplayed:              {},
+	ActionAuthMFAChallengeThrottled:             {},
+	ActionAuthMFAEnrollmentFailed:               {},
+	ActionAuthMFAEnrollmentThrottled:            {},
+	ActionOperatorAdministratorMFAReset:         {},
+	ActionInvitationInvitationCreated:           {},
+	ActionInvitationInvitationCreationDenied:    {},
+	ActionInvitationInvitationAccepted:          {},
+	ActionInvitationInvitationRevoked:           {},
+	ActionInvitationInvitationRevocationDenied:  {},
+	ActionInvitationInvitationResent:            {},
+	ActionInvitationInvitationResendDenied:      {},
+	ActionInvitationInvitationMarkedFaulty:      {},
+	ActionInvitationInvitationFaultyDeleted:     {},
+	ActionInvitationInvitationDeliveryTimeout:   {},
+	ActionInvitationInvitationDeliveryAmbiguous: {},
+	ActionInvitationInvitationDelivered:         {},
+	ActionUserUserRoleGranted:                   {},
+	ActionUserUserRoleGrantDenied:               {},
+}
+
+// Metadata contains typed, content-free audit metadata.
+// Only identifiers and outcome codes are allowed; no tokens, emails, or other sensitive data.
+type Metadata struct {
+	InvitationID string `json:"invitation_id,omitempty"`
+	OutcomeCode  string `json:"outcome_code,omitempty"`
+	Role         string `json:"role,omitempty"`
+}
 
 // Write records one registered action in the same transaction as its mutation.
 func Write(ctx context.Context, query miSQLite.Querier, action Action, actorID, subjectID string) error {
+	return WriteWithMetadata(ctx, query, action, actorID, subjectID, Metadata{})
+}
+
+// WriteWithMetadata records one registered action with typed metadata.
+func WriteWithMetadata(ctx context.Context, query miSQLite.Querier, action Action, actorID, subjectID string, meta Metadata) error {
 	if _, ok := actions[action]; !ok {
 		return fmt.Errorf("unregistered audit action %q", action)
 	}
@@ -53,9 +124,13 @@ func Write(ctx context.Context, query miSQLite.Querier, action Action, actorID, 
 	if err != nil {
 		return err
 	}
+	metaJSON, err := json.Marshal(meta)
+	if err != nil {
+		return fmt.Errorf("marshal audit metadata: %w", err)
+	}
 	_, err = query.ExecContext(ctx, `INSERT INTO audit_events
-		(id, action, actor_user_id, subject_user_id, created_at, metadata) VALUES (?, ?, ?, ?, ?, '{}')`,
-		id, string(action), nullable(actorID), nullable(subjectID), instant(time.Now()))
+		(id, action, actor_user_id, subject_user_id, created_at, metadata) VALUES (?, ?, ?, ?, ?, ?)`,
+		id, string(action), nullable(actorID), nullable(subjectID), instant(time.Now()), string(metaJSON))
 	if err != nil {
 		return fmt.Errorf("write audit event: %w", err)
 	}

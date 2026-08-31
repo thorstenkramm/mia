@@ -34,6 +34,18 @@ const (
 	CodeMFAChallengeExpired    Code = "auth_mfa_challenge_expired"
 	CodeMFAProofRequired       Code = "auth_mfa_proof_required"
 	CodeMFAUnavailable         Code = "auth_mfa_unavailable"
+
+	CodeInvitationNotFound         Code = "invitation_not_found"
+	CodeInvitationInvalid          Code = "invitation_invalid"
+	CodeInvitationEmailRegistered  Code = "invitation_email_registered"
+	CodeInvitationAlreadyAccepted  Code = "invitation_already_accepted"
+	CodeInvitationRoleUnauthorized Code = "invitation_role_unauthorized"
+
+	CodeUserRoleUnauthorized Code = "user_role_unauthorized"
+	CodeUserNotFound         Code = "user_not_found"
+	CodeUsernameTaken        Code = "username_taken"
+
+	CodeInvitationListUnauthorized Code = "invitation_list_unauthorized"
 )
 
 type definition struct {
@@ -63,6 +75,18 @@ var errorRegistry = map[Code]definition{
 	CodeMFAChallengeExpired:    {http.StatusUnprocessableEntity, "MFA Challenge Expired", "The request could not be completed."},
 	CodeMFAProofRequired:       {http.StatusUnprocessableEntity, "MFA Proof Required", "The request could not be completed."},
 	CodeMFAUnavailable:         {http.StatusUnprocessableEntity, "MFA Unavailable", "The request could not be completed."},
+
+	CodeInvitationNotFound:         {http.StatusNotFound, "Not Found", "The requested resource was not found."},
+	CodeInvitationInvalid:          {http.StatusUnprocessableEntity, "Invalid Invitation", "The request could not be completed."},
+	CodeInvitationEmailRegistered:  {http.StatusConflict, "Email Already Registered", "The request could not be completed."},
+	CodeInvitationAlreadyAccepted:  {http.StatusUnprocessableEntity, "Invitation Already Accepted", "The request could not be completed."},
+	CodeInvitationRoleUnauthorized: {http.StatusForbidden, "Unauthorized", "The request could not be completed."},
+
+	CodeUserRoleUnauthorized: {http.StatusForbidden, "Unauthorized", "The request could not be completed."},
+	CodeUserNotFound:         {http.StatusNotFound, "Not Found", "The requested resource was not found."},
+	CodeUsernameTaken:        {http.StatusConflict, "Username Taken", "The request could not be completed."},
+
+	CodeInvitationListUnauthorized: {http.StatusForbidden, "Unauthorized", "The request could not be completed."},
 }
 
 // Error is a registered domain error translated centrally to a JSON:API response.

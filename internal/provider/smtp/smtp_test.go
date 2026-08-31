@@ -109,6 +109,84 @@ func TestSendPasswordRecoveryRejectsHeaderInjection(t *testing.T) {
 	}
 }
 
+// Finding 5: Test SendInvitation header injection rejection.
+func TestSendInvitationRejectsHeaderInjection(t *testing.T) {
+	var configuration config.Config
+	configuration.SMTP.Host = "127.0.0.1"
+	configuration.SMTP.Port = 25
+	configuration.SMTP.Transport = "plaintext"
+	configuration.SMTP.SenderEmail = "mia@example.test"
+
+	cases := []struct {
+		name      string
+		recipient string
+		role      string
+		link      string
+	}{
+		{"newline in recipient", "staff@example.test\r\nBcc: other@example.test", "supervisor", "https://mia.test/invitation"},
+		{"newline in link", "staff@example.test", "supervisor", "https://mia.test/invitation\r\nBcc: other@example.test"},
+		{"newline in role", "staff@example.test", "supervisor\r\nBcc: other", "https://mia.test/invitation"},
+		{"invalid role", "staff@example.test", "hacker", "https://mia.test/invitation"},
+		{"empty role", "staff@example.test", "", "https://mia.test/invitation"},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			err := New(configuration, nil).SendInvitation(context.Background(), testCase.recipient, testCase.role, testCase.link)
+			if err == nil || errors.Is(err, ErrAmbiguous) || errors.Is(err, ErrTimeout) || errors.Is(err, ErrRejected) {
+				t.Fatalf("header injection error = %v", err)
+			}
+		})
+	}
+}
+
+// Finding 5: Test SendInvitation successful delivery.
+func TestSendInvitationPlainText(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := listener.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	messages := make(chan string, 1)
+	go serveSMTP(t, listener, messages)
+	host, port, err := net.SplitHostPort(listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	portNumber, err := strconv.Atoi(port)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var configuration config.Config
+	configuration.SMTP.Host = host
+	configuration.SMTP.Port = portNumber
+	configuration.SMTP.Transport = "plaintext"
+	configuration.SMTP.SenderEmail = "mia@example.test"
+	configuration.SMTP.SenderName = "MIA Support"
+	if err := New(configuration, nil).SendInvitation(context.Background(), "staff@example.test", "supervisor", "https://mia.test/invitation#token=abc123"); err != nil {
+		t.Fatal(err)
+	}
+	message := <-messages
+	if !strings.Contains(message, "Content-Type: text/plain; charset=UTF-8") {
+		t.Fatalf("invitation email lacks Content-Type header: %q", message)
+	}
+	if !strings.Contains(message, "#token=abc123") {
+		t.Fatalf("invitation email lacks invitation link: %q", message)
+	}
+	if !strings.Contains(message, "MIA Support <mia@example.test>") {
+		t.Fatalf("invitation email lacks From header: %q", message)
+	}
+	if !strings.Contains(message, "as supervisor") {
+		t.Fatalf("invitation email lacks role: %q", message)
+	}
+	if !strings.Contains(message, "Date: ") || !strings.Contains(message, "Message-ID: <") || !strings.Contains(message, "@example.test>") {
+		t.Fatalf("invitation email lacks Date or Message-ID headers: %q", message)
+	}
+}
+
 func testConfiguration(t *testing.T, server func(net.Listener)) config.Config {
 	t.Helper()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")

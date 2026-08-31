@@ -23,6 +23,7 @@ import (
 	"github.com/thorstenkramm/mia/internal/config"
 	"github.com/thorstenkramm/mia/internal/httpserver"
 	"github.com/thorstenkramm/mia/internal/identity"
+	"github.com/thorstenkramm/mia/internal/invitation"
 	"github.com/thorstenkramm/mia/internal/lock"
 	"github.com/thorstenkramm/mia/internal/logging"
 	"github.com/thorstenkramm/mia/internal/provider/sms"
@@ -249,9 +250,15 @@ func newServeCommand() *cobra.Command {
 			}
 			return httpserver.IdentityState{SecurityGeneration: account.SecurityGeneration, MustChangePassword: account.MustChangePassword, Banned: account.Banned}, err
 		})
-		deliveries := auth.NewDeliveryManager(database, smtp.New(configuration, logger.Slog()), logger.Slog())
-		defer deliveries.Close()
-		auth.Register(server, authRoutes, database, configuration.Main.PublicURL, deliveries, sms.Unavailable{})
+		recoveryDeliveries := auth.NewDeliveryManager(database, smtp.New(configuration, logger.Slog()), logger.Slog())
+		defer recoveryDeliveries.Close()
+		auth.Register(server, authRoutes, database, configuration.Main.PublicURL, recoveryDeliveries, sms.Unavailable{})
+
+		invitationService := invitation.NewService(database, logger.Slog())
+		invitationDeliveries := invitation.NewDeliveryManager(invitationService, database, smtp.New(configuration, logger.Slog()), logger.Slog())
+		defer invitationDeliveries.Close()
+		invitation.Register(server, invitationService, configuration.Main.PublicURL, invitationDeliveries)
+		invitation.RegisterRoleRoutes(server, database, logger.Slog())
 		return serve(command.Context(), configuration.HTTP.Listen, configuration.HTTP.SocketGroup, server.Echo, logger)
 	}}
 }

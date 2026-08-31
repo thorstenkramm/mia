@@ -142,7 +142,8 @@ func setCommandDeadline(ctx context.Context, connection net.Conn) error {
 		deadline = total
 	}
 	if err := connection.SetDeadline(deadline); err != nil {
-		return fmt.Errorf("set SMTP command deadline: %w", err)
+		// Classify as ambiguous - we couldn't set the deadline, outcome unknown
+		return classifyAmbiguous(err)
 	}
 	return nil
 }
@@ -184,6 +185,107 @@ func fromHeader(name, email string) (string, error) {
 		return email, nil
 	}
 	return mime.QEncoding.Encode("utf-8", name) + " <" + email + ">", nil
+}
+
+// SendInvitation delivers an English-only plain-text invitation link.
+func (client *Client) SendInvitation(ctx context.Context, recipient, role, link string) (returnErr error) {
+	if strings.ContainsAny(recipient, "\r\n") || strings.ContainsAny(role, "\r\n") || strings.ContainsAny(link, "\r\n") {
+		return errors.New("unsafe SMTP message value")
+	}
+	// Validate role to prevent injection of unexpected content.
+	if role != "administrator" && role != "supervisor" && role != "mentor" {
+		return errors.New("unsafe SMTP role value")
+	}
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	dialer := net.Dialer{Timeout: 10 * time.Second}
+	address := net.JoinHostPort(client.configuration.SMTP.Host, fmt.Sprint(client.configuration.SMTP.Port))
+	connection, err := dialer.DialContext(ctx, "tcp", address)
+	if err != nil {
+		return classifyAmbiguous(err)
+	}
+	defer func() {
+		if closeErr := connection.Close(); closeErr != nil && !errors.Is(closeErr, net.ErrClosed) {
+			client.logger.Warn("closing SMTP connection failed")
+		}
+	}()
+	host := client.configuration.SMTP.Host
+	if client.configuration.SMTP.Transport == "implicit_tls" {
+		if err := setCommandDeadline(ctx, connection); err != nil {
+			return err
+		}
+		tlsConnection := tls.Client(connection, &tls.Config{ServerName: host, MinVersion: tls.VersionTLS12})
+		connection = tlsConnection
+		if err := tlsConnection.HandshakeContext(ctx); err != nil {
+			return classifyAmbiguous(err)
+		}
+	}
+	if err := setCommandDeadline(ctx, connection); err != nil {
+		return err
+	}
+	smtpClient, err := stdsmtp.NewClient(connection, host)
+	if err != nil {
+		return classifyAmbiguous(err)
+	}
+	if client.configuration.SMTP.Transport == "starttls" {
+		if err := setCommandDeadline(ctx, connection); err != nil {
+			return err
+		}
+		if err := smtpClient.StartTLS(&tls.Config{ServerName: host, MinVersion: tls.VersionTLS12}); err != nil {
+			return classifyAmbiguous(err)
+		}
+	}
+	if client.configuration.SMTP.Username != "" {
+		if err := setCommandDeadline(ctx, connection); err != nil {
+			return err
+		}
+		authenticator := stdsmtp.PlainAuth("", client.configuration.SMTP.Username, client.configuration.SMTP.Password, host)
+		if client.configuration.SMTP.Transport == "plaintext" {
+			authenticator = plainAuth{username: client.configuration.SMTP.Username, password: client.configuration.SMTP.Password}
+		}
+		if err := smtpClient.Auth(authenticator); err != nil {
+			return classifyRejected(err)
+		}
+	}
+	if err := setCommandDeadline(ctx, connection); err != nil {
+		return err
+	}
+	if err := smtpClient.Mail(client.configuration.SMTP.SenderEmail); err != nil {
+		return classifyRejected(err)
+	}
+	if err := setCommandDeadline(ctx, connection); err != nil {
+		return err
+	}
+	if err := smtpClient.Rcpt(recipient); err != nil {
+		return classifyRejected(err)
+	}
+	if err := setCommandDeadline(ctx, connection); err != nil {
+		return err
+	}
+	writer, err := smtpClient.Data()
+	if err != nil {
+		return classifyRejected(err)
+	}
+	from, err := fromHeader(client.configuration.SMTP.SenderName, client.configuration.SMTP.SenderEmail)
+	if err != nil {
+		return err
+	}
+	message := "From: " + from + "\r\n" +
+		"To: " + recipient + "\r\n" +
+		"Subject: You have been invited to MIA\r\n" +
+		"Date: " + time.Now().UTC().Format(time.RFC1123Z) + "\r\n" +
+		"Message-ID: <" + uuid.NewString() + "@" + messageIDHost(client.configuration.SMTP.SenderEmail) + ">\r\n" +
+		"MIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\n" +
+		"You have been invited to join MIA as " + role + ". Use this link to accept your invitation and create your account:\n\n" +
+		link + "\n\n" +
+		"This invitation does not expire. If you did not expect this invitation, you can ignore this email.\n"
+	if _, err := writer.Write([]byte(message)); err != nil {
+		return classifyAmbiguous(err)
+	}
+	if err := writer.Close(); err != nil {
+		return classifyRejected(err)
+	}
+	return nil
 }
 
 // plainAuth deliberately bypasses net/smtp's refusal to send AUTH PLAIN over

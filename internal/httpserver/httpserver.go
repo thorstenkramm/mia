@@ -131,6 +131,36 @@ func (server *Server) CheckMFA(c *echo.Context, accountID string) Result {
 	return account
 }
 
+// CheckInvitationPreview consumes layered IP and token-digest limits.
+func (server *Server) CheckInvitationPreview(c *echo.Context, token string) Result {
+	key, err := TokenKey(token)
+	if err != nil {
+		key = "token:invalid"
+	}
+	now := time.Now()
+	ip := server.limiter.Check(LimitInvitationIP, server.resolver.Resolve(c.Request()), now)
+	challenge := server.limiter.Check(LimitInvitationToken, key, now)
+	if !ip.Allowed {
+		return ip
+	}
+	return challenge
+}
+
+// CheckInvitationAccept consumes layered IP and token-digest limits.
+func (server *Server) CheckInvitationAccept(c *echo.Context, token string) Result {
+	key, err := TokenKey(token)
+	if err != nil {
+		key = "token:invalid"
+	}
+	now := time.Now()
+	ip := server.limiter.Check(LimitInvitationIP, server.resolver.Resolve(c.Request()), now)
+	challenge := server.limiter.Check(LimitInvitationToken, key, now)
+	if !ip.Allowed {
+		return ip
+	}
+	return challenge
+}
+
 // IdentityState is the database-authoritative state needed to validate a browser session.
 type IdentityState struct {
 	SecurityGeneration         int64
@@ -151,6 +181,16 @@ func (server *Server) SetIdentityLoader(loader IdentityLoader) { server.identity
 // AuthenticatedPOST registers an ordinary protected POST. Ordinary routes always require a full session.
 func (server *Server) AuthenticatedPOST(path string, next echo.HandlerFunc) {
 	server.authenticatedPOST(path, "authenticated", next)
+}
+
+// AuthenticatedGET registers an ordinary protected GET. Ordinary routes always require a full session.
+func (server *Server) AuthenticatedGET(path string, next echo.HandlerFunc) {
+	server.authenticatedGET(path, "authenticated", next)
+}
+
+// AuthenticatedDELETE registers an ordinary protected DELETE. Ordinary routes always require a full session.
+func (server *Server) AuthenticatedDELETE(path string, next echo.HandlerFunc) {
+	server.authenticatedDELETE(path, "authenticated", next)
 }
 
 // POST registers an auth route and centrally validates its allowed login stage.
@@ -197,6 +237,10 @@ func (server *Server) EndSession(c *echo.Context) error {
 
 func (server *Server) authenticatedPOST(path, stage string, next echo.HandlerFunc) {
 	server.authenticated(path, stage, next, server.Echo.POST)
+}
+
+func (server *Server) authenticatedGET(path, stage string, next echo.HandlerFunc) {
+	server.authenticated(path, stage, next, server.Echo.GET)
 }
 
 func (server *Server) authenticatedDELETE(path, stage string, next echo.HandlerFunc) {
