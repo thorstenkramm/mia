@@ -2,7 +2,7 @@
 title: 'Multi-factor authentication'
 type: 'feature'
 created: '2026-08-31'
-status: 'ready-for-dev'
+status: 'in-progress'
 baseline_commit: '770b75a'
 review_loop_iteration: 0
 context:
@@ -39,6 +39,11 @@ force password replacement. Do not log or audit MFA secrets, codes, or recovery-
 **Ask First:** Halt for ClickSend SMS provider integration (story 1-4 implements the SMS MFA logic but may stub the
 provider if ClickSend is deferred), changes to password-change flow, or invitation acceptance MFA scope.
 
+**Deferred:** HTTP MFA reset routes (`POST /api/v1/users/{id}/mfa-resets`) require course membership and scoped
+supervisor authorization that do not exist until story 1-8. This story implements core MFA (enrollment, login
+challenges, proofs, recovery codes, `reset-admin-mfa` command). The HTTP reset routes will be added in story 1-8 when
+the authorization context exists.
+
 **Never:** Do not store TOTP secrets in reversible form after enrollment succeeds. Do not reveal factor existence or
 account state through MFA error responses beyond the documented codes. Do not allow self-MFA-reset for staff. Do not
 create or expose recovery-code regeneration without factor replacement.
@@ -59,9 +64,9 @@ create or expose recovery-code regeneration without factor replacement.
 | Factor disable | Authenticated, active factor, valid mfa-management proof | Remove factor, invalidate recovery codes | 422 without valid proof |
 | Factor replacement start | Authenticated, active factor, mfa-management proof | Create pending new factor (old stays active) | Activation atomically swaps and consumes proof |
 | Sensitive-action proof | Authenticated, current-factor code or recovery code, current password | Return opaque 5-minute single-use proof | 422 on invalid code |
-| Student MFA reset | Supervisor on shared course, student-only account | Remove factor, invalidate codes, increment security gen, force password change | Reject staff targets |
-| Staff MFA reset | Different administrator | Same as student but target is staff | Self-reset rejected |
-| Sole admin MFA reset | `reset-admin-mfa` command, server stopped | Same staff reset via interactive CLI | Reject if multiple admins or server running |
+| Sole admin MFA reset | `reset-admin-mfa` command, server stopped | Remove factor, invalidate codes, increment security gen, force password change | Reject if multiple admins or server running |
+
+Note: Student and staff HTTP MFA reset routes are deferred to story 1-8 when course membership authorization exists.
 
 </frozen-after-approval>
 
@@ -123,9 +128,9 @@ create or expose recovery-code regeneration without factor replacement.
   `auth_mfa_step_used`.
 - Given an active factor, when the user provides current password and valid factor code, then they receive a 5-minute
   mfa-management proof usable exactly once for disable or replacement.
-- Given a student-only account with active MFA, when a supervisor on a shared course requests MFA reset, then the
-  factor and recovery codes are removed, security generation increments, and password replacement is required.
 - Given exactly one administrator with active MFA, when `reset-admin-mfa` runs with correct confirmation while the
   server is stopped, then the factor is removed and password replacement is required.
 - Given any MFA operation, when it completes, then no MFA secrets, codes, or recovery-code values appear in logs or
   audit records.
+
+Note: Student/staff HTTP MFA reset acceptance criteria are deferred to story 1-8.
