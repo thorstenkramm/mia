@@ -188,6 +188,16 @@ func (server *Server) AuthenticatedGET(path string, next echo.HandlerFunc) {
 	server.authenticatedGET(path, "authenticated", next)
 }
 
+// AuthenticatedPATCH registers an ordinary protected PATCH.
+func (server *Server) AuthenticatedPATCH(path string, next echo.HandlerFunc) {
+	server.authenticatedPATCH(path, "authenticated", next)
+}
+
+// AuthenticatedPUT registers an ordinary protected PUT.
+func (server *Server) AuthenticatedPUT(path string, next echo.HandlerFunc) {
+	server.authenticatedPUT(path, "authenticated", next)
+}
+
 // AuthenticatedDELETE registers an ordinary protected DELETE. Ordinary routes always require a full session.
 func (server *Server) AuthenticatedDELETE(path string, next echo.HandlerFunc) {
 	server.authenticatedDELETE(path, "authenticated", next)
@@ -241,6 +251,14 @@ func (server *Server) authenticatedPOST(path, stage string, next echo.HandlerFun
 
 func (server *Server) authenticatedGET(path, stage string, next echo.HandlerFunc) {
 	server.authenticated(path, stage, next, server.Echo.GET)
+}
+
+func (server *Server) authenticatedPATCH(path, stage string, next echo.HandlerFunc) {
+	server.authenticated(path, stage, next, server.Echo.PATCH)
+}
+
+func (server *Server) authenticatedPUT(path, stage string, next echo.HandlerFunc) {
+	server.authenticated(path, stage, next, server.Echo.PUT)
 }
 
 func (server *Server) authenticatedDELETE(path, stage string, next echo.HandlerFunc) {

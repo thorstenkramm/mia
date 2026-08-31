@@ -252,7 +252,11 @@ func newServeCommand() *cobra.Command {
 		})
 		recoveryDeliveries := auth.NewDeliveryManager(database, smtp.New(configuration, logger.Slog()), logger.Slog())
 		defer recoveryDeliveries.Close()
-		auth.Register(server, authRoutes, database, configuration.Main.PublicURL, recoveryDeliveries, sms.Unavailable{})
+		smsSender := sms.New(sms.ClientOptions{Username: configuration.ClickSend.Username,
+			APIKey: configuration.ClickSend.APIKey, SenderID: configuration.ClickSend.SenderID})
+		auth.Register(server, authRoutes, database, configuration.Main.PublicURL, recoveryDeliveries, smsSender)
+		user.RegisterProfileRoutes(server,
+			user.NewService(database, configuration.Main.DataDir, smsSender, auth.InvalidatePendingSMS))
 
 		invitationService := invitation.NewService(database, logger.Slog())
 		invitationDeliveries := invitation.NewDeliveryManager(invitationService, database, smtp.New(configuration, logger.Slog()), logger.Slog())

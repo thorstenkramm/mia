@@ -9,11 +9,11 @@ import (
 	"crypto/subtle"
 	"database/sql"
 	"encoding/base32"
-	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"math/big"
 	"mime"
 	"net/http"
 	"strconv"
@@ -106,7 +106,7 @@ func login(server *httpserver.Server, database *sql.DB, smsSender sms.Sender) ec
 			challengeID = "mfc_" + uuid.NewString()
 			var smsCode string
 			if method == "sms" {
-				if !smsSenderAvailable(smsSender) {
+				if !sms.Available(smsSender) {
 					return httpserver.NewError(httpserver.CodeMFAUnavailable)
 				}
 				smsCode, err = newSMSCode()
@@ -136,7 +136,7 @@ func login(server *httpserver.Server, database *sql.DB, smsSender sms.Sender) ec
 			}
 			if method == "sms" {
 				if err := smsSender.Send(c.Request().Context(), destination, smsCode); err != nil {
-					return httpserver.NewError(httpserver.CodeMFAUnavailable)
+					return mfaDeliveryFailure(c.Request().Context(), database, account.ID)
 				}
 			}
 			stage = "mfa"
@@ -438,6 +438,13 @@ func writeAudit(ctx context.Context, database *sql.DB, action audit.Action, subj
 	return miSQLite.WithTx(ctx, database, func(tx *sql.Tx) error { return audit.Write(ctx, tx, action, "", subjectID) })
 }
 
+func mfaDeliveryFailure(ctx context.Context, database *sql.DB, accountID string) error {
+	if err := writeAudit(ctx, database, audit.ActionAuthMFADeliveryFailed, accountID); err != nil {
+		return err
+	}
+	return httpserver.NewError(httpserver.CodeMFAUnavailable)
+}
+
 func beforeExpiry(value string) (bool, error) {
 	expires, err := time.Parse("2006-01-02T15:04:05.000000Z", value)
 	if err != nil {
@@ -723,7 +730,7 @@ func consumeChallengeRecoveryCode(server *httpserver.Server, database *sql.DB) e
 
 func resendChallenge(_ *httpserver.Server, database *sql.DB, sender sms.Sender) echo.HandlerFunc {
 	return func(c *echo.Context) error {
-		if !smsSenderAvailable(sender) {
+		if !sms.Available(sender) {
 			return httpserver.NewError(httpserver.CodeMFAUnavailable)
 		}
 		accountID, err := authenticatedUser(c)
@@ -772,7 +779,7 @@ func resendChallenge(_ *httpserver.Server, database *sql.DB, sender sms.Sender) 
 			return err
 		}
 		if err := sender.Send(c.Request().Context(), destination, code); err != nil {
-			return httpserver.NewError(httpserver.CodeMFAUnavailable)
+			return mfaDeliveryFailure(c.Request().Context(), database, accountID)
 		}
 		return c.NoContent(http.StatusNoContent)
 	}
@@ -900,7 +907,7 @@ func startEnrollment(_ *httpserver.Server, database *sql.DB, publicURL string, s
 			return httpserver.NewError(httpserver.CodeMFAUnavailable)
 		}
 		method := request.Data.Attributes.Method
-		if method == "sms" && !smsSenderAvailable(sender) {
+		if method == "sms" && !sms.Available(sender) {
 			return httpserver.NewError(httpserver.CodeMFAUnavailable)
 		}
 		var secret []byte
@@ -965,7 +972,7 @@ func startEnrollment(_ *httpserver.Server, database *sql.DB, publicURL string, s
 		}
 		if method == "sms" {
 			if err := sender.Send(c.Request().Context(), destination, smsCode); err != nil {
-				return httpserver.NewError(httpserver.CodeMFAUnavailable)
+				return mfaDeliveryFailure(c.Request().Context(), database, accountID)
 			}
 			return resource(c, http.StatusCreated, "mfa-enrollments", id, map[string]string{"method": "sms"})
 		}
@@ -1100,7 +1107,7 @@ func verifyEnrollment(server *httpserver.Server, database *sql.DB) echo.HandlerF
 
 func resendEnrollment(_ *httpserver.Server, database *sql.DB, sender sms.Sender) echo.HandlerFunc {
 	return func(c *echo.Context) error {
-		if !smsSenderAvailable(sender) {
+		if !sms.Available(sender) {
 			return httpserver.NewError(httpserver.CodeMFAUnavailable)
 		}
 		accountID, err := authenticatedUser(c)
@@ -1139,7 +1146,7 @@ func resendEnrollment(_ *httpserver.Server, database *sql.DB, sender sms.Sender)
 			return err
 		}
 		if err := sender.Send(c.Request().Context(), destination, code); err != nil {
-			return httpserver.NewError(httpserver.CodeMFAUnavailable)
+			return mfaDeliveryFailure(c.Request().Context(), database, accountID)
 		}
 		return c.NoContent(http.StatusNoContent)
 	}
@@ -1369,11 +1376,11 @@ func mfaThrottled(c *echo.Context, database *sql.DB, accountID string, action au
 }
 
 func newSMSCode() (string, error) {
-	var value uint32
-	if err := binary.Read(rand.Reader, binary.BigEndian, &value); err != nil {
+	value, err := rand.Int(rand.Reader, big.NewInt(1_000_000))
+	if err != nil {
 		return "", fmt.Errorf("generate SMS code: %w", err)
 	}
-	return fmt.Sprintf("%06d", value%1_000_000), nil
+	return fmt.Sprintf("%06d", value.Int64()), nil
 }
 
 func nullable(value string) any {
@@ -1395,18 +1402,6 @@ func nullableStep(method string, step int64) any {
 		return nil
 	}
 	return step
-}
-
-func smsSenderAvailable(sender sms.Sender) bool {
-	if sender == nil {
-		return false
-	}
-	switch sender.(type) {
-	case sms.Unavailable, *sms.Unavailable:
-		return false
-	default:
-		return true
-	}
 }
 
 func invalidateMFAArtifacts(ctx context.Context, tx *sql.Tx, accountID string) error {

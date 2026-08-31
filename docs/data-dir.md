@@ -92,9 +92,12 @@ atomically and does not retain raw OCR responses, separate content outlines, or
 retrieval indexes. Deleting a material file removes the complete directory.
 MIA validates a source upload into a temporary file and atomically renames it to
 `file` before inserting and committing the database row. Transaction failure
-removes the published source, and startup removes a source with no row. Exact
-same-filesystem temporary placement and file and directory synchronization are
-specified with implementation.
+removes the published source, and startup removes a source with no row. The
+shared publisher places mode-`0600` temporary files in the destination directory,
+syncs completed temporary content before atomic rename, and syncs the destination
+directory. Replacement retains a same-filesystem private backup until the related
+database transaction commits so a failed audit or database commit can restore the
+prior file.
 Generated output is fully written and atomically renamed before SQLite marks it
 processed or available. A stale or failed database commit removes that output;
 startup removes crash-left orphan files.

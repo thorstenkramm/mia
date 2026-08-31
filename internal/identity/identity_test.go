@@ -55,3 +55,20 @@ func TestLanguageAndTimeZoneRejectUnsafeValues(t *testing.T) {
 		}
 	}
 }
+
+func TestE164RequiresFullStrictInternationalForm(t *testing.T) {
+	for value, valid := range map[string]bool{
+		"+12345678": true,
+		"+1234567":  false,
+		"+02345678": false,
+		"12345678":  false,
+		"+123 4567": false,
+	} {
+		t.Run(value, func(t *testing.T) {
+			_, err := E164(value)
+			if (err == nil) != valid {
+				t.Fatalf("E164(%q) error = %v", value, err)
+			}
+		})
+	}
+}

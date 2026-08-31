@@ -151,7 +151,7 @@ func TimeZone(value string) (string, error) {
 
 // E164 validates a strict E.164 mobile number.
 func E164(value string) (string, error) {
-	if len(value) < 2 || len(value) > 16 || value[0] != '+' || value[1] == '0' {
+	if len(value) < 9 || len(value) > 16 || value[0] != '+' || value[1] < '1' || value[1] > '9' {
 		return "", errors.New("invalid E.164 number")
 	}
 	for _, char := range value[1:] {

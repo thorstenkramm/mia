@@ -381,6 +381,21 @@ never exposes an internal filesystem path. Download authorization is identical
 to profile-view authorization for that user and responses use `image/png`, safe
 content headers, a strong content ETag, and `Cache-Control: private, no-cache`.
 
+The implemented current-user resource has type `users`. `GET /users/me` returns
+`username`, nullable `email`, nullable `name`, nullable `nickname`,
+`preferred_language`, `country`, `time_zone`, nullable `tts_voice`,
+`has_verified_mobile`, and nullable `avatar_url`. It deliberately does not return
+the mobile number. `PATCH /users/me` accepts only `name`, `nickname`,
+`preferred_language`, `country`, `time_zone`, and `tts_voice`; unknown or
+security-owned fields reject the whole request. It returns the updated resource.
+
+Creating a mobile challenge accepts a `mobile-change-challenges` resource with
+one `mobile` attribute and returns only its challenge ID. Verification accepts a
+`mobile-change-verifications` resource with one `code` attribute. Resend and
+verification success return 204 and never return a destination or code. Mobile
+removal returns 204. Profile and mobile mutations use JSON:API; avatar PUT uses
+exactly `image/jpeg` or `image/png` and successful avatar PUT/DELETE return 204.
+
 ## User administration
 
 - `GET /api/v1/users`
@@ -767,7 +782,7 @@ before implementation:
 
 - authentication, session, recovery, and MFA;
 - invitations and invitation acceptance;
-- users, profiles, avatars, roles, bans, and deletion;
+- user administration, roles, bans, and deletion;
 - courses, logos, supervisors, students, course mentors, and student mentor
   assignments;
 - materials, source files, finalization, briefs, approval, and content;

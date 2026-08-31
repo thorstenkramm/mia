@@ -110,3 +110,13 @@ func HasMFA(ctx context.Context, query miSQLite.Querier, accountID string) (bool
 	}
 	return exists != 0, nil
 }
+
+// InvalidatePendingSMS removes only auth-owned pending SMS enrollment or
+// replacement state. It deliberately leaves the active factor destination unchanged.
+func InvalidatePendingSMS(ctx context.Context, query miSQLite.Querier, accountID string) error {
+	if _, err := query.ExecContext(ctx,
+		"DELETE FROM mfa_enrollments WHERE user_id = ? AND method = 'sms'", accountID); err != nil {
+		return fmt.Errorf("invalidate pending SMS enrollment: %w", err)
+	}
+	return nil
+}

@@ -40,6 +40,7 @@ const (
 	ActionAuthMFAChallengeThrottled          Action = "auth.mfa.challenge.throttled"
 	ActionAuthMFAEnrollmentFailed            Action = "auth.mfa.enrollment.failed"
 	ActionAuthMFAEnrollmentThrottled         Action = "auth.mfa.enrollment.throttled"
+	ActionAuthMFADeliveryFailed              Action = "auth.mfa.delivery_failed"
 	ActionOperatorAdministratorMFAReset      Action = "operator.administrator.mfa_reset"
 
 	ActionInvitationInvitationCreated           Action = "invitation.invitation.created"
@@ -55,8 +56,17 @@ const (
 	ActionInvitationInvitationDeliveryAmbiguous Action = "invitation.invitation.delivery_ambiguous"
 	ActionInvitationInvitationDelivered         Action = "invitation.invitation.delivered"
 
-	ActionUserUserRoleGranted     Action = "user.user.role_granted"
-	ActionUserUserRoleGrantDenied Action = "user.user.role_grant_denied"
+	ActionUserUserRoleGranted                Action = "user.user.role_granted"
+	ActionUserUserRoleGrantDenied            Action = "user.user.role_grant_denied"
+	ActionUserProfileUpdated                 Action = "user.profile.updated"
+	ActionUserMobileChallengeCreated         Action = "user.mobile_challenge.created"
+	ActionUserMobileChallengeResendAttempted Action = "user.mobile_challenge.resend_attempted"
+	ActionUserMobileChallengeFailed          Action = "user.mobile_challenge.failed"
+	ActionUserMobileDeliveryFailed           Action = "user.mobile_delivery.failed"
+	ActionUserMobileChanged                  Action = "user.mobile.changed"
+	ActionUserMobileRemoved                  Action = "user.mobile.removed"
+	ActionUserAvatarUpdated                  Action = "user.avatar.updated"
+	ActionUserAvatarRemoved                  Action = "user.avatar.removed"
 )
 
 var actions = map[Action]struct{}{
@@ -85,6 +95,7 @@ var actions = map[Action]struct{}{
 	ActionAuthMFAChallengeThrottled:             {},
 	ActionAuthMFAEnrollmentFailed:               {},
 	ActionAuthMFAEnrollmentThrottled:            {},
+	ActionAuthMFADeliveryFailed:                 {},
 	ActionOperatorAdministratorMFAReset:         {},
 	ActionInvitationInvitationCreated:           {},
 	ActionInvitationInvitationCreationDenied:    {},
@@ -100,6 +111,15 @@ var actions = map[Action]struct{}{
 	ActionInvitationInvitationDelivered:         {},
 	ActionUserUserRoleGranted:                   {},
 	ActionUserUserRoleGrantDenied:               {},
+	ActionUserProfileUpdated:                    {},
+	ActionUserMobileChallengeCreated:            {},
+	ActionUserMobileChallengeResendAttempted:    {},
+	ActionUserMobileChallengeFailed:             {},
+	ActionUserMobileDeliveryFailed:              {},
+	ActionUserMobileChanged:                     {},
+	ActionUserMobileRemoved:                     {},
+	ActionUserAvatarUpdated:                     {},
+	ActionUserAvatarRemoved:                     {},
 }
 
 // Metadata contains typed, content-free audit metadata.
