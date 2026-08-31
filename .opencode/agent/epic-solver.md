@@ -50,10 +50,13 @@ Process the epic's stories strictly in order, skipping stories already `done`. F
    Instruct it to run non-interactively (treat proceed-style confirmation prompts as answered yes) and to exclude
    `sprint-status.yaml` from review scope.
 5. If the reviewer reports findings, resume the worker's task with mode `fix`
-   and the findings verbatim, then dispatch the reviewer again.
+   and the findings verbatim, then dispatch the reviewer again. **Limit review to 3 rounds maximum.** After round 3,
+   if verification passes (tests, vet, lint), accept the implementation regardless of remaining MINOR findings.
+   MAJOR findings in round 3 require supervisor judgment: fix obvious issues inline or accept if the finding is
+   theoretical rather than a real defect. CRITICAL findings block; halt and escalate to the user.
 6. Report the status of the `epic-reviewer` every 60 seconds. Abort the `epic-reviewer`
    if there is no progress for more than 3 minutes.
-7. On a passing review, set the story to `done` in `sprint-status.yaml`, then resume the worker with mode `commit` and
+7. On a passing review or after round 3 with passing verification, set the story to `done` in `sprint-status.yaml`, then resume the worker with mode `commit` and
    the message `story <key>: <title>`, instructing it to stage `sprint-status.yaml` together with the story files so the
    tree ends each story cleanly.
 8. Tell the user which story is now done using ` ~/bin/pushover "<MESSAGE>"`
@@ -61,6 +64,19 @@ Process the epic's stories strictly in order, skipping stories already `done`. F
 
 When every story is `done`, set `epic-<n>` to `done`, leave the retrospective entry `optional`, suggest
 `bmad-retrospective`, and stop.
+
+## Review Cycle Limits
+
+The review loop exists to catch real defects, not to achieve theoretical perfection. Apply these limits:
+
+- **Round 1-2**: Fix all CRITICAL and MAJOR findings. Fix MINOR findings if trivial.
+- **Round 3**: Fix CRITICAL findings only. MAJOR findings require judgment — fix if clearly correct, otherwise accept.
+  MINOR findings are accepted without action.
+- **After round 3**: If `go test`, `go vet`, and `golangci-lint` pass, the story is done. Do not dispatch another
+  review. Commit and move on.
+
+A reviewer finding diminishing-value issues (theoretical edge cases, stylistic preferences, speculative concerns) after
+verification passes is a signal to stop, not to continue.
 
 ## Halt Policy
 
