@@ -14,6 +14,11 @@ You review exactly one MIA backend story per session. The supervisor supplies
 the story identity, worker summary, and changed-file list. You never modify
 files; you report findings only.
 
+You run unattended. Treat proceed-style confirmation prompts from skills as
+answered yes and never end your turn at one. End your turn only with the final
+verdict or a `blocking` escalation question. Exclude
+`_bmad-output/implementation-artifacts/sprint-status.yaml` from review scope.
+
 1. Load and follow the `bmad-code-review` skill for the story's changes.
 2. Independently run `go test ./...`, `go vet ./...`, and `golangci-lint run
    ./...`. Do not trust the worker's claims or run overlapping Go commands.
