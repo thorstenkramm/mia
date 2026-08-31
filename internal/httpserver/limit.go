@@ -60,10 +60,10 @@ type Limiter struct {
 	lru      *list.List
 }
 type limitEntry struct {
-	key         string
-	events      []time.Time
-	tokens      float64
-	at, touched time.Time
+	key                       string
+	events                    []time.Time
+	tokens                    float64
+	at, touched, backoffUntil time.Time
 }
 type Result struct {
 	Allowed           bool
@@ -133,6 +133,9 @@ func (limiter *Limiter) record(name LimitName, definition limitDefinition, key s
 		case 4:
 			result.Delay = 4 * time.Second
 		}
+		if result.Delay > 0 {
+			entry.backoffUntil = now.Add(result.Delay)
+		}
 	}
 	return result
 }
@@ -173,6 +176,9 @@ func (limiter *Limiter) prune(entry *limitEntry, definition limitDefinition, now
 	}
 }
 func (limiter *Limiter) result(definition limitDefinition, entry *limitEntry, now time.Time) Result {
+	if now.Before(entry.backoffUntil) {
+		return Result{RetryAfter: entry.backoffUntil.Sub(now)}
+	}
 	if definition.Burst > 0 {
 		if entry.tokens < 1 {
 			return Result{RetryAfter: time.Duration((1 - entry.tokens) * float64(definition.Window) / float64(definition.Limit))}

@@ -2,6 +2,7 @@
 package httpserver
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/base64"
@@ -30,6 +31,9 @@ var (
 	errStaticSymlinkOut = errors.New("static symlink escapes document root")
 )
 
+// ErrIdentityNotFound tells authenticated-route middleware that the cookie's account was deleted.
+var ErrIdentityNotFound = errors.New("identity not found")
+
 // Options configures the HTTP kernel.
 type Options struct {
 	DataDir           string
@@ -40,20 +44,226 @@ type Options struct {
 
 // Server is safe for concurrent use after construction.
 type Server struct {
-	Echo     *echo.Echo
-	Sessions *sessions.CookieStore
+	Echo           *echo.Echo
+	Sessions       *sessions.CookieStore
+	identityLoader IdentityLoader
+	limiter        *Limiter
+	resolver       *ClientIPResolver
+}
+
+// AuthRouteRegistrar is a wiring-issued capability for auth's restricted routes.
+// A Server does not expose a method to obtain one.
+type AuthRouteRegistrar struct{ server *Server }
+
+// CheckLogin enforces MIA's layered login limits using trusted client IP resolution.
+func (server *Server) CheckLogin(c *echo.Context, username string, failed bool) Result {
+	now := time.Now()
+	ip := server.resolver.Resolve(c.Request())
+	key, err := UsernameKey(username)
+	if err != nil {
+		key = "username:invalid"
+	}
+	ipResult := server.limiter.Check(LimitLoginIP, ip, now)
+	userResult := server.limiter.Check(LimitLoginUsername, key, now)
+	if failed {
+		ipResult = server.limiter.RecordFailure(LimitLoginIP, ip, now)
+		userResult = server.limiter.RecordFailure(LimitLoginUsername, key, now)
+	}
+	if !ipResult.Allowed && !userResult.Allowed {
+		if userResult.RetryAfter > ipResult.RetryAfter {
+			return userResult
+		}
+		return ipResult
+	}
+	if !ipResult.Allowed {
+		return ipResult
+	}
+	return userResult
+}
+
+// RecordLoginFailure records the account and IP failure limits after a failed
+// login attempt. Its result includes the applicable progressive delay or block.
+func (server *Server) RecordLoginFailure(c *echo.Context, username string) Result {
+	return server.CheckLogin(c, username, true)
+}
+
+// IdentityState is the database-authoritative state needed to validate a browser session.
+type IdentityState struct {
+	SecurityGeneration         int64
+	MustChangePassword, Banned bool
+}
+
+// IdentityLoader reloads account state for every protected request.
+type IdentityLoader func(context.Context, string) (IdentityState, error)
+
+// RotateCSRF invalidates the current browser CSRF token after an auth boundary.
+func RotateCSRF(c *echo.Context) {
+	http.SetCookie(c.Response(), &http.Cookie{Name: "__Host-mia_csrf", Value: randomToken(32), Path: "/", Secure: true, SameSite: http.SameSiteLaxMode})
+}
+
+// SetIdentityLoader configures the sole identity reload path for authenticated routes.
+func (server *Server) SetIdentityLoader(loader IdentityLoader) { server.identityLoader = loader }
+
+// AuthenticatedPOST registers an ordinary protected POST. Ordinary routes always require a full session.
+func (server *Server) AuthenticatedPOST(path string, next echo.HandlerFunc) {
+	server.authenticatedPOST(path, "authenticated", next)
+}
+
+// POST registers an auth route and centrally validates its allowed login stage.
+func (registrar AuthRouteRegistrar) POST(path, stage string, next echo.HandlerFunc) {
+	if stage != "authenticated" && stage != "mfa" && stage != "password-change" && stage != "any" {
+		panic("invalid auth route stage")
+	}
+	registrar.server.authenticatedPOST(path, stage, next)
+}
+
+// StartSession creates a new login-stage cookie. It is used after successful
+// login and stage transitions, each of which starts with a fresh CSRF token.
+func (server *Server) StartSession(c *echo.Context, userID string, generation int64, stage string, now time.Time) error {
+	return saveSession(c, server.Sessions, userID, generation, stage, now)
+}
+
+// TransitionSession moves the validated current session to another stage.
+func (server *Server) TransitionSession(c *echo.Context, stage string, now time.Time) error {
+	userID, userOK := c.Get("mia.auth.user_id").(string)
+	generation, generationOK := c.Get("mia.auth.security_generation").(int64)
+	if !userOK || !generationOK || userID == "" || generation == 0 {
+		return NewError(CodeUnauthenticated)
+	}
+	return saveSession(c, server.Sessions, userID, generation, stage, now)
+}
+
+// EndSession clears the validated current browser session.
+func (server *Server) EndSession(c *echo.Context) error {
+	return clearSession(c, server.Sessions)
+}
+
+func (server *Server) authenticatedPOST(path, stage string, next echo.HandlerFunc) {
+	server.Echo.POST(path, func(c *echo.Context) error {
+		if server.identityLoader == nil {
+			return NewError(CodeInternalError)
+		}
+		session, err := server.Sessions.Get(c.Request(), "__Host-mia_session")
+		if err != nil {
+			return server.clearedStageError(c, stage)
+		}
+		userID, userOK := session.Values["user_id"].(string)
+		current, stageOK := session.Values["stage"].(string)
+		generation, generationOK := session.Values["security_generation"].(int64)
+		absolute, absoluteOK := session.Values["expires_at"].(int64)
+		idle, idleOK := session.Values["idle_until"].(int64)
+		if !userOK || !stageOK || !generationOK || !absoluteOK || !idleOK || time.Now().After(time.Unix(absolute, 0)) || time.Now().After(time.Unix(idle, 0)) {
+			return server.clearedStageError(c, stage)
+		}
+		state, err := server.identityLoader(c.Request().Context(), userID)
+		if err != nil {
+			if errors.Is(err, ErrIdentityNotFound) {
+				return server.clearedStageError(c, stage)
+			}
+			return err
+		}
+		if state.Banned || state.SecurityGeneration != generation {
+			return server.clearedStageError(c, stage)
+		}
+		if current == "password-change" && !state.MustChangePassword {
+			if err := clearSession(c, server.Sessions); err != nil {
+				return err
+			}
+			return NewError(CodePasswordChangeRequired)
+		}
+		if state.MustChangePassword && stage != "password-change" && stage != "any" {
+			return NewError(CodePasswordChangeRequired)
+		}
+		if stage != "any" && current != stage && (stage != "password-change" || !state.MustChangePassword || current != "authenticated") {
+			return NewError(CodePasswordChangeRequired)
+		}
+		c.Set("mia.auth.user_id", userID)
+		c.Set("mia.auth.security_generation", generation)
+		c.Set("mia.auth.stage", current)
+		response, unwrapErr := echo.UnwrapResponse(c.Response())
+		if unwrapErr != nil {
+			return fmt.Errorf("unwrap authenticated response: %w", unwrapErr)
+		}
+		response.Before(func() {
+			if current == "authenticated" && stage == "authenticated" && response.Status >= http.StatusOK && response.Status < http.StatusMultipleChoices {
+				if err := refreshSession(c, server.Sessions, session, time.Now()); err != nil {
+					c.Logger().Error("refresh authenticated session", "error", err)
+				}
+			}
+		})
+		return next(c)
+	})
+}
+
+func (server *Server) clearedStageError(c *echo.Context, stage string) error {
+	if err := clearSession(c, server.Sessions); err != nil {
+		return err
+	}
+	if stage == "password-change" {
+		return NewError(CodePasswordChangeRequired)
+	}
+	return NewError(CodeUnauthenticated)
+}
+
+func saveSession(c *echo.Context, store *sessions.CookieStore, userID string, generation int64, stage string, now time.Time) error {
+	session, err := store.New(c.Request(), "__Host-mia_session")
+	if err != nil {
+		return err
+	}
+	expires := now.Add(12 * time.Hour)
+	if stage != "authenticated" {
+		expires = now.Add(30 * time.Minute)
+	}
+	session.Values["user_id"] = userID
+	session.Values["stage"] = stage
+	session.Values["security_generation"] = generation
+	session.Values["expires_at"] = expires.Unix()
+	idleUntil := now.Add(30 * time.Minute)
+	if idleUntil.After(expires) {
+		idleUntil = expires
+	}
+	session.Values["idle_until"] = idleUntil.Unix()
+	session.Options = &sessions.Options{Path: "/", MaxAge: int(time.Until(expires).Seconds()), Secure: true, HttpOnly: true, SameSite: http.SameSiteLaxMode}
+	return store.Save(c.Request(), c.Response(), session)
+}
+
+func refreshSession(c *echo.Context, store *sessions.CookieStore, session *sessions.Session, now time.Time) error {
+	absolute, ok := session.Values["expires_at"].(int64)
+	if !ok || !now.Before(time.Unix(absolute, 0)) {
+		return errors.New("authenticated session has invalid absolute expiry")
+	}
+	idleUntil := now.Add(30 * time.Minute)
+	absoluteExpiry := time.Unix(absolute, 0)
+	if idleUntil.After(absoluteExpiry) {
+		idleUntil = absoluteExpiry
+	}
+	session.Values["idle_until"] = idleUntil.Unix()
+	session.Options = &sessions.Options{Path: "/", MaxAge: int(time.Unix(absolute, 0).Sub(now).Seconds()), Secure: true, HttpOnly: true, SameSite: http.SameSiteLaxMode}
+	return store.Save(c.Request(), c.Response(), session)
+}
+
+func clearSession(c *echo.Context, store *sessions.CookieStore) error {
+	session, err := store.Get(c.Request(), "__Host-mia_session")
+	if err != nil {
+		session = sessions.NewSession(store, "__Host-mia_session")
+	}
+	session.Options = &sessions.Options{Path: "/", MaxAge: -1, Secure: true, HttpOnly: true, SameSite: http.SameSiteLaxMode}
+	if err := store.Save(c.Request(), c.Response(), session); err != nil {
+		return fmt.Errorf("clear auth session: %w", err)
+	}
+	return nil
 }
 
 // New builds the shared HTTP kernel. Feature routes are deliberately registered
 // by their owning vertical slice, not here.
-func New(options Options) (*Server, error) {
+func New(options Options) (*Server, AuthRouteRegistrar, error) {
 	store, err := loadSessionStore(options.DataDir)
 	if err != nil {
-		return nil, err
+		return nil, AuthRouteRegistrar{}, err
 	}
 	resolver, err := NewClientIPResolver(options.TrustedProxyCIDRs)
 	if err != nil {
-		return nil, err
+		return nil, AuthRouteRegistrar{}, err
 	}
 	logger := options.Logger
 	if logger == nil {
@@ -61,10 +271,12 @@ func New(options Options) (*Server, error) {
 	}
 	application := echo.New()
 	application.HTTPErrorHandler = errorHandler
-	application.Use(recoverMiddleware(logger), requestMiddleware(logger), securityHeaders, rateLimitMiddleware(NewLimiter(50_000), resolver), csrfMiddleware)
 	application.GET("/*", staticHandler(options.DocRoot))
 	application.HEAD("/*", staticHandler(options.DocRoot))
-	return &Server{Echo: application, Sessions: store}, nil
+	limiter := NewLimiter(50_000)
+	application.Use(recoverMiddleware(logger), requestMiddleware(logger), securityHeaders, rateLimitMiddleware(limiter, resolver), csrfMiddleware)
+	server := &Server{Echo: application, Sessions: store, limiter: limiter, resolver: resolver}
+	return server, AuthRouteRegistrar{server: server}, nil
 }
 
 func loadSessionStore(dataDir string) (*sessions.CookieStore, error) {

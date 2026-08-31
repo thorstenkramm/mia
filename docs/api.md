@@ -192,6 +192,33 @@ replacement and logout when MIA next checks account state.
 - `POST /api/v1/auth/mfa-challenges/{id}/recovery-code-consumptions`
 - `POST /api/v1/auth/mfa-management-proofs`
 
+### First password-authentication slice
+
+`POST /api/v1/auth/login` accepts a `login-attempts` JSON:API resource with `username` and `password`
+attributes. A successful response is `200` and contains an `auth-sessions` resource whose ID is the authenticated
+user ID and whose attributes contain only `stage` (`authenticated`, `mfa`, or `password-change`). An `mfa` response
+also contains the opaque `mfa_challenge_id`. It never returns credentials, password hashes, roles, or profile data.
+Invalid credentials and banned accounts both return `401 auth_invalid_credentials`; invalid request shape returns
+`422 auth_invalid_request`; a body exceeding 1 MiB returns `413 auth_request_too_large`; an unsupported request
+media type returns `415 auth_unsupported_media_type`; throttling returns `429 auth_login_throttled` with
+`Retry-After`.
+
+`POST /api/v1/auth/logout` requires a valid login-stage cookie, clears that browser's cookie, rotates CSRF state, and
+returns `204`. A missing, invalid, or expired stage cookie returns `401 auth_unauthenticated`.
+
+`POST /api/v1/auth/password-changes` requires the `password-change` stage and accepts a `password-changes`
+resource with `password` and `password_confirmation` attributes. It validates equality and normal password policy,
+clears the password gate, rotates into a fresh authenticated session and CSRF state, and returns the safe
+`auth-sessions` resource. A missing or different stage returns `403 auth_password_change_required`; invalid or
+non-compliant input returns `422 auth_invalid_password` without echoing the submitted value.
+
+### Password blocklist provenance
+
+MIA embeds `Passwords/Common-Credentials/xato-net-10-million-passwords-100000.txt` from
+`danielmiessler/SecLists` commit `f025490a4bc7bd1d6cd36c3b834631acd615ff28` (source timestamp
+`2026-08-30T11:13:41Z`). The embedded snapshot is upstream MIT-licensed. It is compared against valid submitted
+password bytes exactly; MIA does not trim, normalize, case-fold, or generate password mutations.
+
 Login and password recovery accept a complete username only. Login may return an
 MFA challenge instead of a complete authenticated session. Public recovery
 responses are account-enumeration safe, including for banned accounts. Banned

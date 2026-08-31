@@ -42,3 +42,16 @@ func TestTextNormalizesAndRepresentsAbsence(t *testing.T) {
 		t.Fatalf("empty Text result = %v, %v", empty, err)
 	}
 }
+
+func TestLanguageAndTimeZoneRejectUnsafeValues(t *testing.T) {
+	for _, value := range []string{"x-private", ""} {
+		if _, err := Language(value); err == nil {
+			t.Fatalf("Language(%q) was accepted", value)
+		}
+	}
+	for _, value := range []string{"", "Local", "+01:00", "-01:00"} {
+		if _, err := TimeZone(value); err == nil {
+			t.Fatalf("TimeZone(%q) was accepted", value)
+		}
+	}
+}

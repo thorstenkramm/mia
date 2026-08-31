@@ -21,7 +21,7 @@ func TestStaticServingUsesFallbackAndRejectsAPI(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(docRoot, "index.html"), []byte("frontend"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	server, err := New(Options{DataDir: dataDir, DocRoot: docRoot})
+	server, _, err := New(Options{DataDir: dataDir, DocRoot: docRoot})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,7 +52,7 @@ func TestCSRFRequestsAreRateLimitedBeforeRejection(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(docRoot, "index.html"), []byte("frontend"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	server, err := New(Options{DataDir: dataDir, DocRoot: docRoot})
+	server, _, err := New(Options{DataDir: dataDir, DocRoot: docRoot})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,7 +96,7 @@ func TestStaticServingRejectsUnsafePathsAndMethods(t *testing.T) {
 	if err := os.Symlink("/etc/passwd", filepath.Join(docRoot, "escape")); err != nil {
 		t.Fatal(err)
 	}
-	server, err := New(Options{DataDir: dataDir, DocRoot: docRoot})
+	server, _, err := New(Options{DataDir: dataDir, DocRoot: docRoot})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -154,7 +154,7 @@ func TestStaticServingAllowsAnchoredRootAndInRootSymlinks(t *testing.T) {
 	if err := os.Symlink("assets", filepath.Join(actualRoot, "linked-assets")); err != nil {
 		t.Fatal(err)
 	}
-	server, err := New(Options{DataDir: dataDir, DocRoot: rootLink})
+	server, _, err := New(Options{DataDir: dataDir, DocRoot: rootLink})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -184,7 +184,7 @@ func TestStaticDirectoryRequestsDoNotLeakDescriptors(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(docRoot, "index.html"), []byte("frontend"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	server, err := New(Options{DataDir: dataDir, DocRoot: docRoot})
+	server, _, err := New(Options{DataDir: dataDir, DocRoot: docRoot})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -227,7 +227,7 @@ func TestStaticNestedMissingComponentDoesNotLeakDescriptors(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(docRoot, "index.html"), []byte("frontend"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	server, err := New(Options{DataDir: dataDir, DocRoot: docRoot})
+	server, _, err := New(Options{DataDir: dataDir, DocRoot: docRoot})
 	if err != nil {
 		t.Fatal(err)
 	}

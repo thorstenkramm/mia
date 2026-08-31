@@ -2,25 +2,32 @@
 package main
 
 import (
+	"bufio"
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
-	"os/user"
+	osuser "os/user"
 	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
+	"github.com/thorstenkramm/mia/internal/audit"
+	"github.com/thorstenkramm/mia/internal/auth"
 	"github.com/thorstenkramm/mia/internal/config"
 	"github.com/thorstenkramm/mia/internal/httpserver"
+	"github.com/thorstenkramm/mia/internal/identity"
 	"github.com/thorstenkramm/mia/internal/lock"
 	"github.com/thorstenkramm/mia/internal/logging"
 	miSQLite "github.com/thorstenkramm/mia/internal/sqlite"
+	"github.com/thorstenkramm/mia/internal/user"
+	"golang.org/x/term"
 )
 
 func main() {
@@ -33,8 +40,107 @@ func main() {
 func newRootCommand() *cobra.Command {
 	command := &cobra.Command{Use: "mia", SilenceUsage: true}
 	config.AddFlags(command.PersistentFlags())
-	command.AddCommand(newServeCommand(), unavailableOfflineCommand("bootstrap-admin"), unavailableOfflineCommand("reset-admin-mfa"))
+	command.AddCommand(newServeCommand(), newBootstrapAdminCommand(), unavailableOfflineCommand("reset-admin-mfa"))
 	return command
+}
+
+func newBootstrapAdminCommand() *cobra.Command {
+	return &cobra.Command{Use: "bootstrap-admin", Args: cobra.NoArgs, RunE: func(command *cobra.Command, _ []string) (returnErr error) {
+		if !term.IsTerminal(int(os.Stdin.Fd())) || !term.IsTerminal(int(os.Stdout.Fd())) {
+			return errors.New("bootstrap-admin requires an interactive terminal")
+		}
+		input, err := readBootstrapInput()
+		if err != nil {
+			return err
+		}
+		configuration, err := config.Load(command.Flags(), false)
+		if err != nil {
+			return err
+		}
+		dataLock, err := lock.Acquire(configuration.Main.DataDir)
+		if err != nil {
+			return err
+		}
+		defer func() { returnErr = errors.Join(returnErr, dataLock.Close()) }()
+		database, err := miSQLite.Open(configuration.Main.DataDir)
+		if err != nil {
+			return err
+		}
+		defer func() { returnErr = errors.Join(returnErr, database.Close()) }()
+		return miSQLite.WithTx(command.Context(), database, func(transaction *sql.Tx) error { return bootstrapAdministrator(command.Context(), transaction, input) })
+	}}
+}
+
+func bootstrapAdministrator(ctx context.Context, transaction *sql.Tx, input bootstrapInput) error {
+	exists, err := user.HasAdministrator(ctx, transaction)
+	if err != nil {
+		return err
+	}
+	if exists {
+		return user.ErrAdministratorExists
+	}
+	account, err := user.Create(ctx, transaction, user.CreateInput{Username: input.username, Email: input.email, PasswordHash: input.passwordHash, Language: input.language, Country: input.country, TimeZone: input.timeZone, EmailVerified: true, Roles: []user.Role{user.Administrator}})
+	if err != nil {
+		return err
+	}
+	return audit.Write(ctx, transaction, audit.ActionOperatorAdministratorBootstrapped, "", account.ID)
+}
+
+type bootstrapInput struct{ username, email, language, country, timeZone, passwordHash string }
+
+func readBootstrapInput() (bootstrapInput, error) {
+	reader := bufio.NewReader(os.Stdin)
+	read := func(label string) (string, error) {
+		if _, err := fmt.Fprint(os.Stdout, label+": "); err != nil {
+			return "", fmt.Errorf("write %s prompt: %w", strings.ToLower(label), err)
+		}
+		value, err := reader.ReadString('\n')
+		if err != nil {
+			return "", fmt.Errorf("read %s: %w", strings.ToLower(label), err)
+		}
+		return strings.TrimSuffix(strings.TrimSuffix(value, "\n"), "\r"), nil
+	}
+	var result bootstrapInput
+	var err error
+	if result.username, err = read("Username"); err != nil {
+		return result, err
+	}
+	if result.email, err = read("Email"); err != nil {
+		return result, err
+	}
+	if result.language, err = read("Language"); err != nil {
+		return result, err
+	}
+	if result.country, err = read("Country"); err != nil {
+		return result, err
+	}
+	if result.timeZone, err = read("Time zone"); err != nil {
+		return result, err
+	}
+	if _, err := fmt.Fprint(os.Stdout, "Password: "); err != nil {
+		return result, fmt.Errorf("write password prompt: %w", err)
+	}
+	password, err := term.ReadPassword(int(os.Stdin.Fd()))
+	if err != nil {
+		return result, fmt.Errorf("read password: %w", err)
+	}
+	if _, err := fmt.Fprint(os.Stdout, "\nPassword confirmation: "); err != nil {
+		return result, fmt.Errorf("write password confirmation prompt: %w", err)
+	}
+	confirmation, err := term.ReadPassword(int(os.Stdin.Fd()))
+	if err != nil {
+		return result, fmt.Errorf("read password confirmation: %w", err)
+	}
+	if _, err := fmt.Fprintln(os.Stdout); err != nil {
+		return result, fmt.Errorf("write prompt newline: %w", err)
+	}
+	if string(password) != string(confirmation) {
+		return result, errors.New("password confirmation does not match")
+	}
+	if result.passwordHash, err = identity.Password(string(password)); err != nil {
+		return result, err
+	}
+	return result, nil
 }
 
 func newServeCommand() *cobra.Command {
@@ -70,10 +176,18 @@ func newServeCommand() *cobra.Command {
 				returnErr = errors.Join(returnErr, fmt.Errorf("close database: %w", closeErr))
 			}
 		}()
-		server, err := httpserver.New(httpserver.Options{DataDir: configuration.Main.DataDir, DocRoot: configuration.Main.DocRoot, TrustedProxyCIDRs: configuration.HTTP.TrustedProxyCIDRs, Logger: logger.Slog()})
+		server, authRoutes, err := httpserver.New(httpserver.Options{DataDir: configuration.Main.DataDir, DocRoot: configuration.Main.DocRoot, TrustedProxyCIDRs: configuration.HTTP.TrustedProxyCIDRs, Logger: logger.Slog()})
 		if err != nil {
 			return err
 		}
+		server.SetIdentityLoader(func(ctx context.Context, id string) (httpserver.IdentityState, error) {
+			account, err := user.LoadSecurityState(ctx, database, id)
+			if errors.Is(err, sql.ErrNoRows) {
+				return httpserver.IdentityState{}, httpserver.ErrIdentityNotFound
+			}
+			return httpserver.IdentityState{SecurityGeneration: account.SecurityGeneration, MustChangePassword: account.MustChangePassword, Banned: account.Banned}, err
+		})
+		auth.Register(server, authRoutes, database)
 		return serve(command.Context(), configuration.HTTP.Listen, configuration.HTTP.SocketGroup, server.Echo, logger)
 	}}
 }
@@ -253,7 +367,7 @@ func socketGroupID(name string) (int, error) {
 	if name == "" {
 		return os.Getgid(), nil
 	}
-	group, err := user.LookupGroup(name)
+	group, err := osuser.LookupGroup(name)
 	if err != nil {
 		return 0, fmt.Errorf("look up Unix socket group: %w", err)
 	}

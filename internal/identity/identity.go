@@ -2,14 +2,20 @@
 package identity
 
 import (
+	"crypto/rand"
+	"crypto/subtle"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"net/mail"
 	"strings"
 	"time"
+	_ "time/tzdata"
 	"unicode"
 	"unicode/utf8"
 
+	_ "embed"
+	"golang.org/x/crypto/argon2"
 	"golang.org/x/text/cases"
 	"golang.org/x/text/language"
 	"golang.org/x/text/unicode/norm"
@@ -19,7 +25,67 @@ var (
 	ErrInvalidUsername = errors.New("invalid username")
 	ErrInvalidEmail    = errors.New("invalid email")
 	ErrInvalidText     = errors.New("invalid text")
+	ErrInvalidPassword = errors.New("invalid password")
 )
+
+// SecLists snapshot: danielmiessler/SecLists, commit
+// f025490a4bc7bd1d6cd36c3b834631acd615ff28 (2026-08-30T11:13:41Z),
+// Passwords/Common-Credentials/xato-net-10-million-passwords-100000.txt.
+// Upstream is distributed under the MIT License.
+//
+//go:embed xato-net-10-million-passwords-100000.txt
+var commonPasswordsFile string
+
+var commonPasswords = makePasswordSet(commonPasswordsFile)
+
+// Password validates the exact submitted password and returns an Argon2id PHC hash.
+func Password(value string) (string, error) {
+	if !validPassword(value) {
+		return "", ErrInvalidPassword
+	}
+	salt := make([]byte, 16)
+	if _, err := rand.Read(salt); err != nil {
+		return "", fmt.Errorf("generate password salt: %w", err)
+	}
+	derived := argon2.IDKey([]byte(value), salt, 2, 19456, 1, 32)
+	return fmt.Sprintf("$argon2id$v=19$m=19456,t=2,p=1$%s$%s", base64.RawStdEncoding.EncodeToString(salt), base64.RawStdEncoding.EncodeToString(derived)), nil
+}
+
+// VerifyPassword compares the exact submitted password against a validated PHC hash.
+func VerifyPassword(value, encoded string) (bool, error) {
+	parts := strings.Split(encoded, "$")
+	if len(parts) != 6 || parts[1] != "argon2id" || parts[2] != "v=19" || parts[3] != "m=19456,t=2,p=1" {
+		return false, errors.New("malformed stored password hash")
+	}
+	salt, err := base64.RawStdEncoding.DecodeString(parts[4])
+	if err != nil || len(salt) != 16 {
+		return false, errors.New("malformed stored password hash")
+	}
+	expected, err := base64.RawStdEncoding.DecodeString(parts[5])
+	if err != nil || len(expected) != 32 {
+		return false, errors.New("malformed stored password hash")
+	}
+	actual := argon2.IDKey([]byte(value), salt, 2, 19456, 1, 32)
+	return subtle.ConstantTimeCompare(actual, expected) == 1, nil
+}
+
+// DummyPasswordWork equalizes rejected-login work without retaining a password.
+func DummyPasswordWork(value string) {
+	argon2.IDKey([]byte(value), []byte("mia-login-dummy!"), 2, 19456, 1, 32)
+}
+
+func validPassword(value string) bool {
+	return utf8.ValidString(value) && len(value) <= 512 && utf8.RuneCountInString(value) >= 12 &&
+		utf8.RuneCountInString(value) <= 128 && !commonPasswords[value]
+}
+
+func makePasswordSet(value string) map[string]bool {
+	set := make(map[string]bool, 100_000)
+	for _, password := range strings.Split(strings.TrimSuffix(value, "\n"), "\n") {
+		set[password] = true
+	}
+	return set
+}
 
 // Username validates a username and returns its ASCII-lowercase uniqueness key.
 func Username(value string) (string, error) {
@@ -56,7 +122,7 @@ func Email(value string) (string, string, error) {
 // Language validates and canonicalizes a BCP 47 language tag.
 func Language(value string) (string, error) {
 	tag, err := language.Parse(value)
-	if err != nil || tag == language.Und {
+	if err != nil || tag == language.Und || strings.HasPrefix(strings.ToLower(value), "x-") {
 		return "", fmt.Errorf("invalid language: %w", err)
 	}
 	return tag.String(), nil
@@ -74,6 +140,9 @@ func Country(value string) (string, error) {
 
 // TimeZone validates an IANA time-zone name.
 func TimeZone(value string) (string, error) {
+	if value == "" || value == "Local" || strings.Contains(value, "+") || strings.HasPrefix(value, "-") {
+		return "", errors.New("invalid time zone")
+	}
 	if _, err := time.LoadLocation(value); err != nil {
 		return "", fmt.Errorf("invalid time zone: %w", err)
 	}
