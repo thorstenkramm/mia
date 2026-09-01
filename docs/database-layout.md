@@ -696,15 +696,13 @@ Columns:
 
 - `id`, prefix `mat_`, primary key
 - `course_id`, course ID, not null, cascade on course deletion
-- `owner_student_id`, nullable student user ID
+- `owner_user_id`, nullable student user ID
 - `scope`, enum `course-wide` or `student-private`, not null
 - `name`, not null
 - `name_normalized`, not null
-- `description`, nullable
-- `type`, enum `text-book`, `youtube`, `exam`, `website`, or `worksheet`, not null
-- `file_type`, nullable enum `pdf`, `jpeg`, `png`, `txt`, `md`, or `docx`
+- `kind`, enum `text-book`, `youtube`, `exam`, `website`, or `worksheet`, not null
+- `format`, enum `pdf`, `jpeg`, `png`, `text`, `markdown`, `docx`, or `link`, not null
 - `external_url`, nullable
-- `llm_instructions`, nullable
 - `state`, enum `draft`, `processing`, `ready`, or `failed`, not null
 - `brief_json`, nullable validated material-brief document
 - `brief_source`, nullable enum `generated` or `supervisor`
@@ -716,7 +714,7 @@ Columns:
 - `created_at`, not null
 - `created_by`, nullable user ID
 - `updated_at`, nullable
-- `updated_by`, nullable user ID
+- `failure_code`, nullable sanitized processing failure code
 
 Constraints:
 
@@ -737,7 +735,7 @@ Constraints:
   and `approved_by`. The transaction writes content-free brief-correction and
   approval-revocation audit effects. A semantically identical validated brief is
   a no-op and does not revoke approval.
-- All files in one material have the same detected format, equal to `file_type`.
+- All files in one material have the same detected format, equal to `format`.
 - Link-only material may have no file type. A separately uploaded supported file
   supplies AI-readable content.
 - External URLs are ASCII HTTPS values of at most 2,048 bytes, contain no user
@@ -769,8 +767,8 @@ Constraints:
   Finalization validates those requirements and changes `draft` to `ready` in one
   transaction without creating extraction or summary jobs. Even when approved,
   it does not satisfy course activation or new-session material readiness.
-- MIA derives a source file's safe download media type from `file_type`; detected
-  upload values are validation inputs and are not persisted separately.
+- MIA derives a source file's safe download media type from `format`; the
+  detected safe media type is also persisted on each source-file row.
 - Brief fields are either all absent, or `brief_json`, `brief_source`, and
   `brief_updated_at` are present. A supervisor-authored update requires an
   assigned supervisor at action time and initially records `brief_updated_by`.
@@ -800,19 +798,19 @@ Columns:
 
 - `id`, prefix `mf_`, primary key
 - `material_id`, material ID, not null, cascade on material deletion
-- `original_file_name`, validated display basename, not null
+- `original_filename`, validated display basename, not null
+- `media_type`, signature-derived safe media type, not null
 - `size_bytes`, positive integer, not null
-- `page_count`, non-negative integer, nullable for non-paged formats
-- `state`, enum `uploaded`, `processing`, `processed`, or `faulty`, not null
+- `page_count`, non-negative integer, zero for non-paged formats
+- `state`, enum `draft`, `processing`, `processed`, or `failed`, not null
 - `failure_code`, nullable sanitized code
 - `created_at`, not null
-- `processed_at`, nullable
 
 Constraints:
 
 - MIA validates a source upload into a temporary file, including signature and
   detected media type, and requires the format to equal the parent material's
-  `file_type`. It atomically renames the validated file to its deterministic path
+  `format`. It atomically renames the validated file to its deterministic path
   before inserting and committing the source row. A failed transaction removes
   the published file; startup removes source files with no row.
 - Multi-file material uses ascending (`created_at`, `id`) as its canonical file
@@ -1153,29 +1151,26 @@ Columns:
   `tutoring-session-summary`, not null
 - `state`, enum `queued`, `running`, `succeeded`, `failed`, or `cancelled`, not
   null
-- `material_file_id`, nullable material file ID, cascade on file deletion
-- `material_id`, nullable material ID, cascade on material deletion
-- `tutoring_session_id`, nullable session ID, cascade on session deletion
+- `subject_type`, enum `material-file`, `material`, or `tutoring-session`, not null
+- `subject_id`, opaque owning-feature subject ID, not null
+- `course_id`, course ID, not null, cascade on course deletion
+- `owner_user_id`, nullable owning student ID, cascade on account deletion
 - `created_at`, not null
-- `created_by`, nullable user ID
 - `available_at`, not null
 - `started_at`, nullable
 - `lease_token`, nullable random claim value
-- `lease_until`, nullable
-- `completed_at`, nullable
+- `lease_expires_at`, nullable
+- `finished_at`, nullable
 - `failure_code`, nullable sanitized code
 - `attempt_count`, non-negative integer, not null, default 0
-- `input_units`, nullable non-negative cumulative provider usage
-- `output_units`, nullable non-negative cumulative provider usage
+- `provider_input_units`, non-negative cumulative provider usage, default zero
+- `provider_output_units`, non-negative cumulative provider usage, default zero
 
 Constraints:
 
-- Material-extraction jobs require one material file and no direct material or
-  tutoring session. Material-summary jobs require one material and no material
-  file or tutoring session.
-- Tutoring-session-summary jobs require one tutoring session and no material or
-  material file.
-- Terminal jobs have `completed_at`; queued and running jobs do not.
+- Job type and subject type pairs are validated by the registering feature
+  handler. Queryable subject columns avoid embedding references in payload JSON.
+- Terminal jobs have `finished_at`; queued and running jobs do not.
 - Failure fields never store raw provider payloads, prompts, material content, or
   chat content.
 - Queue claiming, creation of a unique two-minute lease token, and state
@@ -1214,7 +1209,7 @@ Constraints:
   transaction. An assigned supervisor may create another only while the summary
   is absent, the session is completed, no summary job is queued or running, and
   an earlier summary job is terminally failed.
-- `input_units` and `output_units` accumulate available usage reported across all
+- `provider_input_units` and `provider_output_units` accumulate available usage reported across all
   attempts. They are unattributed, model-agnostic operational counters and may
   span configuration changes. MIA does not persist per-attempt provider request
   IDs or diagnostics.

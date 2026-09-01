@@ -10,6 +10,11 @@ MIA performs background tasks to process materials and chats asynchronously. The
 The first version uses one worker that processes one job at a time. When no job is
 due, the worker waits one second before polling again.
 
+The implemented queue stores explicit `subject_type`, `subject_id`, `course_id`,
+and nullable owner columns. It stores no arbitrary provider payload. Administrators
+can inspect full sanitized records through `/api/v1/jobs`; assigned supervisors
+can inspect safe material-scoped state through `/api/v1/materials/{id}/jobs`.
+
 ## Execution policy
 
 The worker atomically claims one queued job with a two-minute lease and a unique

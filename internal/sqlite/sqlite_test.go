@@ -52,7 +52,7 @@ func TestOpenRejectsInsecureRestoredDatabase(t *testing.T) {
 }
 
 func TestOpenRejectsDirtyAndNewerSchema(t *testing.T) {
-	for name, statement := range map[string]string{"dirty": "UPDATE schema_migrations SET dirty = 1", "newer": "UPDATE schema_migrations SET version = 12"} {
+	for name, statement := range map[string]string{"dirty": "UPDATE schema_migrations SET dirty = 1", "newer": "UPDATE schema_migrations SET version = 13"} {
 		t.Run(name, func(t *testing.T) {
 			directory := t.TempDir()
 			if err := os.Chmod(directory, 0o700); err != nil {

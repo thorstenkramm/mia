@@ -84,6 +84,17 @@ const (
 	ActionUserTemporaryPasswordSet Action = "user.password.temporary_set"
 	ActionUserStudentBanned        Action = "user.student.banned"
 	ActionUserStudentUnbanned      Action = "user.student.unbanned"
+
+	ActionMaterialCreated          Action = "material.material.created"
+	ActionMaterialFileUploaded     Action = "material.file.uploaded"
+	ActionMaterialFileDeleted      Action = "material.file.deleted"
+	ActionMaterialFinalized        Action = "material.material.finalized"
+	ActionMaterialBriefCorrected   Action = "material.brief.corrected"
+	ActionMaterialApproved         Action = "material.approval.granted"
+	ActionMaterialApprovalRevoked  Action = "material.approval.revoked"
+	ActionMaterialDeleted          Action = "material.material.deleted"
+	ActionMaterialProcessingFailed Action = "material.processing.failed"
+	ActionMaterialMutationDenied   Action = "material.mutation.denied"
 )
 
 var actions = map[Action]struct{}{
@@ -153,12 +164,23 @@ var actions = map[Action]struct{}{
 	ActionUserTemporaryPasswordSet:              {},
 	ActionUserStudentBanned:                     {},
 	ActionUserStudentUnbanned:                   {},
+	ActionMaterialCreated:                       {},
+	ActionMaterialFileUploaded:                  {},
+	ActionMaterialFileDeleted:                   {},
+	ActionMaterialFinalized:                     {},
+	ActionMaterialBriefCorrected:                {},
+	ActionMaterialApproved:                      {},
+	ActionMaterialApprovalRevoked:               {},
+	ActionMaterialDeleted:                       {},
+	ActionMaterialProcessingFailed:              {},
+	ActionMaterialMutationDenied:                {},
 }
 
 // Metadata contains typed, content-free audit metadata.
 // Only identifiers and outcome codes are allowed; no tokens, emails, or other sensitive data.
 type Metadata struct {
 	InvitationID string `json:"invitation_id,omitempty"`
+	MaterialID   string `json:"material_id,omitempty"`
 	CourseID     string `json:"-"`
 	OutcomeCode  string `json:"outcome_code,omitempty"`
 	Role         string `json:"role,omitempty"`

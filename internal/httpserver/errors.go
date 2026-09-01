@@ -64,6 +64,14 @@ const (
 	CodeCourseLogoInvalid           Code = "course_logo_invalid"
 	CodeCourseStudentNotFound       Code = "course_student_not_found"
 	CodeCourseStudentInvalid        Code = "course_student_invalid"
+
+	CodeMaterialNotFound     Code = "material_not_found"
+	CodeMaterialInvalid      Code = "material_invalid"
+	CodeMaterialNameTaken    Code = "material_name_taken"
+	CodeMaterialInvalidState Code = "material_invalid_state"
+	CodeJobNotFound          Code = "job_not_found"
+	CodeJobUnauthorized      Code = "job_unauthorized"
+	CodeJobInvalid           Code = "job_invalid"
 )
 
 type definition struct {
@@ -122,6 +130,13 @@ var errorRegistry = map[Code]definition{
 	CodeCourseLogoInvalid:           {http.StatusUnprocessableEntity, "Invalid Course Logo", "The request could not be completed."},
 	CodeCourseStudentNotFound:       {http.StatusNotFound, "Not Found", "The requested resource was not found."},
 	CodeCourseStudentInvalid:        {http.StatusUnprocessableEntity, "Invalid Student", "The request could not be completed."},
+	CodeMaterialNotFound:            {http.StatusNotFound, "Not Found", "The requested resource was not found."},
+	CodeMaterialInvalid:             {http.StatusUnprocessableEntity, "Invalid Material", "The request could not be completed."},
+	CodeMaterialNameTaken:           {http.StatusConflict, "Material Name Taken", "The request could not be completed."},
+	CodeMaterialInvalidState:        {http.StatusConflict, "Invalid Material State", "The request could not be completed."},
+	CodeJobNotFound:                 {http.StatusNotFound, "Not Found", "The requested resource was not found."},
+	CodeJobUnauthorized:             {http.StatusForbidden, "Unauthorized", "The request could not be completed."},
+	CodeJobInvalid:                  {http.StatusUnprocessableEntity, "Invalid Job Query", "The request could not be completed."},
 }
 
 // Error is a registered domain error translated centrally to a JSON:API response.

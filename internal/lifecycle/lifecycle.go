@@ -23,12 +23,25 @@ type StudentCourseDeleter interface {
 	DeleteStudentCourseData(context.Context, miSQLite.Querier, string, string) error
 }
 
+type CourseCleaner interface {
+	CleanupCourseData(context.Context, string) error
+}
+type AccountCleaner interface {
+	CleanupAccountData(context.Context, string) error
+}
+type StudentCourseCleaner interface {
+	CleanupStudentCourseData(context.Context, string, string) error
+}
+
 // Registry is configured during process wiring and then used by deleting transactions.
 // It is not safe for concurrent registration; registrations must finish before serving.
 type Registry struct {
-	course        []CourseDeleter
-	account       []AccountDeleter
-	studentCourse []StudentCourseDeleter
+	course               []CourseDeleter
+	account              []AccountDeleter
+	studentCourse        []StudentCourseDeleter
+	courseCleanup        []CourseCleaner
+	accountCleanup       []AccountCleaner
+	studentCourseCleanup []StudentCourseCleaner
 }
 
 // RegisterStudentCourse appends a student-course owner in deterministic invocation order.
@@ -37,6 +50,9 @@ func (registry *Registry) RegisterStudentCourse(deleter StudentCourseDeleter) {
 		panic("nil student-course lifecycle deleter")
 	}
 	registry.studentCourse = append(registry.studentCourse, deleter)
+	if cleaner, ok := deleter.(StudentCourseCleaner); ok {
+		registry.studentCourseCleanup = append(registry.studentCourseCleanup, cleaner)
+	}
 }
 
 // RegisterCourse appends a course-scoped owner in deterministic invocation order.
@@ -45,6 +61,9 @@ func (registry *Registry) RegisterCourse(deleter CourseDeleter) {
 		panic("nil course lifecycle deleter")
 	}
 	registry.course = append(registry.course, deleter)
+	if cleaner, ok := deleter.(CourseCleaner); ok {
+		registry.courseCleanup = append(registry.courseCleanup, cleaner)
+	}
 }
 
 // RegisterAccount appends an account-scoped owner in deterministic invocation order.
@@ -53,6 +72,36 @@ func (registry *Registry) RegisterAccount(deleter AccountDeleter) {
 		panic("nil account lifecycle deleter")
 	}
 	registry.account = append(registry.account, deleter)
+	if cleaner, ok := deleter.(AccountCleaner); ok {
+		registry.accountCleanup = append(registry.accountCleanup, cleaner)
+	}
+}
+
+func (registry *Registry) CleanupCourseData(ctx context.Context, courseID string) error {
+	for _, cleaner := range registry.courseCleanup {
+		if err := cleaner.CleanupCourseData(ctx, courseID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (registry *Registry) CleanupStudentCourseData(ctx context.Context, courseID, studentID string) error {
+	for _, cleaner := range registry.studentCourseCleanup {
+		if err := cleaner.CleanupStudentCourseData(ctx, courseID, studentID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (registry *Registry) CleanupAccountData(ctx context.Context, accountID string) error {
+	for _, cleaner := range registry.accountCleanup {
+		if err := cleaner.CleanupAccountData(ctx, accountID); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // DeleteCourseData invokes all registered owners in the deleting transaction.

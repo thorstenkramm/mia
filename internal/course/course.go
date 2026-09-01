@@ -402,7 +402,7 @@ func (service *Service) AddStudent(
 }
 
 func (service *Service) RemoveStudent(ctx context.Context, courseID, studentID, actorID string) error {
-	return miSQLite.WithTx(ctx, service.database, func(tx *sql.Tx) error {
+	err := miSQLite.WithTx(ctx, service.database, func(tx *sql.Tx) error {
 		if err := requireAssignedSupervisor(ctx, tx, courseID, actorID, false); err != nil {
 			return err
 		}
@@ -438,6 +438,13 @@ func (service *Service) RemoveStudent(ctx context.Context, courseID, studentID, 
 		}
 		return nil
 	})
+	if err == nil {
+		if cleanupErr := service.lifecycle.CleanupStudentCourseData(ctx, courseID, studentID); cleanupErr != nil {
+			service.logger.WarnContext(ctx, "clean removed student course files", "course_id", courseID,
+				"student_id", studentID, "error", cleanupErr)
+		}
+	}
+	return err
 }
 
 func (service *Service) SetTemporaryPassword(ctx context.Context, studentID, actorID, password string) error {
@@ -720,6 +727,9 @@ func (service *Service) Delete(ctx context.Context, courseID, actorID string) er
 	})
 	if err != nil {
 		return err
+	}
+	if cleanupErr := service.lifecycle.CleanupCourseData(ctx, courseID); cleanupErr != nil {
+		service.logger.WarnContext(ctx, "clean deleted course files", "course_id", courseID, "error", cleanupErr)
 	}
 	service.logoMu.Lock()
 	defer service.logoMu.Unlock()

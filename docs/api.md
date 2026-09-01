@@ -557,6 +557,21 @@ rows. A successful response means publication and row commit both succeeded.
 Download responses use the safe media type derived from the material format,
 safe content disposition, and `X-Content-Type-Options: nosniff`.
 
+Creating a material accepts a `materials` resource with required `name`, `scope`,
+`kind`, and `format`. `scope` is `course-wide` or `student-private`; `kind` is
+`text-book`, `exam`, `worksheet`, `website`, or `youtube`; and `format` is `pdf`,
+`jpeg`, `png`, `text`, `markdown`, `docx`, or `link`. Link format additionally
+requires `external_url` and a complete `brief`. For source-backed material,
+`brief` is absent and generated after extraction. The server infers private
+ownership from the authenticated student and never accepts an owner field.
+
+`PATCH /materials/{id}` accepts only a complete replacement `brief` for ready
+course-wide material. Material resources return their immutable identity fields,
+state, nullable link and brief fields, brief source, approval state, sanitized
+failure code, and lifecycle instants. File resources return display filename,
+safe media type, byte and page counts, processing state, and authorized download
+and content URLs. Upload accepts exactly one multipart part named `file`.
+
 `content` streams authorized normalized `content.jsonl` as
 `application/x-ndjson`; it does not construct a large JSON:API document. Every
 line contains `version: 1`, positive contiguous `sequence`, nullable
@@ -791,6 +806,12 @@ Administrators can inspect platform jobs. Supervisors receive only the safe
 processing status needed for resources in their assigned courses; they do not
 receive unrestricted provider diagnostics.
 
+The administrator collection and detail resources return job type, subject type
+and ID, course relationship, state, attempts, scheduling/lifecycle instants,
+sanitized latest failure code, and cumulative provider input/output units. The
+material-scoped collection is assigned-supervisor-only and omits failure details
+and provider usage. All job collections use standard bounded offset pagination.
+
 Audit access is administrator-only. Filters and output fields are allowlisted,
 and audit resources never expose secret or content-bearing values.
 
@@ -813,11 +834,10 @@ before implementation:
 - user administration, roles, bans, and deletion;
 - courses, logos, supervisors, students, course mentors, and student mentor
   assignments;
-- materials, source files, finalization, briefs, approval, and content;
 - tutoring sessions, messages, responses, SSE, retrievals, and summaries;
 - generated speech;
 - mentoring requests, triage, responses, scheduling, and closure;
-- jobs and audit events.
+- audit events.
 
 Resolve each item in this document or a more specific current architecture
 document before implementing the affected routes. Superseded proposals should be

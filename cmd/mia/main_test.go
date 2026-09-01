@@ -123,8 +123,14 @@ func TestServeGracefulShutdownDoesNotReturnClosedListenerError(t *testing.T) {
 	}()
 	context, cancel := context.WithCancel(context.Background())
 	cancel()
-	if err := serve(context, "127.0.0.1:0", "", http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}), logger); err != nil {
+	shutdownStarted := false
+	if err := serve(context, "127.0.0.1:0", "", http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}), func() {
+		shutdownStarted = true
+	}, logger); err != nil {
 		t.Fatalf("serve shutdown error = %v", err)
+	}
+	if !shutdownStarted {
+		t.Fatal("serve did not begin worker shutdown before HTTP shutdown")
 	}
 }
 

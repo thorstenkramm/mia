@@ -25,9 +25,13 @@ import (
 	"github.com/thorstenkramm/mia/internal/httpserver"
 	"github.com/thorstenkramm/mia/internal/identity"
 	"github.com/thorstenkramm/mia/internal/invitation"
+	"github.com/thorstenkramm/mia/internal/jobs"
 	"github.com/thorstenkramm/mia/internal/lifecycle"
 	"github.com/thorstenkramm/mia/internal/lock"
 	"github.com/thorstenkramm/mia/internal/logging"
+	"github.com/thorstenkramm/mia/internal/material"
+	"github.com/thorstenkramm/mia/internal/provider/mistral"
+	"github.com/thorstenkramm/mia/internal/provider/openai"
 	"github.com/thorstenkramm/mia/internal/provider/sms"
 	"github.com/thorstenkramm/mia/internal/provider/smtp"
 	miSQLite "github.com/thorstenkramm/mia/internal/sqlite"
@@ -266,13 +270,50 @@ func newServeCommand() *cobra.Command {
 		invitation.Register(server, invitationService, configuration.Main.PublicURL, invitationDeliveries)
 		invitation.RegisterRoleRoutes(server, database, logger.Slog())
 		lifecycleRegistry := &lifecycle.Registry{}
-		course.Register(server, course.NewService(database, configuration.Main.DataDir, lifecycleRegistry, nil, nil,
+		if err := material.EnsureInstructions(configuration.Main.DataDir); err != nil {
+			return err
+		}
+		materialService := material.NewService(database, configuration.Main.DataDir, material.Limits{
+			MaxFileBytes:     int64(configuration.Uploads.MaxFileSizeMiB) << 20,
+			MaxMaterialBytes: int64(configuration.Uploads.MaxMaterialSizeMiB) << 20,
+			MaxPages:         configuration.Uploads.MaxMaterialPages, MaxFiles: configuration.Uploads.MaxMaterialFiles,
+			MaxImageMegapixels: configuration.Uploads.MaxImageMegapixels,
+		}, mistral.New(mistral.Options{APIKey: configuration.Mistral.APIKey}), openai.New(openai.Options{
+			APIKey: configuration.OpenAI.APIKey, Model: configuration.OpenAI.JobModel,
+		}), nil, logger.Slog())
+		if err := materialService.Reconcile(command.Context()); err != nil {
+			return err
+		}
+		lifecycleRegistry.RegisterCourse(materialService)
+		lifecycleRegistry.RegisterStudentCourse(materialService)
+		lifecycleRegistry.RegisterAccount(materialService)
+		oversight := jobs.NewOversight(database, func(ctx context.Context, query miSQLite.Querier, actorID string) (bool, error) {
+			return user.HasRole(ctx, query, actorID, user.Administrator)
+		})
+		worker := jobs.New(database, logger.Slog())
+		worker.Register("material-extraction", material.NewExtractionHandler(materialService))
+		worker.Register("material-summary", material.NewSummaryHandler(materialService))
+		if err := worker.Recover(command.Context()); err != nil {
+			return err
+		}
+		jobs.Register(server, oversight)
+		material.Register(server, materialService, oversight)
+		course.Register(server, course.NewService(database, configuration.Main.DataDir, lifecycleRegistry,
+			material.MaterialReady, nil,
 			nil, auth.InvalidateSecurityArtifacts, logger.Slog()))
-		return serve(command.Context(), configuration.HTTP.Listen, configuration.HTTP.SocketGroup, server.Echo, logger)
+		worker.Start(command.Context())
+		defer func() {
+			shutdown, cancel := contextWithTimeout(command.Context(), 30*time.Second)
+			defer cancel()
+			returnErr = errors.Join(returnErr, worker.Stop(shutdown))
+		}()
+		return serve(command.Context(), configuration.HTTP.Listen, configuration.HTTP.SocketGroup, server.Echo,
+			worker.BeginShutdown, logger)
 	}}
 }
 
-func serve(parent context.Context, listen, socketGroup string, handler http.Handler, logger *logging.Logger) (returnErr error) {
+func serve(parent context.Context, listen, socketGroup string, handler http.Handler, beginShutdown func(),
+	logger *logging.Logger) (returnErr error) {
 	listener, err := listenSocket(listen, socketGroup)
 	if err != nil {
 		return err
@@ -310,6 +351,9 @@ func serve(parent context.Context, listen, socketGroup string, handler http.Hand
 			}
 			return fmt.Errorf("serve HTTP: %w", err)
 		case <-context.Done():
+			if beginShutdown != nil {
+				beginShutdown()
+			}
 			shutdown, cancel := contextWithTimeout(context, 30*time.Second)
 			defer cancel()
 			if err := server.Shutdown(shutdown); err != nil {
