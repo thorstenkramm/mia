@@ -42,7 +42,7 @@ development_status:
   1-4-multi-factor-authentication: done
   1-5-invitations-and-direct-role-grants: done
   1-6-profiles-avatars-and-mobile-verification: done
-  1-7-course-lifecycle: backlog
+  1-7-course-lifecycle: done
   1-8-student-provisioning-membership-and-bans: backlog
   1-9-learning-material-and-processing-pipeline: backlog
   1-10-tutoring-sessions-and-streaming-tutor: backlog

@@ -21,9 +21,11 @@ import (
 	"github.com/thorstenkramm/mia/internal/audit"
 	"github.com/thorstenkramm/mia/internal/auth"
 	"github.com/thorstenkramm/mia/internal/config"
+	"github.com/thorstenkramm/mia/internal/course"
 	"github.com/thorstenkramm/mia/internal/httpserver"
 	"github.com/thorstenkramm/mia/internal/identity"
 	"github.com/thorstenkramm/mia/internal/invitation"
+	"github.com/thorstenkramm/mia/internal/lifecycle"
 	"github.com/thorstenkramm/mia/internal/lock"
 	"github.com/thorstenkramm/mia/internal/logging"
 	"github.com/thorstenkramm/mia/internal/provider/sms"
@@ -263,6 +265,9 @@ func newServeCommand() *cobra.Command {
 		defer invitationDeliveries.Close()
 		invitation.Register(server, invitationService, configuration.Main.PublicURL, invitationDeliveries)
 		invitation.RegisterRoleRoutes(server, database, logger.Slog())
+		lifecycleRegistry := &lifecycle.Registry{}
+		course.Register(server, course.NewService(database, configuration.Main.DataDir, lifecycleRegistry, nil, nil,
+			logger.Slog()))
 		return serve(command.Context(), configuration.HTTP.Listen, configuration.HTTP.SocketGroup, server.Echo, logger)
 	}}
 }

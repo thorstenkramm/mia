@@ -67,6 +67,17 @@ const (
 	ActionUserMobileRemoved                  Action = "user.mobile.removed"
 	ActionUserAvatarUpdated                  Action = "user.avatar.updated"
 	ActionUserAvatarRemoved                  Action = "user.avatar.removed"
+
+	ActionCourseCourseCreated      Action = "course.course.created"
+	ActionCourseCourseUpdated      Action = "course.course.updated"
+	ActionCourseCourseActivated    Action = "course.course.activated"
+	ActionCourseCourseDeactivated  Action = "course.course.deactivated"
+	ActionCourseCourseDeleted      Action = "course.course.deleted"
+	ActionCourseSupervisorAssigned Action = "course.supervisor.assigned"
+	ActionCourseSupervisorRemoved  Action = "course.supervisor.removed"
+	ActionCourseLogoUpdated        Action = "course.logo.updated"
+	ActionCourseLogoRemoved        Action = "course.logo.removed"
+	ActionCourseMutationDenied     Action = "course.mutation.denied"
 )
 
 var actions = map[Action]struct{}{
@@ -120,12 +131,23 @@ var actions = map[Action]struct{}{
 	ActionUserMobileRemoved:                     {},
 	ActionUserAvatarUpdated:                     {},
 	ActionUserAvatarRemoved:                     {},
+	ActionCourseCourseCreated:                   {},
+	ActionCourseCourseUpdated:                   {},
+	ActionCourseCourseActivated:                 {},
+	ActionCourseCourseDeactivated:               {},
+	ActionCourseCourseDeleted:                   {},
+	ActionCourseSupervisorAssigned:              {},
+	ActionCourseSupervisorRemoved:               {},
+	ActionCourseLogoUpdated:                     {},
+	ActionCourseLogoRemoved:                     {},
+	ActionCourseMutationDenied:                  {},
 }
 
 // Metadata contains typed, content-free audit metadata.
 // Only identifiers and outcome codes are allowed; no tokens, emails, or other sensitive data.
 type Metadata struct {
 	InvitationID string `json:"invitation_id,omitempty"`
+	CourseID     string `json:"-"`
 	OutcomeCode  string `json:"outcome_code,omitempty"`
 	Role         string `json:"role,omitempty"`
 }
@@ -149,12 +171,47 @@ func WriteWithMetadata(ctx context.Context, query miSQLite.Querier, action Actio
 		return fmt.Errorf("marshal audit metadata: %w", err)
 	}
 	_, err = query.ExecContext(ctx, `INSERT INTO audit_events
-		(id, action, actor_user_id, subject_user_id, created_at, metadata) VALUES (?, ?, ?, ?, ?, ?)`,
-		id, string(action), nullable(actorID), nullable(subjectID), instant(time.Now()), string(metaJSON))
+		(id, action, actor_user_id, subject_user_id, created_at, metadata, course_id) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		id, string(action), nullable(actorID), nullable(subjectID), instant(time.Now()), string(metaJSON), nullable(meta.CourseID))
 	if err != nil {
 		return fmt.Errorf("write audit event: %w", err)
 	}
 	return nil
+}
+
+// ReplaceCourseHistoryWithDeletion removes all course-scoped audit history and
+// writes the sole retained de-identified deletion event in the caller's transaction.
+func ReplaceCourseHistoryWithDeletion(ctx context.Context, query miSQLite.Querier, courseID, actorID string) error {
+	if _, err := query.ExecContext(ctx, "DELETE FROM audit_events WHERE course_id = ?", courseID); err != nil {
+		return fmt.Errorf("delete course audit history: %w", err)
+	}
+	eventID, err := id()
+	if err != nil {
+		return err
+	}
+	fingerprint, err := NewDeletionFingerprint()
+	if err != nil {
+		return err
+	}
+	_, err = query.ExecContext(ctx, `INSERT INTO audit_events
+		(id, action, actor_user_id, subject_user_id, created_at, metadata, course_id, subject_type, subject_fingerprint)
+		VALUES (?, ?, ?, NULL, ?, NULL, NULL, 'course', ?)`, eventID, string(ActionCourseCourseDeleted),
+		nullable(actorID), instant(time.Now()), fingerprint)
+	if err != nil {
+		return fmt.Errorf("write de-identified course deletion audit event: %w", err)
+	}
+	return nil
+}
+
+// NewDeletionFingerprint returns an opaque UUID v4 with no retained mapping to
+// the identity being deleted. One deletion operation reuses its returned value
+// for every retained reference to that identity.
+func NewDeletionFingerprint() (string, error) {
+	value, err := uuid.NewRandom()
+	if err != nil {
+		return "", fmt.Errorf("generate deletion fingerprint: %w", err)
+	}
+	return value.String(), nil
 }
 
 func id() (string, error) {

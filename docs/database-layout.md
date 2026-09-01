@@ -160,6 +160,11 @@ Columns:
 - `updated_at`, nullable
 - `updated_by`, nullable user ID
 
+Course names are bounded to 200 Unicode code points and 800 bytes. Description is
+bounded to 4,000 code points and 16 KiB. Curriculum, learning goals, and LLM
+instructions are each bounded to 16,000 code points and 64 KiB at the API owner
+boundary. Nullable text uses null as the only absent representation.
+
 Invariants:
 
 - A stored `mobile` is verified. Pending values live in a verification challenge.

@@ -52,6 +52,16 @@ const (
 	CodeUserAvatarInvalid          Code = "user_avatar_invalid"
 
 	CodeInvitationListUnauthorized Code = "invitation_list_unauthorized"
+
+	CodeCourseNotFound              Code = "course_not_found"
+	CodeCourseUnauthorized          Code = "course_unauthorized"
+	CodeCourseInvalid               Code = "course_invalid"
+	CodeCourseNameTaken             Code = "course_name_taken"
+	CodeCourseSupervisorInvalid     Code = "course_supervisor_invalid"
+	CodeCourseLastSupervisor        Code = "course_last_supervisor"
+	CodeCourseActivationUnavailable Code = "course_activation_unavailable"
+	CodeCourseInvalidState          Code = "course_invalid_state"
+	CodeCourseLogoInvalid           Code = "course_logo_invalid"
 )
 
 type definition struct {
@@ -98,7 +108,16 @@ var errorRegistry = map[Code]definition{
 	CodeUserMobileCodeInvalid:      {http.StatusUnprocessableEntity, "Invalid Mobile Code", "The request could not be completed."},
 	CodeUserAvatarInvalid:          {http.StatusUnprocessableEntity, "Invalid Avatar", "The request could not be completed."},
 
-	CodeInvitationListUnauthorized: {http.StatusForbidden, "Unauthorized", "The request could not be completed."},
+	CodeInvitationListUnauthorized:  {http.StatusForbidden, "Unauthorized", "The request could not be completed."},
+	CodeCourseNotFound:              {http.StatusNotFound, "Not Found", "The requested resource was not found."},
+	CodeCourseUnauthorized:          {http.StatusForbidden, "Unauthorized", "The request could not be completed."},
+	CodeCourseInvalid:               {http.StatusUnprocessableEntity, "Invalid Course", "The request could not be completed."},
+	CodeCourseNameTaken:             {http.StatusConflict, "Course Name Taken", "The request could not be completed."},
+	CodeCourseSupervisorInvalid:     {http.StatusUnprocessableEntity, "Invalid Supervisor", "The request could not be completed."},
+	CodeCourseLastSupervisor:        {http.StatusConflict, "Supervisor Required", "The request could not be completed."},
+	CodeCourseActivationUnavailable: {http.StatusConflict, "Activation Unavailable", "The request could not be completed."},
+	CodeCourseInvalidState:          {http.StatusConflict, "Invalid Course State", "The request could not be completed."},
+	CodeCourseLogoInvalid:           {http.StatusUnprocessableEntity, "Invalid Course Logo", "The request could not be completed."},
 }
 
 // Error is a registered domain error translated centrally to a JSON:API response.

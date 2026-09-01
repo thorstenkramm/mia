@@ -473,6 +473,18 @@ request and creates the inactive course and all initial assignments in one
 transaction; any invalid relationship or failed write rolls back the operation.
 The supervisors collection adds only later assignments.
 
+Course resources expose `name`, nullable `description`, nullable `curriculum`,
+nullable `learning_goals`, nullable `ai_tutor_instructions`, nullable `language`,
+`state`, lifecycle instants, and `logo_url`. Creation carries initial supervisors
+as a JSON:API `supervisors` relationship containing `users` identifiers. Assigned
+supervisors can PATCH descriptive attributes. Names are trimmed, NFC-normalized,
+limited to 200 Unicode code points and 800 bytes, and globally unique by the
+shared folded key. Only administrators may rename a course; assigned supervisors
+manage its descriptive and tutoring fields. Description is limited to 4,000 code points and 16 KiB;
+curriculum, learning goals, and AI tutor instructions are each limited to 16,000
+code points and 64 KiB. Non-null language values are canonical BCP 47 tags.
+`logo_url` is null unless the fixed course-logo path currently contains a logo.
+
 Adding a student accepts either an existing student relationship or the fields
 needed for supervisor provisioning. It requires an active course and is not a
 public registration workflow.
