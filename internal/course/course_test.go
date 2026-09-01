@@ -8,6 +8,8 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/thorstenkramm/mia/internal/auth"
+	"github.com/thorstenkramm/mia/internal/identity"
 	"github.com/thorstenkramm/mia/internal/lifecycle"
 	miSQLite "github.com/thorstenkramm/mia/internal/sqlite"
 	"github.com/thorstenkramm/mia/internal/user"
@@ -17,7 +19,7 @@ func TestCreateIsAtomicAndUsesNormalizedGlobalName(t *testing.T) {
 	database := courseDatabase(t)
 	admin := createAccount(t, database, "admin", user.Administrator)
 	supervisor := createAccount(t, database, "supervisor", user.Supervisor)
-	service := NewService(database, t.TempDir(), nil, nil, nil, nil)
+	service := NewService(database, t.TempDir(), nil, nil, nil, nil, nil, nil)
 
 	_, err := service.Create(context.Background(), CreateInput{ActorID: admin, SupervisorIDs: []string{supervisor, "u_missing"},
 		Fields: preparedFields("History")})
@@ -59,7 +61,7 @@ func TestActivationRequiresMaterialAndAssignedSupervisor(t *testing.T) {
 	database := courseDatabase(t)
 	admin := createAccount(t, database, "admin", user.Administrator)
 	supervisor := createAccount(t, database, "supervisor", user.Supervisor)
-	blocked := NewService(database, t.TempDir(), nil, nil, nil, nil)
+	blocked := NewService(database, t.TempDir(), nil, nil, nil, nil, nil, nil)
 	created, err := blocked.Create(context.Background(), CreateInput{ActorID: admin, SupervisorIDs: []string{supervisor},
 		Fields: preparedFields("Math")})
 	if err != nil {
@@ -70,7 +72,7 @@ func TestActivationRequiresMaterialAndAssignedSupervisor(t *testing.T) {
 	}
 	ready := NewService(database, t.TempDir(), nil, func(context.Context, miSQLite.Querier, string) (bool, error) {
 		return true, nil
-	}, nil, nil)
+	}, nil, nil, nil, nil)
 	active, err := ready.Activate(context.Background(), created.ID, supervisor)
 	if err != nil || !active.Active {
 		t.Fatalf("activation = %#v, %v", active, err)
@@ -111,7 +113,7 @@ func TestSupervisorInvariantAndLifecycleDeletionTransaction(t *testing.T) {
 		}
 		return nil
 	}))
-	service := NewService(database, t.TempDir(), registry, nil, nil, nil)
+	service := NewService(database, t.TempDir(), registry, nil, nil, nil, nil, nil)
 	created, err := service.Create(context.Background(), CreateInput{ActorID: admin, SupervisorIDs: []string{first},
 		Fields: preparedFields("Science")})
 	if err != nil {
@@ -175,7 +177,7 @@ func TestDeletionRejectsActiveSession(t *testing.T) {
 	admin := createAccount(t, database, "admin", user.Administrator)
 	supervisor := createAccount(t, database, "supervisor", user.Supervisor)
 	service := NewService(database, t.TempDir(), nil, nil,
-		func(context.Context, miSQLite.Querier, string) (bool, error) { return true, nil }, nil)
+		func(context.Context, miSQLite.Querier, string) (bool, error) { return true, nil }, nil, nil, nil)
 	created, err := service.Create(context.Background(), CreateInput{ActorID: admin, SupervisorIDs: []string{supervisor},
 		Fields: preparedFields("Geography")})
 	if err != nil {
@@ -183,6 +185,194 @@ func TestDeletionRejectsActiveSession(t *testing.T) {
 	}
 	if err := service.Delete(context.Background(), created.ID, admin); !errors.Is(err, ErrActiveSession) {
 		t.Fatalf("active-session deletion error = %v", err)
+	}
+}
+
+func TestStudentProvisioningMembershipRemovalAndRejoin(t *testing.T) {
+	database := courseDatabase(t)
+	admin := createAccount(t, database, "admin", user.Administrator)
+	supervisor := createAccount(t, database, "supervisor", user.Supervisor)
+	staffOnly := createAccount(t, database, "mentor", user.Mentor)
+	registry := &lifecycle.Registry{}
+	if _, err := database.Exec("CREATE TABLE student_course_markers (course_id TEXT, student_id TEXT)"); err != nil {
+		t.Fatal(err)
+	}
+	registry.RegisterStudentCourse(lifecycle.StudentCourseFunc(func(
+		ctx context.Context,
+		query miSQLite.Querier,
+		courseID string,
+		studentID string,
+	) error {
+		_, err := query.ExecContext(ctx,
+			"DELETE FROM student_course_markers WHERE course_id = ? AND student_id = ?", courseID, studentID)
+		return err
+	}))
+	activeSession := false
+	service := NewService(database, t.TempDir(), registry, nil, nil,
+		func(context.Context, miSQLite.Querier, string, string) (bool, error) { return activeSession, nil },
+		auth.InvalidateSecurityArtifacts, nil)
+	created, err := service.Create(context.Background(), CreateInput{ActorID: admin, SupervisorIDs: []string{supervisor},
+		Fields: preparedFields("Biology")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.ProvisionStudent(context.Background(), created.ID, ProvisionStudentInput{
+		Username: "learner", Password: "Qz7 learner temporary phrase", Language: "en", Country: "DE", TimeZone: "UTC",
+		ActorID: supervisor,
+	}); !errors.Is(err, ErrInvalidState) {
+		t.Fatalf("provision into inactive course error = %v", err)
+	}
+	if _, err := database.Exec("UPDATE courses SET is_active = 1 WHERE id = ?", created.ID); err != nil {
+		t.Fatal(err)
+	}
+	membership, err := service.ProvisionStudent(context.Background(), created.ID, ProvisionStudentInput{
+		Username: "learner", Password: "Qz7 learner temporary phrase", Language: "en", Country: "DE", TimeZone: "UTC",
+		ActorID: supervisor,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var gate, roles int
+	if err := database.QueryRow("SELECT must_change_password FROM users WHERE id = ?", membership.StudentID).Scan(&gate); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.QueryRow("SELECT COUNT(*) FROM user_roles WHERE user_id = ? AND role = 'student'",
+		membership.StudentID).Scan(&roles); err != nil || gate != 1 || roles != 1 {
+		t.Fatalf("provisioned account gate=%d student roles=%d err=%v", gate, roles, err)
+	}
+	repeated, err := service.AddStudent(context.Background(), created.ID, "LEARNER", supervisor)
+	if err != nil || repeated.ID != membership.ID {
+		t.Fatalf("idempotent membership = %#v, %v", repeated, err)
+	}
+	if _, err := service.AddStudent(context.Background(), created.ID, "unknown", supervisor); !errors.Is(err,
+		ErrStudentNotFound) {
+		t.Fatalf("unknown student error = %v", err)
+	}
+	if _, err := service.AddStudent(context.Background(), created.ID, "mentor", supervisor); !errors.Is(err,
+		ErrStudentNotFound) {
+		t.Fatalf("non-student error = %v (staff %s)", err, staffOnly)
+	}
+	if _, err := database.Exec("INSERT INTO student_course_markers (course_id, student_id) VALUES (?, ?)",
+		created.ID, membership.StudentID); err != nil {
+		t.Fatal(err)
+	}
+	activeSession = true
+	if err := service.RemoveStudent(context.Background(), created.ID, membership.StudentID, supervisor); !errors.Is(err,
+		ErrActiveSession) {
+		t.Fatalf("active-session removal error = %v", err)
+	}
+	activeSession = false
+	if err := service.RemoveStudent(context.Background(), created.ID, membership.StudentID, supervisor); err != nil {
+		t.Fatal(err)
+	}
+	var count int
+	if err := database.QueryRow("SELECT COUNT(*) FROM users WHERE id = ?", membership.StudentID).Scan(&count); err != nil || count != 1 {
+		t.Fatalf("account after membership removal count=%d err=%v", count, err)
+	}
+	if err := database.QueryRow("SELECT COUNT(*) FROM student_course_markers").Scan(&count); err != nil || count != 0 {
+		t.Fatalf("course data after removal count=%d err=%v", count, err)
+	}
+	rejoined, err := service.AddStudent(context.Background(), created.ID, "learner", supervisor)
+	if err != nil || rejoined.ID == membership.ID {
+		t.Fatalf("rejoined membership = %#v, %v", rejoined, err)
+	}
+}
+
+func TestTemporaryPasswordAndBanSecurityEffectsAreScoped(t *testing.T) {
+	database := courseDatabase(t)
+	admin := createAccount(t, database, "admin", user.Administrator)
+	supervisor := createAccount(t, database, "supervisor", user.Supervisor)
+	unrelated := createAccount(t, database, "unrelated", user.Supervisor)
+	service := NewService(database, t.TempDir(), nil, nil, nil, nil, auth.InvalidateSecurityArtifacts, nil)
+	created, err := service.Create(context.Background(), CreateInput{ActorID: admin, SupervisorIDs: []string{supervisor},
+		Fields: preparedFields("Physics")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec("UPDATE courses SET is_active = 1 WHERE id = ?", created.ID); err != nil {
+		t.Fatal(err)
+	}
+	membership, err := service.ProvisionStudent(context.Background(), created.ID, ProvisionStudentInput{
+		Username: "student", Password: "Qz7 first temporary phrase", Language: "en", Country: "DE", TimeZone: "UTC",
+		ActorID: supervisor,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.AddStudent(context.Background(), created.ID, "supervisor", supervisor); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.SetTemporaryPassword(context.Background(), membership.StudentID, unrelated,
+		"Qz7 second temporary phrase"); !errors.Is(err, ErrStudentNotFound) {
+		t.Fatalf("unrelated password reset error = %v", err)
+	}
+	insertMFAArtifacts(t, database, membership.StudentID)
+	var generationBefore int64
+	if err := database.QueryRow("SELECT security_generation FROM users WHERE id = ?", membership.StudentID).
+		Scan(&generationBefore); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.SetTemporaryPassword(context.Background(), membership.StudentID, supervisor,
+		"Qz7 second temporary phrase"); err != nil {
+		t.Fatal(err)
+	}
+	var hash string
+	var generationAfter int64
+	if err := database.QueryRow("SELECT password_hash, security_generation FROM users WHERE id = ?", membership.StudentID).
+		Scan(&hash, &generationAfter); err != nil {
+		t.Fatal(err)
+	}
+	matches, err := identity.VerifyPassword("Qz7 second temporary phrase", hash)
+	if err != nil || !matches || generationAfter != generationBefore+1 {
+		t.Fatalf("temporary password matches=%v generation=%d->%d err=%v", matches, generationBefore,
+			generationAfter, err)
+	}
+	assertNoMFAArtifacts(t, database, membership.StudentID)
+
+	insertMFAArtifacts(t, database, membership.StudentID)
+	if err := service.SetStudentBanned(context.Background(), membership.StudentID, supervisor, true); err != nil {
+		t.Fatal(err)
+	}
+	var banned int
+	var banGeneration int64
+	if err := database.QueryRow("SELECT is_banned, security_generation FROM users WHERE id = ?", membership.StudentID).
+		Scan(&banned, &banGeneration); err != nil || banned != 1 || banGeneration != generationAfter {
+		t.Fatalf("ban state=%d generation=%d err=%v", banned, banGeneration, err)
+	}
+	assertNoMFAArtifacts(t, database, membership.StudentID)
+	if err := service.SetStudentBanned(context.Background(), supervisor, supervisor, true); !errors.Is(err,
+		ErrStudentNotFound) {
+		t.Fatalf("staff ban error = %v", err)
+	}
+	if err := service.SetStudentBanned(context.Background(), membership.StudentID, supervisor, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.QueryRow("SELECT is_banned FROM users WHERE id = ?", membership.StudentID).Scan(&banned); err != nil || banned != 0 {
+		t.Fatalf("unban state=%d err=%v", banned, err)
+	}
+}
+
+func insertMFAArtifacts(t *testing.T, database *sql.DB, studentID string) {
+	t.Helper()
+	if _, err := database.Exec(`INSERT INTO mfa_challenges
+		(id, user_id, method, expires_at, created_at) VALUES (?, ?, 'totp', ?, ?)`, "mfc_"+uuid.NewString(),
+		studentID, "2099-01-01T00:00:00.000000Z", "2026-09-01T00:00:00.000000Z"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`INSERT INTO mfa_management_proofs
+		(id, user_id, token_digest, expires_at, created_at) VALUES (?, ?, ?, ?, ?)`, "mfp_"+uuid.NewString(),
+		studentID, []byte("digest"), "2099-01-01T00:00:00.000000Z", "2026-09-01T00:00:00.000000Z"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func assertNoMFAArtifacts(t *testing.T, database *sql.DB, studentID string) {
+	t.Helper()
+	for _, table := range []string{"mfa_challenges", "mfa_management_proofs"} {
+		var count int
+		if err := database.QueryRow("SELECT COUNT(*) FROM "+table+" WHERE user_id = ?", studentID).Scan(&count); err != nil || count != 0 {
+			t.Fatalf("%s artifacts=%d err=%v", table, count, err)
+		}
 	}
 }
 

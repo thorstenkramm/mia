@@ -1405,10 +1405,16 @@ func nullableStep(method string, step int64) any {
 }
 
 func invalidateMFAArtifacts(ctx context.Context, tx *sql.Tx, accountID string) error {
-	if _, err := tx.ExecContext(ctx, "DELETE FROM mfa_challenges WHERE user_id = ?", accountID); err != nil {
+	return InvalidateSecurityArtifacts(ctx, tx, accountID)
+}
+
+// InvalidateSecurityArtifacts removes challenges and management proofs after a
+// password or account-security state change in the caller's transaction.
+func InvalidateSecurityArtifacts(ctx context.Context, query miSQLite.Querier, accountID string) error {
+	if _, err := query.ExecContext(ctx, "DELETE FROM mfa_challenges WHERE user_id = ?", accountID); err != nil {
 		return fmt.Errorf("invalidate MFA challenges: %w", err)
 	}
-	if _, err := tx.ExecContext(ctx, "DELETE FROM mfa_management_proofs WHERE user_id = ?", accountID); err != nil {
+	if _, err := query.ExecContext(ctx, "DELETE FROM mfa_management_proofs WHERE user_id = ?", accountID); err != nil {
 		return fmt.Errorf("invalidate MFA proofs: %w", err)
 	}
 	return nil

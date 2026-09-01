@@ -38,6 +38,8 @@ var (
 	ErrInvalidState          = errors.New("course state does not allow action")
 	ErrActiveSession         = errors.New("course has an active tutoring session")
 	ErrLogoNotFound          = errors.New("course logo not found")
+	ErrStudentNotFound       = errors.New("course student not found")
+	ErrStudentInvalid        = errors.New("invalid course student")
 )
 
 const (
@@ -54,6 +56,13 @@ type MaterialReadiness func(context.Context, miSQLite.Querier, string) (bool, er
 
 // ActiveSessionCheck is the tutoring owner's transaction-aware course-deletion gate.
 type ActiveSessionCheck func(context.Context, miSQLite.Querier, string) (bool, error)
+
+// StudentActiveSessionCheck is the tutoring owner's membership-removal gate.
+type StudentActiveSessionCheck func(context.Context, miSQLite.Querier, string, string) (bool, error)
+
+// SecurityArtifactsInvalidator is the auth owner's transaction-aware cleanup
+// for challenges and proofs invalidated by password and ban-state changes.
+type SecurityArtifactsInvalidator func(context.Context, miSQLite.Querier, string) error
 
 type OptionalString struct {
 	Set   bool
@@ -79,6 +88,21 @@ type ListResult struct {
 	HasMore bool
 }
 
+type Membership struct {
+	ID, CourseID, StudentID, Username, AddedBy string
+	JoinedAt                                   time.Time
+}
+
+type MembershipListResult struct {
+	Memberships []Membership
+	HasMore     bool
+}
+
+type ProvisionStudentInput struct {
+	Username, Password, Language, Country, TimeZone string
+	ActorID                                         string
+}
+
 type Course struct {
 	ID, Name                               string
 	Description, Curriculum, LearningGoals *string
@@ -92,17 +116,20 @@ type Course struct {
 
 // Service is safe for concurrent use after construction.
 type Service struct {
-	database       *sql.DB
-	dataDir        string
-	lifecycle      *lifecycle.Registry
-	materialReady  MaterialReadiness
-	activeSessions ActiveSessionCheck
-	logger         *slog.Logger
-	logoMu         sync.RWMutex
+	database              *sql.DB
+	dataDir               string
+	lifecycle             *lifecycle.Registry
+	materialReady         MaterialReadiness
+	activeSessions        ActiveSessionCheck
+	studentActiveSessions StudentActiveSessionCheck
+	invalidateSecurity    SecurityArtifactsInvalidator
+	logger                *slog.Logger
+	logoMu                sync.RWMutex
 }
 
 func NewService(database *sql.DB, dataDir string, registry *lifecycle.Registry, readiness MaterialReadiness,
-	activeSessions ActiveSessionCheck, logger *slog.Logger) *Service {
+	activeSessions ActiveSessionCheck, studentActiveSessions StudentActiveSessionCheck,
+	invalidateSecurity SecurityArtifactsInvalidator, logger *slog.Logger) *Service {
 	if registry == nil {
 		registry = &lifecycle.Registry{}
 	}
@@ -110,7 +137,8 @@ func NewService(database *sql.DB, dataDir string, registry *lifecycle.Registry, 
 		logger = slog.Default()
 	}
 	return &Service{database: database, dataDir: dataDir, lifecycle: registry, materialReady: readiness,
-		activeSessions: activeSessions, logger: logger}
+		activeSessions: activeSessions, studentActiveSessions: studentActiveSessions,
+		invalidateSecurity: invalidateSecurity, logger: logger}
 }
 
 func (service *Service) AuditMutationDenied(ctx context.Context, actorID, outcome string) {
@@ -247,6 +275,220 @@ func (service *Service) List(ctx context.Context, actorID string, input ListInpu
 		courses[index].HasLogo = service.logoExists(courses[index].ID)
 	}
 	return ListResult{Courses: courses, HasMore: hasMore}, nil
+}
+
+func (service *Service) ListStudents(
+	ctx context.Context,
+	courseID string,
+	actorID string,
+	input ListInput,
+) (MembershipListResult, error) {
+	if input.Limit < 1 || input.Limit > 100 || input.Offset < 0 || input.Offset > 10_000 {
+		return MembershipListResult{}, ErrStudentInvalid
+	}
+	if err := requireAssignedSupervisor(ctx, service.database, courseID, actorID, false); err != nil {
+		return MembershipListResult{}, err
+	}
+	rows, err := service.database.QueryContext(ctx, `SELECT cs.id, cs.course_id, cs.student_user_id, u.username,
+		cs.joined_at, COALESCE(cs.added_by, '') FROM course_students cs JOIN users u ON u.id = cs.student_user_id
+		WHERE cs.course_id = ? ORDER BY u.username_key, u.id LIMIT ? OFFSET ?`, courseID, input.Limit+1, input.Offset)
+	if err != nil {
+		return MembershipListResult{}, fmt.Errorf("list course students: %w", err)
+	}
+	memberships, err := scanMemberships(rows)
+	if err != nil {
+		return MembershipListResult{}, err
+	}
+	hasMore := len(memberships) > input.Limit
+	if hasMore {
+		memberships = memberships[:input.Limit]
+	}
+	return MembershipListResult{Memberships: memberships, HasMore: hasMore}, nil
+}
+
+func (service *Service) ProvisionStudent(
+	ctx context.Context,
+	courseID string,
+	input ProvisionStudentInput,
+) (Membership, error) {
+	if _, err := identity.Username(input.Username); err != nil {
+		return Membership{}, ErrStudentInvalid
+	}
+	if _, err := identity.Language(input.Language); err != nil {
+		return Membership{}, ErrStudentInvalid
+	}
+	if _, err := identity.Country(input.Country); err != nil {
+		return Membership{}, ErrStudentInvalid
+	}
+	if _, err := identity.TimeZone(input.TimeZone); err != nil {
+		return Membership{}, ErrStudentInvalid
+	}
+	passwordHash, err := identity.Password(input.Password)
+	if err != nil {
+		return Membership{}, ErrStudentInvalid
+	}
+	var membership Membership
+	err = miSQLite.WithTx(ctx, service.database, func(tx *sql.Tx) error {
+		if err := requireAssignedSupervisor(ctx, tx, courseID, input.ActorID, true); err != nil {
+			return err
+		}
+		account, err := user.Create(ctx, tx, user.CreateInput{Username: input.Username, PasswordHash: passwordHash,
+			Language: input.Language, Country: input.Country, TimeZone: input.TimeZone, MustChangePassword: true,
+			Roles: []user.Role{user.Student}})
+		if err != nil {
+			return err
+		}
+		membership, err = insertMembership(ctx, tx, courseID, account.ID, input.Username, input.ActorID)
+		if err != nil {
+			return err
+		}
+		return audit.WriteWithMetadata(ctx, tx, audit.ActionCourseStudentProvisioned, input.ActorID, account.ID,
+			audit.Metadata{CourseID: courseID})
+	})
+	return membership, err
+}
+
+func (service *Service) AddStudent(
+	ctx context.Context,
+	courseID string,
+	username string,
+	actorID string,
+) (Membership, error) {
+	usernameKey, err := identity.Username(username)
+	if err != nil {
+		return Membership{}, ErrStudentNotFound
+	}
+	var membership Membership
+	err = miSQLite.WithTx(ctx, service.database, func(tx *sql.Tx) error {
+		if err := requireAssignedSupervisor(ctx, tx, courseID, actorID, false); err != nil {
+			return err
+		}
+		var currentStudentID string
+		err := tx.QueryRowContext(ctx, `SELECT cs.student_user_id FROM course_students cs JOIN users u
+			ON u.id = cs.student_user_id WHERE cs.course_id = ? AND u.username_key = ?`, courseID, usernameKey).
+			Scan(&currentStudentID)
+		if err == nil {
+			membership, err = loadMembership(ctx, tx, courseID, currentStudentID)
+			return err
+		}
+		if !errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("find current course student: %w", err)
+		}
+		if err := requireActiveCourse(ctx, tx, courseID); err != nil {
+			return err
+		}
+		var studentID, displayUsername string
+		err = tx.QueryRowContext(ctx, `SELECT u.id, u.username FROM users u WHERE u.username_key = ?
+			AND EXISTS(SELECT 1 FROM user_roles r WHERE r.user_id = u.id AND r.role = 'student')`, usernameKey).
+			Scan(&studentID, &displayUsername)
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrStudentNotFound
+		}
+		if err != nil {
+			return fmt.Errorf("find existing course student: %w", err)
+		}
+		var inserted bool
+		membership, inserted, err = insertMembershipIdempotent(ctx, tx, courseID, studentID, displayUsername, actorID)
+		if err != nil {
+			return err
+		}
+		if !inserted {
+			return nil
+		}
+		return audit.WriteWithMetadata(ctx, tx, audit.ActionCourseStudentAdded, actorID, studentID,
+			audit.Metadata{CourseID: courseID})
+	})
+	return membership, err
+}
+
+func (service *Service) RemoveStudent(ctx context.Context, courseID, studentID, actorID string) error {
+	return miSQLite.WithTx(ctx, service.database, func(tx *sql.Tx) error {
+		if err := requireAssignedSupervisor(ctx, tx, courseID, actorID, false); err != nil {
+			return err
+		}
+		if _, err := loadMembership(ctx, tx, courseID, studentID); err != nil {
+			return err
+		}
+		if service.studentActiveSessions != nil {
+			active, err := service.studentActiveSessions(ctx, tx, courseID, studentID)
+			if err != nil {
+				return err
+			}
+			if active {
+				return ErrActiveSession
+			}
+		}
+		if err := service.lifecycle.DeleteStudentCourseData(ctx, tx, courseID, studentID); err != nil {
+			return fmt.Errorf("delete registered student course data: %w", err)
+		}
+		if err := audit.ReplaceStudentCourseHistoryWithRemoval(ctx, tx, courseID, studentID, actorID); err != nil {
+			return err
+		}
+		result, err := tx.ExecContext(ctx, "DELETE FROM course_students WHERE course_id = ? AND student_user_id = ?",
+			courseID, studentID)
+		if err != nil {
+			return fmt.Errorf("remove course student: %w", err)
+		}
+		rows, err := result.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("count removed course student: %w", err)
+		}
+		if rows != 1 {
+			return ErrStudentNotFound
+		}
+		return nil
+	})
+}
+
+func (service *Service) SetTemporaryPassword(ctx context.Context, studentID, actorID, password string) error {
+	if service.invalidateSecurity == nil {
+		return errors.New("student security invalidator is not configured")
+	}
+	hash, err := identity.Password(password)
+	if err != nil {
+		return ErrStudentInvalid
+	}
+	return miSQLite.WithTx(ctx, service.database, func(tx *sql.Tx) error {
+		if err := requireSharedStudent(ctx, tx, studentID, actorID); err != nil {
+			return err
+		}
+		if err := user.SetTemporaryPassword(ctx, tx, studentID, hash); err != nil {
+			if errors.Is(err, user.ErrStudentIneligible) {
+				return ErrStudentNotFound
+			}
+			return err
+		}
+		if err := service.invalidateSecurity(ctx, tx, studentID); err != nil {
+			return err
+		}
+		return audit.Write(ctx, tx, audit.ActionUserTemporaryPasswordSet, actorID, studentID)
+	})
+}
+
+func (service *Service) SetStudentBanned(ctx context.Context, studentID, actorID string, banned bool) error {
+	if service.invalidateSecurity == nil {
+		return errors.New("student security invalidator is not configured")
+	}
+	return miSQLite.WithTx(ctx, service.database, func(tx *sql.Tx) error {
+		if err := requireSharedStudent(ctx, tx, studentID, actorID); err != nil {
+			return err
+		}
+		changed, err := user.SetBanned(ctx, tx, studentID, banned)
+		if errors.Is(err, user.ErrStudentIneligible) {
+			return ErrStudentNotFound
+		}
+		if err != nil || !changed {
+			return err
+		}
+		if err := service.invalidateSecurity(ctx, tx, studentID); err != nil {
+			return err
+		}
+		action := audit.ActionUserStudentUnbanned
+		if banned {
+			action = audit.ActionUserStudentBanned
+		}
+		return audit.Write(ctx, tx, action, actorID, studentID)
+	})
 }
 
 func (service *Service) Update(ctx context.Context, courseID, actorID string, changes Fields) (Course, error) {
@@ -568,6 +810,167 @@ func supervisorIDs(ctx context.Context, query miSQLite.Querier, courseID string)
 		return nil, err
 	}
 	return ids, nil
+}
+
+func insertMembership(
+	ctx context.Context,
+	query miSQLite.Querier,
+	courseID string,
+	studentID string,
+	username string,
+	actorID string,
+) (Membership, error) {
+	joinedAt := time.Now()
+	membership := Membership{ID: "cst_" + uuid.NewString(), CourseID: courseID, StudentID: studentID,
+		Username: username, JoinedAt: joinedAt, AddedBy: actorID}
+	_, err := query.ExecContext(ctx, `INSERT INTO course_students
+		(id, course_id, student_user_id, joined_at, added_by) VALUES (?, ?, ?, ?, ?)`, membership.ID, courseID,
+		studentID, instant(joinedAt), actorID)
+	if err != nil {
+		return Membership{}, fmt.Errorf("insert course student: %w", err)
+	}
+	return membership, nil
+}
+
+func insertMembershipIdempotent(
+	ctx context.Context,
+	query miSQLite.Querier,
+	courseID string,
+	studentID string,
+	username string,
+	actorID string,
+) (Membership, bool, error) {
+	joinedAt := time.Now()
+	membership := Membership{ID: "cst_" + uuid.NewString(), CourseID: courseID, StudentID: studentID,
+		Username: username, JoinedAt: joinedAt, AddedBy: actorID}
+	result, err := query.ExecContext(ctx, `INSERT OR IGNORE INTO course_students
+		(id, course_id, student_user_id, joined_at, added_by) VALUES (?, ?, ?, ?, ?)`, membership.ID, courseID,
+		studentID, instant(joinedAt), actorID)
+	if err != nil {
+		return Membership{}, false, fmt.Errorf("add course student: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return Membership{}, false, fmt.Errorf("count added course student: %w", err)
+	}
+	if rows == 1 {
+		return membership, true, nil
+	}
+	existing, err := loadMembership(ctx, query, courseID, studentID)
+	return existing, false, err
+}
+
+func loadMembership(ctx context.Context, query miSQLite.Querier, courseID, studentID string) (Membership, error) {
+	var membership Membership
+	var joinedAt string
+	err := query.QueryRowContext(ctx, `SELECT cs.id, cs.course_id, cs.student_user_id, u.username, cs.joined_at,
+		COALESCE(cs.added_by, '') FROM course_students cs JOIN users u ON u.id = cs.student_user_id
+		WHERE cs.course_id = ? AND cs.student_user_id = ?`, courseID, studentID).
+		Scan(&membership.ID, &membership.CourseID, &membership.StudentID, &membership.Username, &joinedAt,
+			&membership.AddedBy)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Membership{}, ErrStudentNotFound
+	}
+	if err != nil {
+		return Membership{}, fmt.Errorf("load course student: %w", err)
+	}
+	membership.JoinedAt, err = parseInstant(joinedAt)
+	return membership, err
+}
+
+func scanMemberships(rows *sql.Rows) ([]Membership, error) {
+	var memberships []Membership
+	for rows.Next() {
+		var membership Membership
+		var joinedAt string
+		if err := rows.Scan(&membership.ID, &membership.CourseID, &membership.StudentID, &membership.Username,
+			&joinedAt, &membership.AddedBy); err != nil {
+			return nil, errors.Join(fmt.Errorf("scan course student: %w", err), closeRows(rows))
+		}
+		var err error
+		membership.JoinedAt, err = parseInstant(joinedAt)
+		if err != nil {
+			return nil, errors.Join(err, closeRows(rows))
+		}
+		memberships = append(memberships, membership)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, errors.Join(fmt.Errorf("iterate course students: %w", err), closeRows(rows))
+	}
+	if err := closeRows(rows); err != nil {
+		return nil, err
+	}
+	return memberships, nil
+}
+
+// requireAssignedSupervisor scopes course mutations in SQL so unknown courses
+// and courses outside the actor's assignments remain indistinguishable.
+func requireAssignedSupervisor(
+	ctx context.Context,
+	query miSQLite.Querier,
+	courseID string,
+	actorID string,
+	requireActive bool,
+) error {
+	activeCondition := ""
+	if requireActive {
+		activeCondition = " AND c.is_active = 1"
+	}
+	var allowed int
+	err := query.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM courses c
+		JOIN course_supervisors cs ON cs.course_id = c.id
+		WHERE c.id = ? AND cs.supervisor_user_id = ?`+activeCondition+`)`, courseID, actorID).Scan(&allowed)
+	if err != nil {
+		return fmt.Errorf("authorize course student mutation: %w", err)
+	}
+	if allowed != 0 {
+		return nil
+	}
+	if requireActive {
+		var assigned int
+		if err := query.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM course_supervisors
+			WHERE course_id = ? AND supervisor_user_id = ?)`, courseID, actorID).Scan(&assigned); err != nil {
+			return fmt.Errorf("check inactive course assignment: %w", err)
+		}
+		if assigned != 0 {
+			return ErrInvalidState
+		}
+	}
+	return ErrNotFound
+}
+
+func requireActiveCourse(ctx context.Context, query miSQLite.Querier, courseID string) error {
+	var active int
+	if err := query.QueryRowContext(ctx, "SELECT is_active FROM courses WHERE id = ?", courseID).Scan(&active); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrNotFound
+		}
+		return fmt.Errorf("load membership course state: %w", err)
+	}
+	if active == 0 {
+		return ErrInvalidState
+	}
+	return nil
+}
+
+// requireSharedStudent authorizes global student security mutations by one
+// shared course while hiding missing, staff, and out-of-scope accounts alike.
+func requireSharedStudent(ctx context.Context, query miSQLite.Querier, studentID, actorID string) error {
+	var allowed int
+	err := query.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM users u
+		JOIN course_students student ON student.student_user_id = u.id
+		JOIN course_supervisors supervisor ON supervisor.course_id = student.course_id
+		WHERE u.id = ? AND supervisor.supervisor_user_id = ?
+		AND EXISTS(SELECT 1 FROM user_roles role WHERE role.user_id = u.id AND role.role = 'student')
+		AND NOT EXISTS(SELECT 1 FROM user_roles role WHERE role.user_id = u.id
+			AND role.role IN ('administrator', 'supervisor', 'mentor')))`, studentID, actorID).Scan(&allowed)
+	if err != nil {
+		return fmt.Errorf("authorize shared student mutation: %w", err)
+	}
+	if allowed == 0 {
+		return ErrStudentNotFound
+	}
+	return nil
 }
 
 func closeRows(rows *sql.Rows) error {

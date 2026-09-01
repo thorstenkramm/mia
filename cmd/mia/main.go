@@ -267,7 +267,7 @@ func newServeCommand() *cobra.Command {
 		invitation.RegisterRoleRoutes(server, database, logger.Slog())
 		lifecycleRegistry := &lifecycle.Registry{}
 		course.Register(server, course.NewService(database, configuration.Main.DataDir, lifecycleRegistry, nil, nil,
-			logger.Slog()))
+			nil, auth.InvalidateSecurityArtifacts, logger.Slog()))
 		return serve(command.Context(), configuration.HTTP.Listen, configuration.HTTP.SocketGroup, server.Echo, logger)
 	}}
 }

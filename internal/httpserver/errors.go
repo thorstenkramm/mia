@@ -62,6 +62,8 @@ const (
 	CodeCourseActivationUnavailable Code = "course_activation_unavailable"
 	CodeCourseInvalidState          Code = "course_invalid_state"
 	CodeCourseLogoInvalid           Code = "course_logo_invalid"
+	CodeCourseStudentNotFound       Code = "course_student_not_found"
+	CodeCourseStudentInvalid        Code = "course_student_invalid"
 )
 
 type definition struct {
@@ -118,6 +120,8 @@ var errorRegistry = map[Code]definition{
 	CodeCourseActivationUnavailable: {http.StatusConflict, "Activation Unavailable", "The request could not be completed."},
 	CodeCourseInvalidState:          {http.StatusConflict, "Invalid Course State", "The request could not be completed."},
 	CodeCourseLogoInvalid:           {http.StatusUnprocessableEntity, "Invalid Course Logo", "The request could not be completed."},
+	CodeCourseStudentNotFound:       {http.StatusNotFound, "Not Found", "The requested resource was not found."},
+	CodeCourseStudentInvalid:        {http.StatusUnprocessableEntity, "Invalid Student", "The request could not be completed."},
 }
 
 // Error is a registered domain error translated centrally to a JSON:API response.

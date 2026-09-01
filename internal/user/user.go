@@ -21,6 +21,7 @@ var (
 	ErrRoleActorRequired       = errors.New("role grant actor is required")
 	ErrRoleActorUnauthorized   = errors.New("role grant actor is not authorized")
 	ErrRoleRecipientIneligible = errors.New("role recipient does not meet staff role requirements")
+	ErrStudentIneligible       = errors.New("student account is ineligible")
 )
 
 type Role string
@@ -35,6 +36,7 @@ const (
 type CreateInput struct {
 	Username, Email, PasswordHash, Language, Country, TimeZone string
 	EmailVerified                                              bool
+	MustChangePassword                                         bool
 	Roles                                                      []Role
 }
 
@@ -199,9 +201,10 @@ func Create(ctx context.Context, query miSQLite.Querier, input CreateInput) (Acc
 		verified = now
 	}
 	_, err = query.ExecContext(ctx, `INSERT INTO users
-		(id, username, username_key, email, email_key, email_verified_at, password_hash, preferred_language, country, time_zone, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, id, input.Username, usernameKey, nullable(email), nullable(emailKey), verified,
-		input.PasswordHash, language, country, timeZone, now)
+		(id, username, username_key, email, email_key, email_verified_at, password_hash, preferred_language, country,
+		 time_zone, must_change_password, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, id, input.Username, usernameKey, nullable(email), nullable(emailKey),
+		verified, input.PasswordHash, language, country, timeZone, input.MustChangePassword, now)
 	if err != nil {
 		if isUsernameUniqueViolation(err) {
 			return Account{}, ErrUsernameTaken
@@ -213,7 +216,69 @@ func Create(ctx context.Context, query miSQLite.Querier, input CreateInput) (Acc
 			return Account{}, fmt.Errorf("grant initial role: %w", err)
 		}
 	}
-	return Account{ID: id, PasswordHash: input.PasswordHash, SecurityGeneration: 1}, nil
+	return Account{ID: id, PasswordHash: input.PasswordHash, SecurityGeneration: 1,
+		MustChangePassword: input.MustChangePassword}, nil
+}
+
+// SetTemporaryPassword changes a student-only account's password, enables the
+// replacement gate, and invalidates every browser cookie through its generation.
+func SetTemporaryPassword(ctx context.Context, query miSQLite.Querier, accountID, passwordHash string) error {
+	result, err := query.ExecContext(ctx, `UPDATE users SET password_hash = ?, must_change_password = 1,
+		security_generation = security_generation + 1 WHERE id = ?
+		AND EXISTS(SELECT 1 FROM user_roles WHERE user_id = users.id AND role = 'student')
+		AND NOT EXISTS(SELECT 1 FROM user_roles WHERE user_id = users.id
+			AND role IN ('administrator', 'supervisor', 'mentor'))`, passwordHash, accountID)
+	if err != nil {
+		return fmt.Errorf("set temporary student password: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("count temporary student password update: %w", err)
+	}
+	if rows != 1 {
+		return ErrStudentIneligible
+	}
+	return nil
+}
+
+// SetBanned changes ban state only for a student-only account. The returned
+// boolean reports whether the durable state changed.
+func SetBanned(ctx context.Context, query miSQLite.Querier, accountID string, banned bool) (bool, error) {
+	desired := 0
+	if banned {
+		desired = 1
+	}
+	var eligible, current int
+	err := query.QueryRowContext(ctx, `SELECT
+		EXISTS(SELECT 1 FROM user_roles WHERE user_id = users.id AND role = 'student')
+		AND NOT EXISTS(SELECT 1 FROM user_roles WHERE user_id = users.id
+			AND role IN ('administrator', 'supervisor', 'mentor')), is_banned
+		FROM users WHERE id = ?`, accountID).Scan(&eligible, &current)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, ErrStudentIneligible
+	}
+	if err != nil {
+		return false, fmt.Errorf("load student ban state: %w", err)
+	}
+	if eligible == 0 {
+		return false, ErrStudentIneligible
+	}
+	if current == desired {
+		return false, nil
+	}
+	result, err := query.ExecContext(ctx, "UPDATE users SET is_banned = ? WHERE id = ? AND is_banned = ?",
+		desired, accountID, current)
+	if err != nil {
+		return false, fmt.Errorf("change student ban state: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("count student ban update: %w", err)
+	}
+	if rows != 1 {
+		return false, errors.New("student ban state changed concurrently")
+	}
+	return true, nil
 }
 
 func HasAdministrator(ctx context.Context, query miSQLite.Querier) (bool, error) {

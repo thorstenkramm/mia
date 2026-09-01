@@ -285,6 +285,7 @@ Invariants:
 
 Columns:
 
+- `id`, prefixed UUID v4 membership ID, primary key
 - `course_id`, course ID, not null
 - `supervisor_user_id`, user ID, not null
 - `assigned_at`, not null
@@ -310,7 +311,7 @@ Columns:
 
 Constraints:
 
-- Primary key: (`course_id`, `student_user_id`).
+- Unique key: (`course_id`, `student_user_id`).
 - The user must hold the student role.
 - Creating a membership requires an active course and an acting assigned
   supervisor.

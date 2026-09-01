@@ -490,11 +490,27 @@ needed for supervisor provisioning. It requires an active course and is not a
 public registration workflow.
 
 The request explicitly selects new-account or existing-account mode.
+The JSON:API resource type is `course-students`. Its `mode` attribute is either
+`provision` or `existing`, and `username` is required in both modes.
+Provisioning additionally requires `temporary_password`, `preferred_language`,
+`country`, and `time_zone`; no default identity fields are inferred. The
+temporary password is accepted only in the request and is never returned.
 Existing-account mode accepts only the complete username, performs no search,
 requires an existing student role, and rejects profile or password fields.
 Unknown and non-student usernames return the same safe not-found response. An
 existing membership returns that membership idempotently. A clean rejoin creates
 a new membership and restores no deleted course data.
+
+The students collection is visible only to assigned course supervisors and uses
+the standard `page[limit]` and `page[offset]` pagination. Membership resources
+carry their own `cst_` ID, username and join instant, plus course and student
+relationships. Removal addresses the student user ID in the route and returns
+204 on success.
+
+Temporary-password requests use a `temporary-passwords` resource with one
+`password` attribute. Ban creation and deletion have no request body and are
+idempotent. All three operations return 204 and treat missing, staff, and
+out-of-scope targets as the same `course_student_not_found` response.
 
 Only an administrator removes a course supervisor, and the last supervisor
 cannot be removed. An assigned supervisor may remove a student only when that

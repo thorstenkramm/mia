@@ -14,6 +14,7 @@ import (
 	"github.com/labstack/echo/v5"
 	"github.com/thorstenkramm/mia/internal/httpserver"
 	"github.com/thorstenkramm/mia/internal/imagefile"
+	"github.com/thorstenkramm/mia/internal/user"
 )
 
 func Register(server *httpserver.Server, service *Service) {
@@ -30,6 +31,12 @@ func Register(server *httpserver.Server, service *Service) {
 	server.AuthenticatedGET("/api/v1/courses/:id/logo", logoHandler(service))
 	server.AuthenticatedPUT("/api/v1/courses/:id/logo", putLogoHandler(service))
 	server.AuthenticatedDELETE("/api/v1/courses/:id/logo", deleteLogoHandler(service))
+	server.AuthenticatedGET("/api/v1/courses/:id/students", listStudentsHandler(service))
+	server.AuthenticatedPOST("/api/v1/courses/:id/students", addStudentHandler(service))
+	server.AuthenticatedDELETE("/api/v1/courses/:id/students/:user_id", removeStudentHandler(service))
+	server.AuthenticatedPOST("/api/v1/users/:id/temporary-passwords", temporaryPasswordHandler(service))
+	server.AuthenticatedPOST("/api/v1/users/:id/bans", banStudentHandler(service))
+	server.AuthenticatedDELETE("/api/v1/users/:id/bans", unbanStudentHandler(service))
 }
 
 type attributesRequest struct {
@@ -64,6 +71,29 @@ type supervisorRequest struct {
 	} `json:"data"`
 }
 
+type studentRequest struct {
+	Data struct {
+		Type       string `json:"type"`
+		Attributes struct {
+			Mode              json.RawMessage `json:"mode"`
+			Username          json.RawMessage `json:"username"`
+			TemporaryPassword json.RawMessage `json:"temporary_password"`
+			PreferredLanguage json.RawMessage `json:"preferred_language"`
+			Country           json.RawMessage `json:"country"`
+			TimeZone          json.RawMessage `json:"time_zone"`
+		} `json:"attributes"`
+	} `json:"data"`
+}
+
+type temporaryPasswordRequest struct {
+	Data struct {
+		Type       string `json:"type"`
+		Attributes struct {
+			Password string `json:"password"`
+		} `json:"attributes"`
+	} `json:"data"`
+}
+
 func createHandler(service *Service) echo.HandlerFunc {
 	return func(c *echo.Context) error {
 		actorID, err := actor(c)
@@ -71,7 +101,10 @@ func createHandler(service *Service) echo.HandlerFunc {
 			return err
 		}
 		var request courseRequest
-		if err := decode(c, &request); err != nil || request.Data.Type != "courses" || request.Data.ID != "" {
+		if err := decode(c, &request); err != nil {
+			return mutationDecodeError(c, service, actorID, err, "course_invalid", httpserver.CodeCourseInvalid)
+		}
+		if request.Data.Type != "courses" || request.Data.ID != "" {
 			return denyMutation(c, service, actorID, "course_invalid", httpserver.CodeCourseInvalid)
 		}
 		fields, err := requestFields(request.Data.Attributes)
@@ -168,7 +201,10 @@ func updateHandler(service *Service) echo.HandlerFunc {
 			return err
 		}
 		var request courseRequest
-		if err := decode(c, &request); err != nil || request.Data.Type != "courses" ||
+		if err := decode(c, &request); err != nil {
+			return mutationDecodeError(c, service, actorID, err, "course_invalid", httpserver.CodeCourseInvalid)
+		}
+		if request.Data.Type != "courses" ||
 			request.Data.ID != "" && request.Data.ID != c.Param("id") ||
 			len(request.Data.Relationships.Supervisors.Data) != 0 {
 			return denyMutation(c, service, actorID, "course_invalid", httpserver.CodeCourseInvalid)
@@ -251,7 +287,11 @@ func assignSupervisorHandler(service *Service) echo.HandlerFunc {
 			return err
 		}
 		var request supervisorRequest
-		if err := decode(c, &request); err != nil || request.Data.Type != "users" || request.Data.ID == "" {
+		if err := decode(c, &request); err != nil {
+			return mutationDecodeError(c, service, actorID, err, "course_supervisor_invalid",
+				httpserver.CodeCourseSupervisorInvalid)
+		}
+		if request.Data.Type != "users" || request.Data.ID == "" {
 			return denyMutation(c, service, actorID, "course_supervisor_invalid",
 				httpserver.CodeCourseSupervisorInvalid)
 		}
@@ -269,6 +309,141 @@ func removeSupervisorHandler(service *Service) echo.HandlerFunc {
 			return err
 		}
 		if err := service.RemoveSupervisor(c.Request().Context(), c.Param("id"), c.Param("user_id"), actorID); err != nil {
+			return mutationError(c, service, actorID, err)
+		}
+		return c.NoContent(http.StatusNoContent)
+	}
+}
+
+func listStudentsHandler(service *Service) echo.HandlerFunc {
+	return func(c *echo.Context) error {
+		actorID, err := actor(c)
+		if err != nil {
+			return err
+		}
+		input, err := listInput(c)
+		if err != nil {
+			return httpserver.NewError(httpserver.CodeCourseStudentInvalid)
+		}
+		result, err := service.ListStudents(c.Request().Context(), c.Param("id"), actorID, input)
+		if err != nil {
+			return courseError(err)
+		}
+		data := make([]map[string]any, 0, len(result.Memberships))
+		for _, membership := range result.Memberships {
+			data = append(data, membershipResource(membership))
+		}
+		return jsonAPI(c, http.StatusOK, map[string]any{"data": data,
+			"meta": map[string]any{"has_more": result.HasMore}})
+	}
+}
+
+func addStudentHandler(service *Service) echo.HandlerFunc {
+	return func(c *echo.Context) error {
+		actorID, err := actor(c)
+		if err != nil {
+			return err
+		}
+		var request studentRequest
+		if err := decode(c, &request); err != nil {
+			return mutationDecodeError(c, service, actorID, err, "course_student_invalid",
+				httpserver.CodeCourseStudentInvalid)
+		}
+		if request.Data.Type != "course-students" {
+			return denyMutation(c, service, actorID, "course_student_invalid",
+				httpserver.CodeCourseStudentInvalid)
+		}
+		mode, modeSet := rawString(request.Data.Attributes.Mode)
+		username, usernameSet := rawString(request.Data.Attributes.Username)
+		if !modeSet || !usernameSet || username == "" {
+			return denyMutation(c, service, actorID, "course_student_invalid",
+				httpserver.CodeCourseStudentInvalid)
+		}
+		var membership Membership
+		switch mode {
+		case "existing":
+			if anySet(request.Data.Attributes.TemporaryPassword, request.Data.Attributes.PreferredLanguage,
+				request.Data.Attributes.Country, request.Data.Attributes.TimeZone) {
+				return denyMutation(c, service, actorID, "course_student_invalid",
+					httpserver.CodeCourseStudentInvalid)
+			}
+			membership, err = service.AddStudent(c.Request().Context(), c.Param("id"), username, actorID)
+		case "provision":
+			password, passwordSet := rawString(request.Data.Attributes.TemporaryPassword)
+			language, languageSet := rawString(request.Data.Attributes.PreferredLanguage)
+			country, countrySet := rawString(request.Data.Attributes.Country)
+			timeZone, timeZoneSet := rawString(request.Data.Attributes.TimeZone)
+			if !passwordSet || !languageSet || !countrySet || !timeZoneSet {
+				return denyMutation(c, service, actorID, "course_student_invalid",
+					httpserver.CodeCourseStudentInvalid)
+			}
+			membership, err = service.ProvisionStudent(c.Request().Context(), c.Param("id"), ProvisionStudentInput{
+				Username: username, Password: password, Language: language, Country: country, TimeZone: timeZone,
+				ActorID: actorID,
+			})
+		default:
+			return denyMutation(c, service, actorID, "course_student_invalid",
+				httpserver.CodeCourseStudentInvalid)
+		}
+		if err != nil {
+			return mutationError(c, service, actorID, err)
+		}
+		return jsonAPI(c, http.StatusCreated, map[string]any{"data": membershipResource(membership)})
+	}
+}
+
+func removeStudentHandler(service *Service) echo.HandlerFunc {
+	return func(c *echo.Context) error {
+		actorID, err := actor(c)
+		if err != nil {
+			return err
+		}
+		if err := service.RemoveStudent(c.Request().Context(), c.Param("id"), c.Param("user_id"), actorID); err != nil {
+			return mutationError(c, service, actorID, err)
+		}
+		return c.NoContent(http.StatusNoContent)
+	}
+}
+
+func temporaryPasswordHandler(service *Service) echo.HandlerFunc {
+	return func(c *echo.Context) error {
+		actorID, err := actor(c)
+		if err != nil {
+			return err
+		}
+		var request temporaryPasswordRequest
+		if err := decode(c, &request); err != nil {
+			return mutationDecodeError(c, service, actorID, err, "course_student_invalid",
+				httpserver.CodeCourseStudentInvalid)
+		}
+		if request.Data.Type != "temporary-passwords" ||
+			request.Data.Attributes.Password == "" {
+			return denyMutation(c, service, actorID, "course_student_invalid",
+				httpserver.CodeCourseStudentInvalid)
+		}
+		if err := service.SetTemporaryPassword(c.Request().Context(), c.Param("id"), actorID,
+			request.Data.Attributes.Password); err != nil {
+			return mutationError(c, service, actorID, err)
+		}
+		return c.NoContent(http.StatusNoContent)
+	}
+}
+
+func banStudentHandler(service *Service) echo.HandlerFunc {
+	return studentBanHandler(service, true)
+}
+
+func unbanStudentHandler(service *Service) echo.HandlerFunc {
+	return studentBanHandler(service, false)
+}
+
+func studentBanHandler(service *Service, banned bool) echo.HandlerFunc {
+	return func(c *echo.Context) error {
+		actorID, err := actor(c)
+		if err != nil {
+			return err
+		}
+		if err := service.SetStudentBanned(c.Request().Context(), c.Param("id"), actorID, banned); err != nil {
 			return mutationError(c, service, actorID, err)
 		}
 		return c.NoContent(http.StatusNoContent)
@@ -380,16 +555,45 @@ func optional(raw json.RawMessage) (OptionalString, error) {
 	return OptionalString{Set: true, Value: &value}, nil
 }
 
+func rawString(raw json.RawMessage) (string, bool) {
+	if len(raw) == 0 {
+		return "", false
+	}
+	var value string
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return "", false
+	}
+	return value, true
+}
+
+func anySet(values ...json.RawMessage) bool {
+	for _, value := range values {
+		if len(value) != 0 {
+			return true
+		}
+	}
+	return false
+}
+
 func decode(c *echo.Context, destination any) error {
 	const maximumBody = 1 << 20
 	mediaType, parameters, err := mime.ParseMediaType(c.Request().Header.Get(echo.HeaderContentType))
-	if err != nil || mediaType != "application/vnd.api+json" || len(parameters) != 0 ||
-		c.Request().ContentLength > maximumBody {
+	if err != nil || mediaType != "application/vnd.api+json" || len(parameters) != 0 {
 		return errors.New("invalid course request")
+	}
+	if c.Request().ContentLength > maximumBody {
+		return errRequestTooLarge
 	}
 	c.Request().Body = http.MaxBytesReader(c.Response(), c.Request().Body, maximumBody)
 	body, err := io.ReadAll(c.Request().Body)
-	if err != nil || !utf8.Valid(body) {
+	if err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			return errRequestTooLarge
+		}
+		return err
+	}
+	if !validJSONUnicode(body) {
 		return errors.New("invalid course request")
 	}
 	decoder := json.NewDecoder(bytes.NewReader(body))
@@ -402,6 +606,81 @@ func decode(c *echo.Context, destination any) error {
 	}
 	return nil
 }
+
+// validJSONUnicode rejects malformed UTF-8 and unpaired UTF-16 surrogate
+// escapes before encoding/json can replace them with U+FFFD.
+func validJSONUnicode(body []byte) bool {
+	if !utf8.Valid(body) {
+		return false
+	}
+	inString := false
+	for index := 0; index < len(body); index++ {
+		if !inString {
+			if body[index] == '"' {
+				inString = true
+			}
+			continue
+		}
+		if body[index] == '"' {
+			inString = false
+			continue
+		}
+		if body[index] != '\\' {
+			continue
+		}
+		index++
+		if index >= len(body) {
+			return false
+		}
+		if body[index] != 'u' {
+			continue
+		}
+		if index+4 >= len(body) {
+			return false
+		}
+		value, ok := unicodeEscape(body[index+1 : index+5])
+		if !ok {
+			return false
+		}
+		index += 4
+		if value >= 0xD800 && value <= 0xDBFF {
+			if index+6 >= len(body) || body[index+1] != '\\' || body[index+2] != 'u' {
+				return false
+			}
+			low, ok := unicodeEscape(body[index+3 : index+7])
+			if !ok || low < 0xDC00 || low > 0xDFFF {
+				return false
+			}
+			index += 6
+		} else if value >= 0xDC00 && value <= 0xDFFF {
+			return false
+		}
+	}
+	return !inString
+}
+
+func unicodeEscape(value []byte) (rune, bool) {
+	if len(value) != 4 {
+		return 0, false
+	}
+	var result rune
+	for _, character := range value {
+		result <<= 4
+		switch {
+		case character >= '0' && character <= '9':
+			result += rune(character - '0')
+		case character >= 'a' && character <= 'f':
+			result += rune(character-'a') + 10
+		case character >= 'A' && character <= 'F':
+			result += rune(character-'A') + 10
+		default:
+			return 0, false
+		}
+	}
+	return result, true
+}
+
+var errRequestTooLarge = errors.New("course request body too large")
 
 func actor(c *echo.Context) (string, error) {
 	id, ok := c.Get("mia.auth.user_id").(string)
@@ -438,6 +717,21 @@ func courseResource(value Course) map[string]any {
 		"relationships": map[string]any{"supervisors": map[string]any{"data": supervisors}}}
 }
 
+func membershipResource(value Membership) map[string]any {
+	return map[string]any{
+		"type": "course-students",
+		"id":   value.ID,
+		"attributes": map[string]any{
+			"username":  value.Username,
+			"joined_at": instant(value.JoinedAt),
+		},
+		"relationships": map[string]any{
+			"course":  map[string]any{"data": map[string]string{"type": "courses", "id": value.CourseID}},
+			"student": map[string]any{"data": map[string]string{"type": "users", "id": value.StudentID}},
+		},
+	}
+}
+
 func formatTime(value *time.Time) any {
 	if value == nil {
 		return nil
@@ -468,6 +762,12 @@ func courseError(err error) error {
 		return httpserver.NewError(httpserver.CodeCourseActivationUnavailable)
 	case errors.Is(err, ErrInvalidState), errors.Is(err, ErrActiveSession):
 		return httpserver.NewError(httpserver.CodeCourseInvalidState)
+	case errors.Is(err, ErrStudentNotFound):
+		return httpserver.NewError(httpserver.CodeCourseStudentNotFound)
+	case errors.Is(err, ErrStudentInvalid):
+		return httpserver.NewError(httpserver.CodeCourseStudentInvalid)
+	case errors.Is(err, user.ErrUsernameTaken):
+		return httpserver.NewError(httpserver.CodeUsernameTaken)
 	default:
 		return err
 	}
@@ -500,6 +800,12 @@ func mutationOutcome(err error) string {
 		return "course_invalid_state"
 	case errors.Is(err, ErrActiveSession):
 		return "course_active_session"
+	case errors.Is(err, ErrStudentNotFound):
+		return "course_student_not_found"
+	case errors.Is(err, ErrStudentInvalid):
+		return "course_student_invalid"
+	case errors.Is(err, user.ErrUsernameTaken):
+		return "username_taken"
 	default:
 		return ""
 	}
@@ -508,4 +814,18 @@ func mutationOutcome(err error) string {
 func denyMutation(c *echo.Context, service *Service, actorID, outcome string, code httpserver.Code) error {
 	service.AuditMutationDenied(c.Request().Context(), actorID, outcome)
 	return httpserver.NewError(code)
+}
+
+func mutationDecodeError(
+	c *echo.Context,
+	service *Service,
+	actorID string,
+	err error,
+	outcome string,
+	code httpserver.Code,
+) error {
+	if errors.Is(err, errRequestTooLarge) {
+		return denyMutation(c, service, actorID, "course_request_too_large", httpserver.CodeRequestTooLarge)
+	}
+	return denyMutation(c, service, actorID, outcome, code)
 }

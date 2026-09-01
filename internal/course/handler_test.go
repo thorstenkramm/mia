@@ -12,11 +12,14 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 
 	"github.com/labstack/echo/v5"
+	"github.com/thorstenkramm/mia/internal/auth"
 	"github.com/thorstenkramm/mia/internal/httpserver"
+	"github.com/thorstenkramm/mia/internal/identity"
 	miSQLite "github.com/thorstenkramm/mia/internal/sqlite"
 	"github.com/thorstenkramm/mia/internal/user"
 )
@@ -47,7 +50,7 @@ func TestCourseHandlersCreateAndBlockActivationUntilMaterialOwnerIsWired(t *test
 	})
 	materialReady := false
 	Register(server, NewService(database, dataDir, nil,
-		func(context.Context, miSQLite.Querier, string) (bool, error) { return materialReady, nil }, nil, nil))
+		func(context.Context, miSQLite.Querier, string) (bool, error) { return materialReady, nil }, nil, nil, nil, nil))
 	adminSession, adminCSRF := courseSession(t, server, admin)
 	body := []byte(`{"data":{"type":"courses","attributes":{"name":"Math","learning_goals":"Learn",` +
 		`"ai_tutor_instructions":"Guide","language":"en"},"relationships":{"supervisors":{"data":[` +
@@ -152,7 +155,7 @@ func TestCourseLogoHandlersNormalizeAuthorizeAndDelete(t *testing.T) {
 	admin := createAccount(t, database, "admin", user.Administrator)
 	supervisor := createAccount(t, database, "supervisor", user.Supervisor)
 	unrelated := createAccount(t, database, "unrelated", user.Supervisor)
-	service := NewService(database, dataDir, nil, nil, nil, nil)
+	service := NewService(database, dataDir, nil, nil, nil, nil, nil, nil)
 	created, err := service.Create(context.Background(), CreateInput{ActorID: admin, SupervisorIDs: []string{supervisor},
 		Fields: preparedFields("Literature")})
 	if err != nil {
@@ -209,6 +212,126 @@ func TestCourseLogoHandlersNormalizeAuthorizeAndDelete(t *testing.T) {
 	}
 }
 
+func TestStudentAdministrationHandlersInvalidateCookiesAndHideTargets(t *testing.T) {
+	root := t.TempDir()
+	dataDir, docRoot := filepath.Join(root, "data"), filepath.Join(root, "frontend")
+	if err := os.Mkdir(dataDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(docRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(docRoot, "index.html"), []byte("frontend"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	database := courseDatabaseAt(t, dataDir)
+	admin := createAccount(t, database, "admin", user.Administrator)
+	supervisor := createAccount(t, database, "supervisor", user.Supervisor)
+	staff := createAccount(t, database, "staff", user.Mentor)
+	service := NewService(database, dataDir, nil, nil, nil, nil, auth.InvalidateSecurityArtifacts, nil)
+	created, err := service.Create(context.Background(), CreateInput{ActorID: admin, SupervisorIDs: []string{supervisor},
+		Fields: preparedFields("Chemistry")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec("UPDATE courses SET is_active = 1 WHERE id = ?", created.ID); err != nil {
+		t.Fatal(err)
+	}
+	server, _, err := httpserver.New(httpserver.Options{DataDir: dataDir, DocRoot: docRoot})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server.SetIdentityLoader(func(ctx context.Context, id string) (httpserver.IdentityState, error) {
+		account, loadErr := user.LoadSecurityState(ctx, database, id)
+		return httpserver.IdentityState{SecurityGeneration: account.SecurityGeneration,
+			MustChangePassword: account.MustChangePassword, Banned: account.Banned}, loadErr
+	})
+	Register(server, service)
+	server.AuthenticatedGET("/api/v1/test/student", func(c *echo.Context) error {
+		return c.NoContent(http.StatusNoContent)
+	})
+	supervisorSession, supervisorCSRF := courseSession(t, server, supervisor)
+	oversized := courseHTTPUnknownLength(t, server, http.MethodPost, "/api/v1/courses/"+created.ID+"/students",
+		supervisorSession, supervisorCSRF, "application/vnd.api+json", bytes.Repeat([]byte("x"), (1<<20)+1))
+	assertCourseError(t, oversized, http.StatusRequestEntityTooLarge, "auth_request_too_large")
+	provisionBody := []byte(`{"data":{"type":"course-students","attributes":{"mode":"provision",` +
+		`"username":"newstudent","temporary_password":"Qz7 first temporary phrase",` +
+		`"preferred_language":"en","country":"DE","time_zone":"UTC"}}}`)
+	provisioned := courseHTTP(t, server, http.MethodPost, "/api/v1/courses/"+created.ID+"/students",
+		supervisorSession, supervisorCSRF, "application/vnd.api+json", provisionBody)
+	if provisioned.Code != http.StatusCreated {
+		t.Fatalf("student provision = %d %s", provisioned.Code, provisioned.Body.String())
+	}
+	var document struct {
+		Data struct {
+			Relationships struct {
+				Student struct {
+					Data struct {
+						ID string `json:"id"`
+					} `json:"data"`
+				} `json:"student"`
+			} `json:"relationships"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(provisioned.Body.Bytes(), &document); err != nil ||
+		document.Data.Relationships.Student.Data.ID == "" {
+		t.Fatalf("provision response = %#v, %v", document, err)
+	}
+	studentID := document.Data.Relationships.Student.Data.ID
+	studentSession, studentCSRF := courseSession(t, server, studentID)
+	malformedUnicodeBody := []byte(`{"data":{"type":"temporary-passwords","attributes":` +
+		`{"password":"Qz7 malformed \ud800 phrase"}}}`)
+	malformedUnicode := courseHTTP(t, server, http.MethodPost, "/api/v1/users/"+studentID+"/temporary-passwords",
+		supervisorSession, supervisorCSRF, "application/vnd.api+json", malformedUnicodeBody)
+	assertCourseError(t, malformedUnicode, http.StatusUnprocessableEntity, "course_student_invalid")
+	var originalHash string
+	if err := database.QueryRow("SELECT password_hash FROM users WHERE id = ?", studentID).Scan(&originalHash); err != nil {
+		t.Fatal(err)
+	}
+	matchesOriginal, err := identity.VerifyPassword("Qz7 first temporary phrase", originalHash)
+	if err != nil || !matchesOriginal {
+		t.Fatalf("password changed after malformed Unicode request: matches=%v err=%v", matchesOriginal, err)
+	}
+	temporaryBody := []byte(`{"data":{"type":"temporary-passwords","attributes":` +
+		`{"password":"Qz7 second temporary phrase"}}}`)
+	reset := courseHTTP(t, server, http.MethodPost, "/api/v1/users/"+studentID+"/temporary-passwords",
+		supervisorSession, supervisorCSRF, "application/vnd.api+json", temporaryBody)
+	if reset.Code != http.StatusNoContent {
+		t.Fatalf("temporary password = %d %s", reset.Code, reset.Body.String())
+	}
+	stale := courseHTTP(t, server, http.MethodGet, "/api/v1/test/student", studentSession, studentCSRF, "", nil)
+	assertCourseError(t, stale, http.StatusUnauthorized, "auth_unauthenticated")
+
+	var generation int64
+	if err := database.QueryRow("SELECT security_generation FROM users WHERE id = ?", studentID).Scan(&generation); err != nil {
+		t.Fatal(err)
+	}
+	freshSession, freshCSRF := courseSessionGeneration(t, server, studentID, generation)
+	ban := courseHTTP(t, server, http.MethodPost, "/api/v1/users/"+studentID+"/bans", supervisorSession,
+		supervisorCSRF, "", nil)
+	if ban.Code != http.StatusNoContent {
+		t.Fatalf("student ban = %d %s", ban.Code, ban.Body.String())
+	}
+	banned := courseHTTP(t, server, http.MethodGet, "/api/v1/test/student", freshSession, freshCSRF, "", nil)
+	assertCourseError(t, banned, http.StatusUnauthorized, "auth_unauthenticated")
+	var generationAfter int64
+	if err := database.QueryRow("SELECT security_generation FROM users WHERE id = ?", studentID).
+		Scan(&generationAfter); err != nil || generationAfter != generation {
+		t.Fatalf("ban security generation=%d want=%d err=%v", generationAfter, generation, err)
+	}
+	unban := courseHTTP(t, server, http.MethodDelete, "/api/v1/users/"+studentID+"/bans", supervisorSession,
+		supervisorCSRF, "", nil)
+	if unban.Code != http.StatusNoContent {
+		t.Fatalf("student unban = %d %s", unban.Code, unban.Body.String())
+	}
+	unknown := courseHTTP(t, server, http.MethodPost, "/api/v1/users/u_missing/bans", supervisorSession,
+		supervisorCSRF, "", nil)
+	staffResponse := courseHTTP(t, server, http.MethodPost, "/api/v1/users/"+staff+"/bans", supervisorSession,
+		supervisorCSRF, "", nil)
+	assertCourseError(t, unknown, http.StatusNotFound, "course_student_not_found")
+	assertCourseError(t, staffResponse, http.StatusNotFound, "course_student_not_found")
+}
+
 func courseDatabaseAt(t *testing.T, directory string) *sql.DB {
 	t.Helper()
 	database, err := miSQLite.Open(directory)
@@ -224,10 +347,19 @@ func courseDatabaseAt(t *testing.T, directory string) *sql.DB {
 }
 
 func courseSession(t *testing.T, server *httpserver.Server, accountID string) (*http.Cookie, string) {
+	return courseSessionGeneration(t, server, accountID, 1)
+}
+
+func courseSessionGeneration(
+	t *testing.T,
+	server *httpserver.Server,
+	accountID string,
+	generation int64,
+) (*http.Cookie, string) {
 	t.Helper()
-	path := "/issue-course-" + accountID
+	path := "/issue-course-" + accountID + "-" + strconv.FormatInt(generation, 10)
 	server.Echo.GET(path, func(c *echo.Context) error {
-		if err := server.StartSession(c, accountID, 1, "authenticated", time.Now()); err != nil {
+		if err := server.StartSession(c, accountID, generation, "authenticated", time.Now()); err != nil {
 			return err
 		}
 		httpserver.RotateCSRF(c)
@@ -262,6 +394,20 @@ func courseHTTP(t *testing.T, server *httpserver.Server, method, path string, se
 	if contentType != "" {
 		request.Header.Set("Content-Type", contentType)
 	}
+	response := httptest.NewRecorder()
+	server.Echo.ServeHTTP(response, request)
+	return response
+}
+
+func courseHTTPUnknownLength(t *testing.T, server *httpserver.Server, method, path string, session *http.Cookie, csrf,
+	contentType string, body []byte) *httptest.ResponseRecorder {
+	t.Helper()
+	request := httptest.NewRequest(method, "http://mia.test"+path, bytes.NewReader(body))
+	request.ContentLength = -1
+	request.AddCookie(session)
+	request.AddCookie(&http.Cookie{Name: "__Host-mia_csrf", Value: csrf})
+	request.Header.Set("X-CSRF-Token", csrf)
+	request.Header.Set("Content-Type", contentType)
 	response := httptest.NewRecorder()
 	server.Echo.ServeHTTP(response, request)
 	return response

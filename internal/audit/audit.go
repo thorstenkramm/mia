@@ -78,6 +78,12 @@ const (
 	ActionCourseLogoUpdated        Action = "course.logo.updated"
 	ActionCourseLogoRemoved        Action = "course.logo.removed"
 	ActionCourseMutationDenied     Action = "course.mutation.denied"
+	ActionCourseStudentProvisioned Action = "course.student.provisioned"
+	ActionCourseStudentAdded       Action = "course.student.added"
+	ActionCourseStudentRemoved     Action = "course.student.removed"
+	ActionUserTemporaryPasswordSet Action = "user.password.temporary_set"
+	ActionUserStudentBanned        Action = "user.student.banned"
+	ActionUserStudentUnbanned      Action = "user.student.unbanned"
 )
 
 var actions = map[Action]struct{}{
@@ -141,6 +147,12 @@ var actions = map[Action]struct{}{
 	ActionCourseLogoUpdated:                     {},
 	ActionCourseLogoRemoved:                     {},
 	ActionCourseMutationDenied:                  {},
+	ActionCourseStudentProvisioned:              {},
+	ActionCourseStudentAdded:                    {},
+	ActionCourseStudentRemoved:                  {},
+	ActionUserTemporaryPasswordSet:              {},
+	ActionUserStudentBanned:                     {},
+	ActionUserStudentUnbanned:                   {},
 }
 
 // Metadata contains typed, content-free audit metadata.
@@ -201,6 +213,23 @@ func ReplaceCourseHistoryWithDeletion(ctx context.Context, query miSQLite.Querie
 		return fmt.Errorf("write de-identified course deletion audit event: %w", err)
 	}
 	return nil
+}
+
+// ReplaceStudentCourseHistoryWithRemoval deletes course-scoped audit history
+// identifying a removed student and writes the one retained content-free event.
+func ReplaceStudentCourseHistoryWithRemoval(
+	ctx context.Context,
+	query miSQLite.Querier,
+	courseID string,
+	studentID string,
+	actorID string,
+) error {
+	if _, err := query.ExecContext(ctx, `DELETE FROM audit_events WHERE course_id = ?
+		AND (subject_user_id = ? OR actor_user_id = ?)`, courseID, studentID, studentID); err != nil {
+		return fmt.Errorf("delete removed student course audit history: %w", err)
+	}
+	return WriteWithMetadata(ctx, query, ActionCourseStudentRemoved, actorID, studentID,
+		Metadata{CourseID: courseID})
 }
 
 // NewDeletionFingerprint returns an opaque UUID v4 with no retained mapping to
