@@ -140,8 +140,12 @@ func TestServeGracefulShutdownDoesNotReturnClosedListenerError(t *testing.T) {
 }
 
 func TestBootstrapAdminRejectsNonTerminalInput(t *testing.T) {
+	dataDir := filepath.Join(t.TempDir(), "data")
+	if err := os.Mkdir(dataDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	command := newRootCommand()
-	command.SetArgs([]string{"bootstrap-admin"})
+	command.SetArgs([]string{"--main-data-dir", dataDir, "bootstrap-admin"})
 	if err := command.Execute(); err == nil || err.Error() != "bootstrap-admin requires an interactive terminal or complete noninteractive flags" {
 		t.Fatalf("bootstrap non-terminal error = %v", err)
 	}
@@ -335,23 +339,31 @@ func TestBootstrapAdminCreatesAdministratorNoninteractively(t *testing.T) {
 	}
 }
 
-func TestBootstrapAdminRequiresConfiguredDataDirectoryBeforeDatabaseUse(t *testing.T) {
+func TestBootstrapAdminValidatesDataDirectoryBeforeReadingPasswordFile(t *testing.T) {
 	directory := t.TempDir()
-	passwordPath := filepath.Join(directory, "password")
-	if err := os.WriteFile(passwordPath, []byte("twelve chars\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	command := newRootCommand()
-	command.SetArgs([]string{"bootstrap-admin", "--username", "admin", "--email", "admin@localhost.de", "--language", "en", "--country", "DE", "--time-zone", "UTC", "--password-file", passwordPath})
-	err := command.Execute()
-	if err == nil || !strings.Contains(err.Error(), "main.data_dir must be configured") {
-		t.Fatalf("bootstrap error = %v", err)
-	}
-	entries, err := os.ReadDir(directory)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(entries) != 1 || entries[0].Name() != "password" {
-		t.Fatalf("database setup touched directory: %v", entries)
+	passwordPath := filepath.Join(directory, "unreadable-password-file")
+	for name, test := range map[string]struct {
+		args       []string
+		diagnostic string
+	}{
+		"missing": {diagnostic: "main.data_dir must be configured"},
+		"invalid": {
+			args:       []string{"--main-data-dir", "relative-data-dir"},
+			diagnostic: "main.data_dir must be an absolute path",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			command := newRootCommand()
+			args := append([]string{}, test.args...)
+			args = append(args, "bootstrap-admin", "--username", "admin", "--email", "admin@localhost.de", "--language", "en", "--country", "DE", "--time-zone", "UTC", "--password-file", passwordPath)
+			command.SetArgs(args)
+			err := command.Execute()
+			if err == nil || !strings.Contains(err.Error(), test.diagnostic) {
+				t.Fatalf("bootstrap error = %v", err)
+			}
+			if strings.Contains(err.Error(), "password file") {
+				t.Fatalf("bootstrap read password file before validating configuration: %v", err)
+			}
+		})
 	}
 }

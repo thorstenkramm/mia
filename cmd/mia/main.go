@@ -59,16 +59,16 @@ func newRootCommand() *cobra.Command {
 
 func newBootstrapAdminCommand() *cobra.Command {
 	command := &cobra.Command{Use: "bootstrap-admin", Args: cobra.NoArgs, RunE: func(command *cobra.Command, _ []string) (returnErr error) {
-		input, err := readBootstrapInput(command.Flags(), term.IsTerminal(int(os.Stdin.Fd())), term.IsTerminal(int(os.Stdout.Fd())))
-		if err != nil {
-			return err
-		}
 		// jscpd:ignore-start
-		// Bootstrap input is intentionally collected before offline database setup.
 		configuration, err := config.Load(command.Flags(), false)
 		if err != nil {
 			return err
 		}
+		input, err := readBootstrapInput(command.Flags(), term.IsTerminal(int(os.Stdin.Fd())), term.IsTerminal(int(os.Stdout.Fd())))
+		if err != nil {
+			return err
+		}
+		// Bootstrap input is intentionally collected before offline database setup.
 		dataLock, err := lock.Acquire(configuration.Main.DataDir)
 		if err != nil {
 			return err
