@@ -8,7 +8,6 @@ import (
 	"mime"
 	"net/http"
 	"strconv"
-	"unicode/utf8"
 
 	"github.com/labstack/echo/v5"
 	"github.com/thorstenkramm/mia/internal/httpserver"
@@ -26,8 +25,8 @@ func RegisterProfileRoutes(server *httpserver.Server, service *Service) {
 	server.AuthenticatedPOST("/api/v1/users/me/mobile-change-challenges/:id/resends",
 		resendMobileChallenge(server, service))
 	server.AuthenticatedDELETE("/api/v1/users/me/mobile", removeMobile(service))
-	server.AuthenticatedGET("/api/v1/users/me/avatar", getAvatar(service))
-	server.AuthenticatedPUT("/api/v1/users/me/avatar", putAvatar(service))
+	server.AuthenticatedRoute(http.MethodGet, "/api/v1/users/me/avatar", httpserver.RepresentationBinary, getAvatar(service))
+	server.AuthenticatedRoute(http.MethodPut, "/api/v1/users/me/avatar", httpserver.RepresentationImageUpload, putAvatar(service))
 	server.AuthenticatedDELETE("/api/v1/users/me/avatar", deleteAvatar(service))
 }
 
@@ -48,7 +47,7 @@ func getProfile(service *Service) echo.HandlerFunc {
 type profilePatchRequest struct {
 	Data struct {
 		Type       string `json:"type"`
-		ID         string `json:"id,omitempty"`
+		ID         string `json:"id"`
 		Attributes struct {
 			Name              json.RawMessage `json:"name"`
 			Nickname          json.RawMessage `json:"nickname"`
@@ -67,8 +66,12 @@ func patchProfile(service *Service) echo.HandlerFunc {
 			return err
 		}
 		var request profilePatchRequest
-		if err := decodeJSONAPI(c, &request); err != nil || request.Data.Type != "users" ||
-			request.Data.ID != "" && request.Data.ID != accountID {
+		if err := httpserver.DecodeJSONAPI(c, &request); err != nil {
+			return err
+		}
+		// PATCH identity: the document must carry the exact resource identity of
+		// the authenticated account; a missing or mismatched ID is invalid.
+		if request.Data.Type != "users" || request.Data.ID != accountID {
 			return httpserver.NewError(httpserver.CodeUserProfileInvalid)
 		}
 		changes, err := profileChanges(request)
@@ -138,6 +141,7 @@ func requiredString(raw json.RawMessage) (*string, error) {
 type mobileStartRequest struct {
 	Data struct {
 		Type       string `json:"type"`
+		ID         string `json:"id"`
 		Attributes struct {
 			Mobile string `json:"mobile"`
 		} `json:"attributes"`
@@ -147,6 +151,7 @@ type mobileStartRequest struct {
 type mobileVerificationRequest struct {
 	Data struct {
 		Type       string `json:"type"`
+		ID         string `json:"id"`
 		Attributes struct {
 			Code string `json:"code"`
 		} `json:"attributes"`
@@ -163,7 +168,10 @@ func startMobileChallenge(server *httpserver.Server, service *Service) echo.Hand
 			return rateLimited(c, result)
 		}
 		var request mobileStartRequest
-		if err := decodeJSONAPI(c, &request); err != nil || request.Data.Type != "mobile-change-challenges" ||
+		if err := httpserver.DecodeJSONAPI(c, &request); err != nil {
+			return err
+		}
+		if request.Data.Type != "mobile-change-challenges" || request.Data.ID != "" ||
 			request.Data.Attributes.Mobile == "" {
 			return httpserver.NewError(httpserver.CodeUserProfileInvalid)
 		}
@@ -185,7 +193,10 @@ func verifyMobileChallenge(server *httpserver.Server, service *Service) echo.Han
 			return rateLimited(c, result)
 		}
 		var request mobileVerificationRequest
-		if err := decodeJSONAPI(c, &request); err != nil || request.Data.Type != "mobile-change-verifications" ||
+		if err := httpserver.DecodeJSONAPI(c, &request); err != nil {
+			return err
+		}
+		if request.Data.Type != "mobile-change-verifications" || request.Data.ID != "" ||
 			request.Data.Attributes.Code == "" {
 			return httpserver.NewError(httpserver.CodeUserProfileInvalid)
 		}
@@ -308,40 +319,11 @@ func profileResponse(c *echo.Context, profile Profile, avatar bool) error {
 }
 
 func resource(c *echo.Context, status int, resourceType, id string, attributes any) error {
-	c.Response().Header().Set(echo.HeaderContentType, "application/vnd.api+json")
-	return c.JSON(status, map[string]any{"data": map[string]any{
-		"type": resourceType, "id": id, "attributes": attributes,
-	}})
+	return httpserver.Resource(c, status, resourceType, id, attributes)
 }
 
 func currentUser(c *echo.Context) (string, error) {
-	accountID, ok := c.Get("mia.auth.user_id").(string)
-	if !ok || accountID == "" {
-		return "", httpserver.NewError(httpserver.CodeUnauthenticated)
-	}
-	return accountID, nil
-}
-
-func decodeJSONAPI(c *echo.Context, destination any) error {
-	const maximumBody = 1 << 20
-	mediaType, parameters, err := mime.ParseMediaType(c.Request().Header.Get(echo.HeaderContentType))
-	if err != nil || mediaType != "application/vnd.api+json" || len(parameters) != 0 || c.Request().ContentLength > maximumBody {
-		return errors.New("invalid JSON:API request")
-	}
-	c.Request().Body = http.MaxBytesReader(c.Response(), c.Request().Body, maximumBody)
-	body, err := io.ReadAll(c.Request().Body)
-	if err != nil || !utf8.Valid(body) {
-		return errors.New("invalid JSON:API body")
-	}
-	decoder := json.NewDecoder(bytes.NewReader(body))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(destination); err != nil {
-		return err
-	}
-	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-		return errors.New("trailing JSON input")
-	}
-	return nil
+	return httpserver.AuthenticatedUser(c)
 }
 
 func profileError(err error) error {

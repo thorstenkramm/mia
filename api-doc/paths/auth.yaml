@@ -1,0 +1,346 @@
+login:
+  post:
+    tags: [Authentication]
+    operationId: login
+    summary: Login
+    security: [{ csrfToken: [] }]
+    requestBody:
+      required: true
+      content:
+        application/vnd.api+json:
+          schema: { $ref: ../schemas/requests/requests.yaml#/LoginRequestDocument }
+    responses:
+      '200': { $ref: '#/Session' }
+      '400': { $ref: ../responses/errors.yaml#/BadRequest }
+      '401':
+        $ref: ../responses/errors.yaml#/Unauthorized
+        description: Credentials rejected (`auth_invalid_credentials`).
+      '403':
+        $ref: ../responses/errors.yaml#/Forbidden
+        description: CSRF validation failed (`csrf_invalid`).
+      '406': { $ref: ../responses/errors.yaml#/NotAcceptable }
+      '413': { $ref: ../responses/errors.yaml#/RequestTooLarge }
+      '415': { $ref: ../responses/errors.yaml#/UnsupportedMediaType }
+      '422':
+        $ref: ../responses/errors.yaml#/Unprocessable
+        description: Invalid login resource or unavailable configured MFA (`auth_invalid_request` or `auth_mfa_unavailable`).
+      '429':
+        $ref: ../responses/errors.yaml#/RateLimited
+        description: Global or layered login limit (`rate_limited` or `auth_login_throttled`).
+
+logout:
+  post:
+    tags: [Authentication]
+    operationId: logout
+    summary: Logout
+    security: [{ sessionCookie: [], csrfToken: [] }]
+    responses:
+      '204': { description: Session cleared. }
+      '401': { $ref: ../responses/errors.yaml#/Unauthorized }
+      '403':
+        $ref: ../responses/errors.yaml#/Forbidden
+        description: CSRF validation failed (`csrf_invalid`).
+      '406': { $ref: ../responses/errors.yaml#/NotAcceptable }
+
+passwordChanges:
+  post:
+    tags: [Authentication]
+    operationId: changePassword
+    summary: Change temporary password
+    security: [{ sessionCookie: [], csrfToken: [] }]
+    requestBody:
+      required: true
+      content:
+        application/vnd.api+json:
+          schema: { $ref: ../schemas/requests/requests.yaml#/PasswordChangeRequestDocument }
+    responses:
+      '200': { $ref: '#/Session' }
+      '400': { $ref: ../responses/errors.yaml#/BadRequest }
+      '403':
+        $ref: ../responses/errors.yaml#/Forbidden
+        description: CSRF or password-change stage validation failed (`csrf_invalid` or `auth_password_change_required`).
+      '406': { $ref: ../responses/errors.yaml#/NotAcceptable }
+      '413': { $ref: ../responses/errors.yaml#/RequestTooLarge }
+      '415': { $ref: ../responses/errors.yaml#/UnsupportedMediaType }
+      '422':
+        $ref: ../responses/errors.yaml#/Unprocessable
+        description: Password policy or confirmation failed (`auth_invalid_password`).
+      '429': { $ref: ../responses/errors.yaml#/RateLimited }
+
+passwordRecoveryRequests:
+  post:
+    tags: [Authentication]
+    operationId: requestPasswordRecovery
+    summary: Request staff password recovery
+    description: >-
+      Unknown, banned, invalid, accepted, and throttled usernames all return the same empty 204 response. Throttling
+      never returns Retry-After and does not reveal account existence.
+    security: [{ csrfToken: [] }]
+    requestBody:
+      required: true
+      content:
+        application/vnd.api+json:
+          schema: { $ref: ../schemas/requests/requests.yaml#/PasswordRecoveryRequestDocument }
+    responses:
+      '204': { description: Uniform existence-hiding acceptance or throttling suppression. }
+      '400': { $ref: ../responses/errors.yaml#/BadRequest }
+      '403':
+        $ref: ../responses/errors.yaml#/Forbidden
+        description: CSRF validation failed (`csrf_invalid`).
+      '406': { $ref: ../responses/errors.yaml#/NotAcceptable }
+      '413': { $ref: ../responses/errors.yaml#/RequestTooLarge }
+      '415': { $ref: ../responses/errors.yaml#/UnsupportedMediaType }
+      '422':
+        $ref: ../responses/errors.yaml#/Unprocessable
+        description: Invalid resource type (`auth_invalid_request`).
+
+passwordResets:
+  post:
+    tags: [Authentication]
+    operationId: resetPassword
+    summary: Reset password
+    description: Dedicated token throttling returns `auth_invalid_reset_token`; the global public limit returns 429.
+    security: [{ csrfToken: [] }]
+    requestBody:
+      required: true
+      content:
+        application/vnd.api+json:
+          schema: { $ref: ../schemas/requests/requests.yaml#/PasswordResetRequestDocument }
+    responses:
+      '204': { description: Reset complete without creating a session. }
+      '400': { $ref: ../responses/errors.yaml#/BadRequest }
+      '403':
+        $ref: ../responses/errors.yaml#/Forbidden
+        description: CSRF validation failed (`csrf_invalid`).
+      '406': { $ref: ../responses/errors.yaml#/NotAcceptable }
+      '413': { $ref: ../responses/errors.yaml#/RequestTooLarge }
+      '415': { $ref: ../responses/errors.yaml#/UnsupportedMediaType }
+      '422':
+        $ref: ../responses/errors.yaml#/Unprocessable
+        description: >-
+          Invalid resource, token, password, or confirmation (`auth_invalid_request`, `auth_invalid_reset_token`, or
+          `auth_invalid_password`).
+      '429': { $ref: ../responses/errors.yaml#/RateLimited }
+
+mfaChallengeVerifications:
+  post:
+    tags: [Authentication]
+    operationId: verifyMFAChallenge
+    summary: Verify MFA challenge
+    security: [{ sessionCookie: [], csrfToken: [] }]
+    parameters: [{ $ref: ../openapi.yaml#/components/parameters/ResourceID }]
+    requestBody:
+      required: true
+      content:
+        application/vnd.api+json:
+          schema: { $ref: ../schemas/requests/requests.yaml#/MFAVerificationRequestDocument }
+    responses:
+      '200': { $ref: '#/Session' }
+      '400': { $ref: ../responses/errors.yaml#/BadRequest }
+      '401': { $ref: ../responses/errors.yaml#/Unauthorized }
+      '403':
+        $ref: ../responses/errors.yaml#/Forbidden
+        description: >-
+          CSRF, session stage, or reused TOTP step (`csrf_invalid`, `auth_password_change_required`, or
+          `auth_mfa_step_used`).
+      '406': { $ref: ../responses/errors.yaml#/NotAcceptable }
+      '413': { $ref: ../responses/errors.yaml#/RequestTooLarge }
+      '415': { $ref: ../responses/errors.yaml#/UnsupportedMediaType }
+      '422':
+        $ref: ../responses/errors.yaml#/Unprocessable
+        description: >-
+          Invalid resource, code, or challenge (`auth_invalid_request`, `auth_invalid_mfa_code`, or
+          `auth_mfa_challenge_expired`).
+      '429': { $ref: ../responses/errors.yaml#/RateLimited }
+
+mfaChallengeRecoveryCodeConsumptions:
+  post:
+    tags: [Authentication]
+    operationId: consumeMFARecoveryCode
+    summary: Consume MFA recovery code
+    security: [{ sessionCookie: [], csrfToken: [] }]
+    parameters: [{ $ref: ../openapi.yaml#/components/parameters/ResourceID }]
+    requestBody:
+      required: true
+      content:
+        application/vnd.api+json:
+          schema: { $ref: ../schemas/requests/requests.yaml#/MFARecoveryCodeConsumptionRequestDocument }
+    responses:
+      '200': { $ref: '#/Session' }
+      '400': { $ref: ../responses/errors.yaml#/BadRequest }
+      '401': { $ref: ../responses/errors.yaml#/Unauthorized }
+      '403':
+        $ref: ../responses/errors.yaml#/Forbidden
+        description: CSRF or session-stage validation failed (`csrf_invalid` or `auth_password_change_required`).
+      '406': { $ref: ../responses/errors.yaml#/NotAcceptable }
+      '413': { $ref: ../responses/errors.yaml#/RequestTooLarge }
+      '415': { $ref: ../responses/errors.yaml#/UnsupportedMediaType }
+      '422':
+        $ref: ../responses/errors.yaml#/Unprocessable
+        description: >-
+          Invalid resource, recovery code, or challenge (`auth_invalid_request`, `auth_invalid_recovery_code`, or
+          `auth_mfa_challenge_expired`).
+      '429': { $ref: ../responses/errors.yaml#/RateLimited }
+
+mfaChallengeResends:
+  post:
+    tags: [Authentication]
+    operationId: resendMFAChallenge
+    summary: Resend SMS challenge
+    security: [{ sessionCookie: [], csrfToken: [] }]
+    parameters: [{ $ref: ../openapi.yaml#/components/parameters/ResourceID }]
+    responses:
+      '204': { description: Existing SMS code sent without extending expiry. }
+      '401': { $ref: ../responses/errors.yaml#/Unauthorized }
+      '403':
+        $ref: ../responses/errors.yaml#/Forbidden
+        description: CSRF or session-stage validation failed (`csrf_invalid` or `auth_password_change_required`).
+      '406': { $ref: ../responses/errors.yaml#/NotAcceptable }
+      '422':
+        $ref: ../responses/errors.yaml#/Unprocessable
+        description: >-
+          Non-SMS, expired, or unavailable challenge delivery (`auth_invalid_request`,
+          `auth_mfa_challenge_expired`, or `auth_mfa_unavailable`).
+      '429': { $ref: ../responses/errors.yaml#/RateLimited }
+
+mfaManagementProofs:
+  post:
+    tags: [Authentication]
+    operationId: createMFAManagementProof
+    summary: Create MFA management proof
+    security: [{ sessionCookie: [], csrfToken: [] }]
+    requestBody:
+      required: true
+      content:
+        application/vnd.api+json:
+          schema: { $ref: ../schemas/requests/requests.yaml#/MFAManagementProofRequestDocument }
+    responses:
+      '201':
+        description: Single-use proof resource.
+        content:
+          application/vnd.api+json:
+            schema: { $ref: ../schemas/resources/resources.yaml#/MFAManagementProofDocument }
+      '400': { $ref: ../responses/errors.yaml#/BadRequest }
+      '401': { $ref: ../responses/errors.yaml#/Unauthorized }
+      '403':
+        $ref: ../responses/errors.yaml#/Forbidden
+        description: >-
+          CSRF, restricted session, absent factor, or reused TOTP step (`csrf_invalid`,
+          `auth_password_change_required`, `auth_mfa_required`, or `auth_mfa_step_used`).
+      '406': { $ref: ../responses/errors.yaml#/NotAcceptable }
+      '413': { $ref: ../responses/errors.yaml#/RequestTooLarge }
+      '415': { $ref: ../responses/errors.yaml#/UnsupportedMediaType }
+      '422':
+        $ref: ../responses/errors.yaml#/Unprocessable
+        description: Invalid resource or credentials (`auth_invalid_request` or `auth_invalid_mfa_code`).
+      '429': { $ref: ../responses/errors.yaml#/RateLimited }
+
+mfaEnrollments:
+  post:
+    tags: [Authentication]
+    operationId: startMFAEnrollment
+    summary: Start MFA enrollment
+    security: [{ sessionCookie: [], csrfToken: [] }]
+    requestBody:
+      required: true
+      content:
+        application/vnd.api+json:
+          schema: { $ref: ../schemas/requests/requests.yaml#/MFAEnrollmentRequestDocument }
+    responses:
+      '201':
+        description: Pending enrollment; TOTP responses also include a provisioning URI.
+        content:
+          application/vnd.api+json:
+            schema: { $ref: ../schemas/resources/resources.yaml#/MFAEnrollmentDocument }
+      '400': { $ref: ../responses/errors.yaml#/BadRequest }
+      '401': { $ref: ../responses/errors.yaml#/Unauthorized }
+      '403':
+        $ref: ../responses/errors.yaml#/Forbidden
+        description: CSRF or restricted session (`csrf_invalid` or `auth_password_change_required`).
+      '406': { $ref: ../responses/errors.yaml#/NotAcceptable }
+      '413': { $ref: ../responses/errors.yaml#/RequestTooLarge }
+      '415': { $ref: ../responses/errors.yaml#/UnsupportedMediaType }
+      '422':
+        $ref: ../responses/errors.yaml#/Unprocessable
+        description: Invalid method or missing replacement proof (`auth_mfa_unavailable` or `auth_mfa_proof_required`).
+      '429': { $ref: ../responses/errors.yaml#/RateLimited }
+
+mfaEnrollmentVerifications:
+  post:
+    tags: [Authentication]
+    operationId: verifyMFAEnrollment
+    summary: Activate MFA enrollment
+    security: [{ sessionCookie: [], csrfToken: [] }]
+    parameters: [{ $ref: ../openapi.yaml#/components/parameters/ResourceID }]
+    requestBody:
+      required: true
+      content:
+        application/vnd.api+json:
+          schema: { $ref: ../schemas/requests/requests.yaml#/MFAEnrollmentVerificationRequestDocument }
+    responses:
+      '200':
+        description: One-time recovery codes issued by successful activation.
+        content:
+          application/vnd.api+json:
+            schema: { $ref: ../schemas/resources/resources.yaml#/MFARecoveryCodesDocument }
+      '400': { $ref: ../responses/errors.yaml#/BadRequest }
+      '401': { $ref: ../responses/errors.yaml#/Unauthorized }
+      '403':
+        $ref: ../responses/errors.yaml#/Forbidden
+        description: CSRF or restricted session (`csrf_invalid` or `auth_password_change_required`).
+      '406': { $ref: ../responses/errors.yaml#/NotAcceptable }
+      '413': { $ref: ../responses/errors.yaml#/RequestTooLarge }
+      '415': { $ref: ../responses/errors.yaml#/UnsupportedMediaType }
+      '422':
+        $ref: ../responses/errors.yaml#/Unprocessable
+        description: >-
+          Invalid resource, code, expired enrollment, or stale replacement proof (`auth_invalid_request`,
+          `auth_invalid_mfa_code`, `auth_mfa_challenge_expired`, or `auth_mfa_proof_required`).
+      '429': { $ref: ../responses/errors.yaml#/RateLimited }
+
+mfaEnrollmentResends:
+  post:
+    tags: [Authentication]
+    operationId: resendMFAEnrollment
+    summary: Resend MFA enrollment SMS
+    security: [{ sessionCookie: [], csrfToken: [] }]
+    parameters: [{ $ref: ../openapi.yaml#/components/parameters/ResourceID }]
+    responses:
+      '204': { description: Existing SMS code sent without extending expiry. }
+      '401': { $ref: ../responses/errors.yaml#/Unauthorized }
+      '403':
+        $ref: ../responses/errors.yaml#/Forbidden
+        description: CSRF or restricted session (`csrf_invalid` or `auth_password_change_required`).
+      '406': { $ref: ../responses/errors.yaml#/NotAcceptable }
+      '422':
+        $ref: ../responses/errors.yaml#/Unprocessable
+        description: >-
+          Non-SMS, expired, or unavailable enrollment delivery (`auth_invalid_request`,
+          `auth_mfa_challenge_expired`, or `auth_mfa_unavailable`).
+      '429': { $ref: ../responses/errors.yaml#/RateLimited }
+
+mfaEnrollment:
+  delete:
+    tags: [Authentication]
+    operationId: cancelOrDisableMFA
+    summary: Cancel pending enrollment or disable active MFA
+    security: [{ sessionCookie: [], csrfToken: [] }]
+    parameters:
+      - { $ref: ../openapi.yaml#/components/parameters/ResourceID }
+      - { $ref: ../openapi.yaml#/components/parameters/MFAProof }
+    responses:
+      '204': { description: Pending enrollment cancelled or active factor disabled. }
+      '401': { $ref: ../responses/errors.yaml#/Unauthorized }
+      '403':
+        $ref: ../responses/errors.yaml#/Forbidden
+        description: CSRF or restricted session (`csrf_invalid` or `auth_password_change_required`).
+      '406': { $ref: ../responses/errors.yaml#/NotAcceptable }
+      '422':
+        $ref: ../responses/errors.yaml#/Unprocessable
+        description: Active-factor disable requires a valid proof (`auth_mfa_proof_required`).
+
+Session:
+  description: Current singleton auth-sessions resource.
+  content:
+    application/vnd.api+json:
+      schema: { $ref: ../schemas/resources/resources.yaml#/AuthSessionDocument }

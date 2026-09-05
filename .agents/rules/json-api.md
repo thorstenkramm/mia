@@ -1,297 +1,249 @@
-# JSON:API Response Formatting in Go (Echo) – How-To Guide
+# JSON:API Contract
 
-This guide explains how to format HTTP requests and responses according to the JSON:API specification in a Go server
-using the Echo framework. It’s written for junior developers and assumes you’re already familiar with basic REST concepts.
-We’ll cover the key JSON:API response elements and show how to structure both successful data responses
-(including lists of resources) and error responses. All examples are given in JSON/pseudocode (no Go code needed) so
-you can apply the patterns immediately.
+This rule is the normative contract for HTTP representation and protocol behavior of the MIA API. It uses `MUST`,
+`MUST NOT`, `SHOULD`, and `MAY` as defined in RFC 2119. Non-normative examples live in
+`.agents/references/json-api-examples.md`.
 
-## JSON:API Requests
+## Scope and Precedence
 
-- <https://jsonapi.org/format/#fetching>
-- <https://jsonapi.org/format/#crud>
+- The adopted specification is JSON:API 1.1 (`application/vnd.api+json`). See
+  <https://jsonapi.org/format/#fetching> and <https://jsonapi.org/format/#crud>.
+- Product requirements govern behavior, authorization, and data lifecycle. This rule governs HTTP representation and
+  protocol behavior only.
+- When this rule and the upstream JSON:API specification differ, this rule wins.
+- Exceptions MUST be named in this rule. A feature package MUST NOT implement a local exception.
 
-## JSON:API Response Basics (Key Elements)
+## Protocol Ownership
 
-A JSON:API response is a JSON object with a defined structure. Important keys and concepts include:
+- Shared JSON:API protocol behavior MUST live in `internal/httpserver`, not in feature packages.
+- Feature packages MUST NOT add package-local implementations of media negotiation, bounded JSON:API decoding, error
+  envelopes, pagination parsing, navigation-link construction, or instant formatting.
+- Feature packages own request attributes, resource construction, authorization, and domain errors.
+- Routes MUST be registered with representation and authentication classifications
+  (public, authentication-sensitive, or authenticated).
 
-- `data` – The primary resource data requested. For a successful request, the top-level JSON object must have a data
-  member (unless it’s an error response). This can be a single resource object or an array of resource objects
-  (use an array when returning a list/collection).
-- `id` – A unique identifier for a resource. Every resource object in the data section must include an id
-  (except when the object is sent by a client to create a new resource).
-- `type` – A string that identifies the type of the resource (often a plural noun, e.g. "files").
-  Every resource object must include a type along with its id.
-- `attributes` – An object holding the resource’s data fields (apart from relationships). All the resource’s
-  non-identifier fields (like name, size, dates, etc.) go under attributes.
-  For example, a file resource’s attributes might include filename, size, and timestamps.
-- `errors` – An array of error objects. This replaces the data section when a request results in an error.
-  A response must contain either data or errors, never both. Each error object provides details about a specific
-  problem (e.g. an error code, HTTP status, message).
+## Route Representations
 
-Example of a response with a single object, e.g. `GET /files/some-folder/report.pdf`
+| Route representation | Request content type        | Response content type      | JSON:API negotiation |
+|----------------------|-----------------------------|----------------------------|----------------------|
+| JSON document        | `application/vnd.api+json`  | `application/vnd.api+json` | Required             |
+| Multipart upload     | `multipart/form-data`       | JSON:API or `204`          | Response only        |
+| Raw image upload     | `image/jpeg` or `image/png` | No body                    | No                   |
+| Binary or PNG        | None                        | Allowlisted media type     | No                   |
+| NDJSON               | None                        | `application/x-ndjson`     | No                   |
+| SSE                  | None                        | `text/event-stream`        | No                   |
+| Bodyless success     | None or route-specific      | No body                    | No response document |
 
-```json
-{
-  "data": {
-    "id": "report.pdf",
-    "type": "files",
-    "attributes": {
-      "file_name": "report.pdf",
-      "file_size": "2 MB",
-      "last_modified": "2025-11-30T12:34:56Z",
-      "size_bytes": 2100000
-    },
-    "links": {
-      "self": "/files/some-folder/report.pdf"
-    }
-  }
-}
-```
+- JSON document requests MUST use exactly `application/vnd.api+json` without media-type parameters. `charset` is
+  forbidden. A violation returns `415`.
+- JSON:API response bodies MUST set `Content-Type: application/vnd.api+json`.
+- `Accept` negotiation is spec-minimal: when the `Accept` header contains instances of `application/vnd.api+json`
+  and every one of them carries media-type parameters, the server MUST return `406`. A missing `Accept`, `*/*`, and
+  any request containing at least one parameterless `application/vnd.api+json` instance are acceptable. Full generic
+  content negotiation is deliberately out of scope.
+- Raw image, binary, PNG, multipart, SSE, and NDJSON routes are exempt from JSON:API negotiation.
+- Unknown routes and unsupported methods MUST reach ordinary `404` or `405` routing before `Accept` negotiation.
 
-> [!NOTE]
-> JSON:API requires using the media type application/vnd.api+json for responses.
-> In Echo, you can ensure this by setting the Content-Type header accordingly. Echo’s Context#JSON method will serialize
-> a Go value to JSON and send it with a status code – you may override the content type if needed to comply with JSON:
-> API.
+## Documents and Resources
 
-## Representing Collections of Resources (List Example)
+- A successful JSON response MUST have a top-level `data` member. An error response MUST have a top-level `errors`
+  array. A response MUST NOT contain both.
+- Every response resource object MUST contain `type`, `id`, and its remaining fields nested under `attributes` or
+  `relationships`.
+- Resource types MUST be plural nouns in kebab-case, such as `materials` or `mfa-management-proofs`.
+- Attribute names MUST use snake_case, such as `first_name` and `created_at`.
+- Empty collections MUST serialize as `data: []`, never `null`.
+- `meta` MAY carry extra information such as `has_more`.
 
-When your endpoint returns a list of resources (for example, `GET /files/some-folder/` returning all files in a folder),
-format the response as an array of resource objects within data:
+## Resource Identity
 
-- Use an array for multiple resources: The top-level data should be an array of resource objects when returning a
-  collection. Each element represents one file in the folder.
-- Include id and type for each resource: Ensure every file object has an id (e.g. file ID or name) and a type
-  (e.g. "files" for a file resource).
-- Nest fields under attributes: Inside each resource object, provide file details under an attributes object.
-  For a file, you might include attributes like fileName, fileSize (a human-readable size), lastModified (date),
-  and sizeBytes (numeric size in bytes).
+- Every response resource MUST have a unique, opaque, non-secret `id` within its `type`.
+- Every PATCH request document MUST include `type` and a non-empty `id` exactly matching the path resource ID.
+  A missing or mismatched identity returns the endpoint's documented `422` validation error.
+- Create requests MUST NOT accept client-generated IDs. The server assigns every ID.
+- For the singleton alias `PATCH /api/v1/users/me`, the request ID MUST equal the authenticated account ID, not the
+  literal string `me`.
+- Command and ephemeral resources (login attempts, password changes, challenges, proofs) MUST receive unique opaque
+  IDs unless this rule explicitly defines a bodyless response for that operation or names an exception below.
+- Secret tokens, password values, MFA values, and their digests MUST NOT be used as resource IDs.
 
-### Example (Correct JSON:API response)
+### Named Exception: auth-sessions Identity
 
-A properly formatted JSON:API response for a list of files might look like this:
+`auth-sessions` is a per-account singleton view of the current cookie session, not an event log. Its resource ID is
+the account ID: repeated logins, MFA verifications, and password-change stages for one account intentionally return
+the same `(type, id)` because they describe the same conceptual resource — the current authentication state of that
+account. MIA keeps no server-side browser-session records, so login attempts and session stages are not addressable
+resources and MUST NOT receive fabricated unique IDs that name nonexistent state.
 
-```json
-{
-  "data": [
-    {
-      "id": "a1b2c3",
-      "type": "files",
-      "attributes": {
-        "file_name": "report.pdf",
-        "file_size": "2 MB",
-        "last_modified": "2025-11-30T12:34:56Z",
-        "size_bytes": 2100000
-      },
-      "links": {
-        "self": "/files/some-folder/report.pdf"
-      }
-    },
-    {
-      "id": "d4e5f6",
-      "type": "files",
-      "attributes": {
-        "file_name": "photo.png",
-        "file_size": "500 KB",
-        "last_modified": "2025-12-01T08:15:30Z",
-        "size_bytes": 512000
-      },
-      "links": {
-        "self": "/files/some-folder/photo.png"
-      }
-    }
-  ],
-  "links": {
-    "self": "/files/some-folder"
-  }
-}
-```
+## Links
 
-In this correct example, the response is a JSON object with a top-level data array. Each file has its id and
-type="files", and all file details are neatly under attributes. A client can easily iterate over data to get each file’s
-information.
-
-### Incorrect JSON Example (Non–JSON:API Format)
-
-For comparison, here’s an incorrectly formatted response and why it violates JSON:API:
-
-```json
-{
-  "data": [
-    {
-      "id": "a1b2c3",
-      "type": "files",
-      "file_name": "report.pdf",
-      "file_size": "2 MB",
-      "last_modified": "2025-11-30T12:34:56Z",
-      "size_bytes": 2100000
-    }
-  ]
-}
-```
-
-**What’s wrong with this?** The file fields (fileName, fileSize, etc.) are placed at the same level as id and type.
-According to JSON:API, resource attributes must be inside an attributes object, not mixed into the top-level of the
-resource. A correct format would nest those fields under an "attributes" key (as shown in the correct example above).
-Always structure each resource as: { "id": ..., "type": ..., "attributes": { ... } }. Also note that we used a top-level
-data key – omitting data entirely or using a custom key like "files" would not conform to JSON:API.
-
-## Error Responses with JSON:API
-
-When something goes wrong (e.g., a file is not found or a request is invalid), JSON:API specifies using an errors array
-in the response instead of data. Key guidelines for error responses:
-
-- Do not return a data key on errors: The response should have a top-level "errors" field containing an array of error
-  objects. (No data field should appear when using errors.)
-- Use appropriate HTTP status codes: Echo will still send an HTTP status like 404 or 400, and the error object should
-  include that status as a string. (JSON:API error objects typically include a "status" field reflecting the HTTP
-  status, among other details.)
-- Provide helpful error details: Each error object can include members such as:
-  - `status`: the HTTP status code (as a string).
-  - `title`: a short, human-readable title for the error.
-  - `detail`: a human-readable description of the specific problem.
-  - `code`: an application-specific error code (string identifier for the error type).
-  - (Optional) `meta`: any extra data about the error (not for routine use).
-
-Typically, you should include at least a status and a detail or title so the client knows what happened.
-
-Example Error Response: Imagine a request for a file that doesn’t exist. You might return a 404 status and a
-JSON body like:
-
-```json
-{
-  "errors": [
-    {
-      "status": "404",
-      "title": "Not Found",
-      "detail": "No file exists at the given path."
-    }
-  ]
-}
-```
-
-This response has no data – instead, the top-level "errors" array contains one error object. The error object’s fields
-describe the problem: a 404 status and a message explaining that the file was not found. (You could also include an
-error "code" or a link to documentation in a real API.) According to JSON:API, error objects are returned as an array
-under the errors key, and you can include multiple error objects if there are multiple issues to report (for example,
-validation errors for several fields).
-
-## Optional JSON:API Features: meta, links, included
-
-JSON:API supports additional top-level members to enrich responses. These are optional but recommended:
-
-- `meta` – A meta object for any extra information that doesn’t fit into the standard data or errors. For example, you
-  could include a total record count or a response timestamp in meta. The value of meta is a JSON object (free-form
-  content).
-- `links` – A links object for URLs related to the response or resources. This shall include a "self" link (URL of the
-  current request) and pagination links (e.g. "next", "prev") for collections. Each resource shall also have its own
-  links (like a self-link to that resource) if needed.
-- `included` – An array of resource objects that are related to the primary data, included side-by-side. This is used for
-  compound documents, where you include related resources to avoid extra fetches. For example, if files had related
-  “owner” user resources, and you wanted to include those user details in the same response, you’d use an included array
-  containing those user resource objects. (Each included resource still has its own id, type, and attributes.)
-
-**These features are optional** – you don’t need them in every response. However, they can be useful: e.g., meta for
-conveying extra stats, links for HATEOAS-style navigation, and included for bundling related data. If you use them, just
-ensure they follow the spec’s structure.
-
-## Case style for API responses
-
-- For attributes always use snake_case. Like `first_name`, `created_at`.
-- For resource type, use a kebab-case, like `user-profiles` or `line-items`
-
-## Trailing slashes
-
-General REST best practice for trailing slashes must be implemented.  
-`/api/v1/files/foo` and `/api/v1/files/foo/` are two different URIs from an HTTP and RFC standpoint.
-Accessing a resource with a trailing slash must lead to an error.
-
-The common convention in APIs is:
-
-- Collections as plural nouns, no trailing slash: /files
-- Elements without trailing slash: /files/foo
-
-Requests to the “wrong” form:
-
-- send 308 redirect to the canonical URL
-- 404 if you want to be strict.
-- Serving identical content on both without redirect is discouraged (duplicate URLs, cache fragmentation, SEO / client confusion).
-
-## Implementing JSON:API Responses in Echo
-
-In your Go Echo application, you will construct responses according to this JSON:API structure and return them as JSON.
-Echo makes it straightforward to send JSON:
-
-- Construct the response data: Create a Go struct or map that mirrors the JSON:API format (e.g., with fields for Data,
-  which contains a slice of resource objects, etc.). Populate it with your resource data or error info.
-- Use Echo’s JSON response method: Echo’s Context#JSON(status, data) will serialize your response struct/map to JSON and
-  send it with the given HTTP status. For example, after building the response object (containing data or errors), you
-  might call return `c.JSON`(http.StatusOK, response) in your handler. Echo will output the JSON to the client.
-- Set the correct Content-Type: By default, Echo will use application/json; charset=UTF-8 as the Content-Type for JSON.
-  For strict JSON:API compliance, set the header to Content-Type: application/vnd.api+json. This tells clients that the
-  response follows the JSON:API specification. You can configure Echo to use this content type, for instance by setting
-  the header on the response (c.Response().Header().Set("Content-Type", "application/vnd.api+json")) before calling
-  `c.JSON`, if needed.
-
-By following this guide, you ensure your Go Echo server’s responses are formatted per JSON:API standards. This yields
-consistent, self-descriptive JSON output that clients (and other developers) can reliably understand and use. With the
-examples above as templates, you can confidently construct both successful resource responses and error messages in a
-JSON:API-compliant way. Good luck, and happy coding!
-
-## Date and Time
-
-- Every API field representing an instant must use RFC 3339 in UTC with the `Z`
-  suffix in requests and responses.
-- Normalize persisted and returned instants to exactly six fractional digits.
-- Accept at most nine fractional digits in requests.
-- Clients convert local input to UTC before sending it. MIA rejects instant
-  values with a non-zero numeric offset.
-- Use `_at` for the time of an event, `_from` and `_until` for range boundaries,
-  and `_for` for a scheduled target time.
-- A local-time schedule uses separate local-time and IANA time-zone fields, such
-  as `16:00:00` and `Europe/Berlin`. A numeric offset does not preserve local
-  scheduling semantics across daylight-saving changes.
-- API clients display instants in the viewer's preferred IANA time zone. The
-  server uses that preference for email, SMS, and other generated
-  communications.
-- Student-only accounts cannot change their preferred time zone. Any supervisor
-  who shares an assigned course with a student can edit that student's
-  non-security profile fields, including the preferred time zone. Every change
-  must be audited.
-
-  ```json
-  {
-    "created_at": "2025-01-14T16:32:45.000000Z",
-    "valid_until": "2025-12-31T21:59:59.000000Z"
-  }
-  ```
+- Links are OPTIONAL everywhere except paginated collections.
+- Every paginated collection response MUST include `links.next` and `links.prev` when those pages exist. Absent
+  navigation links MUST be omitted rather than set to `null` or an empty string.
+- A command resource without a GET route MUST NOT invent a resource self link.
+- Navigation links MUST be built by the shared link builder in `internal/httpserver`, which preserves only
+  allowlisted pagination parameters.
 
 ## Pagination
 
-Pagination will be implemented offset-based supporting `page[limit]` and page`[offset]`.
+- Every collection that can grow with user or operational data MUST use offset pagination.
+- A collection may remain unpaginated only when a documented database or product invariant enforces a small hard
+  cap; the exemption MUST name the invariant.
+- Parameters are exactly `page[limit]` and `page[offset]`.
+- Defaults are limit 25 and offset 0. The maximum limit is 100 and the maximum offset is 10,000.
+- Duplicate, unknown, empty, non-integer, negative, and out-of-range pagination parameters MUST be rejected.
+- Ordering MUST be deterministic and include a unique tie-breaker column.
+- Parameter validation is tested once in the shared parser's test suite. Endpoints need only thin wiring tests
+  proving they use the shared parser.
 
-## Rate limiting
+## Trailing Slashes
 
-- Every unauthenticated API endpoint must be rate limited.
-- Return HTTP `429 Too Many Requests` using the standard JSON:API error format
-  and a stable machine-readable error code.
-- Include `Retry-After` when the next permitted retry time is known.
-- Rate-limit responses must not reveal whether an account, invitation, mobile
-  number, or other sensitive identifier exists.
-- Authentication, MFA, invitation, registration, password-reset, and SMS-code
-  endpoints require dedicated limits in addition to the global unauthenticated
-  limit.
-- The MVP has no separate authenticated tutoring, upload, material-finalization,
-  or speech rate limits.
+- Canonical API routes have no trailing slash. Collections use plural nouns (`/files`); elements append the
+  identifier (`/files/foo`).
+- A trailing-slash variant MUST return the ordinary JSON:API `404` response.
+- The server MUST NOT redirect or serve identical content on both forms.
 
-## API documentation
+## Date and Time
 
-Documentation goes to `./api-doc` and must follow the OpenAPI 3.2 standard.
-The documentation must be split into multiple files with ./api-doc/openapi.yaml as the entry point.
+- Every API field representing an instant MUST use RFC 3339 in UTC with the `Z` suffix in requests and responses.
+- API responses MUST normalize instants to exactly six fractional digits. Persistence MUST remain UTC but MAY use a
+  feature-local layout when that layout expresses the SQLite storage contract.
+- Requests MAY carry up to nine fractional digits. Instant values with a non-zero numeric offset MUST be rejected.
+- Absent optional instants MUST serialize as JSON `null`.
+- All API instant output MUST go through the shared formatter and all API instant input through the shared strict
+  parser in `internal/httpserver`. Feature-local API timestamp layouts are forbidden; persistence parsing and
+  serialization are outside this prohibition.
+- Field names use `_at` for event instants, `_from` and `_until` for range boundaries, and `_for` for a scheduled
+  target instant.
+- Dates, durations, local times, and recurring schedules are not instants. A local-time schedule uses separate
+  local-time and IANA time-zone fields, such as `16:00:00` and `Europe/Berlin`.
+- Clients display instants in the viewer's preferred IANA time zone; the server uses that preference for generated
+  communications.
 
-API documentation must be linted and validate using
+## Rate Limiting
 
-```shell
-npx @redocly/cli lint --config .redocly.yaml ./api-doc/openapi.yaml
-```
+- An unauthenticated endpoint is a publicly accessible route, not any request that happens to lack a session.
+- The global unauthenticated API limit applies only to public routes. Authenticated routes MUST NOT consume it.
+- Authentication, MFA, invitation, registration, password-reset, and SMS-code endpoints require dedicated layered
+  limits in addition to the global public limit.
+- The MVP has no separate authenticated tutoring, upload, material-finalization, or speech rate limits.
+- A rate-limit denial MUST return HTTP `429` with the central JSON:API error and a stable code, and MUST include
+  `Retry-After` when the next permitted retry time is known.
+- Rate-limit responses MUST NOT reveal whether an account, invitation, mobile number, or other sensitive identifier
+  exists.
+
+### Named Exception: Password Recovery
+
+Password-recovery throttling that must remain indistinguishable from an accepted recovery request returns an empty
+`204`. It is exempt from the general JSON:API `429` response requirement. The suppression is audited without
+username, account-existence, or password data.
+
+New exceptions MUST be approved as product behavior and added to this rule before implementation.
+
+## Protocol Error Classification
+
+| Condition                                          | Status |
+|----------------------------------------------------|--------|
+| Malformed JSON:API structure or malformed Unicode  | `400`  |
+| No acceptable response representation              | `406`  |
+| Request body exceeds its bound                     | `413`  |
+| Unsupported request media type                     | `415`  |
+| Valid document with invalid resource data          | `422`  |
+| Rate limited, except the named recovery exception  | `429`  |
+| Unknown API route                                  | `404`  |
+| Unsupported API method                             | `405`  |
+
+- Every entry MUST use the central JSON:API error registry in `internal/httpserver`.
+- Duplicate object-member names at any depth and unknown or unexpected document or resource members are malformed
+  JSON:API structure and MUST return `400 malformed_request`. A known member with an invalid resource value is a
+  validly structured document with invalid resource data and MUST return the endpoint's documented `422` code.
+- The shared protocol layer classifies the failure first; feature packages select a domain-specific stable code only
+  for the `422` class and domain errors.
+- Error objects MUST contain string `status`, stable `code`, `title`, and `detail`. Details MUST NOT leak resource
+  existence or internal state.
+
+## API Documentation
+
+- `api-doc/openapi.yaml` is the source of truth for concrete HTTP transport details and MUST follow OpenAPI 3.2.
+- `docs/api.md` carries product rationale and cross-route narrative only; field-by-field contracts MUST NOT be
+  duplicated there.
+- The documentation MUST be split into multiple files with this layout:
+
+  ```text
+  api-doc/
+    openapi.yaml
+    paths/
+    schemas/
+      json-api/
+      resources/
+    responses/
+  ```
+
+- Every endpoint change MUST update its path, request, response, security, stable-error, and bound definitions in
+  the same commit.
+- Validation uses the pinned Redocly CLI version:
+
+  ```shell
+  npx @redocly/cli@2.49.1 lint --config .redocly.yaml ./api-doc/openapi.yaml
+  ```
+
+### Documentation Standards
+
+- Every operation's success response MUST reference a concrete response schema. Description-only success responses
+  are forbidden except for bodyless `204` responses.
+- Every JSON:API request body MUST reference a per-resource request schema that declares its `data.type`, whether
+  `data.id` is required, and every writable attribute with its type, required flag, and bounds. The generic
+  free-form document schema is reserved for the shared envelope definitions and MUST NOT be an operation's request
+  contract.
+- Resource schemas under `schemas/resources/` MUST be referenced by every operation that returns them. Unreferenced
+  schemas are dead documentation and MUST be removed or wired.
+- Every operation MUST declare its protocol error responses (`400`, `406`, `413`, `415` where a body is decoded,
+  `429` where a limiter applies) and its domain error responses (`401`, `403`, `404`, `409`, `422`) with their
+  stable codes, reusing the shared responses in `responses/`.
+- Every operation MUST declare its security requirements: the session cookie scheme for authenticated routes and
+  the CSRF header scheme for every unsafe method that the CSRF middleware enforces.
+- Existence-hiding endpoints MUST document the uniform response, never per-cause responses that reveal resource
+  existence.
+- `.redocly.yaml` MUST keep the `recommended` ruleset with `operation-4xx-response` and `no-unused-components`
+  enabled. Disabling a lint rule requires a named exception in this rule file with its justification.
+- A passing lint is necessary but not sufficient. Endpoint review MUST verify schema coverage: request and response
+  bodies resolve to concrete typed schemas, not free-form objects.
+
+## Conformance Suite
+
+The shared black-box kernel tests in `internal/httpserver` MUST exhaustively verify shared protocol behavior:
+
+- media negotiation and response content type;
+- success and error top-level members;
+- resource `type`, `id`, attributes, and relationships;
+- PATCH identity;
+- body bounds and protocol error classification;
+- instant formatting;
+- pagination and navigation links;
+- strict trailing-slash rejection;
+- rate-limit format and the named recovery exception.
+
+Every implemented route family MUST add representative real-route wiring tests for the shared behaviors relevant to
+that family, including non-JSON representation exemptions and layered limiting where applicable. An endpoint need not
+repeat the complete kernel matrix. Feature tests add domain behavior without mechanically duplicating shared protocol
+assertions.
+
+## Audit Boundary
+
+Protocol failures classified before domain handling, including `400`, `413`, and `415`, are not login or domain
+attempts and MUST NOT create domain-denial audit events. A validly structured credential or domain attempt that fails
+validation, authentication, authorization, or domain rules retains its documented audit behavior. Protocol handling
+MUST NOT inspect or audit request secrets merely to create an attempt record.
+
+## Endpoint Change Checklist
+
+Complete this checklist whenever an endpoint is added or changed:
+
+1. Register the route with representation and authentication classifications.
+2. Use shared JSON:API decode, response, error, pagination, link, and instant helpers.
+3. Add authorization and existence-hiding tests.
+4. Run shared protocol conformance tests.
+5. Update the split OpenAPI operation and reusable schemas.
+6. Run Go verification and the pinned API lint command.
+
+Worker and reviewer reports MUST list the API lint result.

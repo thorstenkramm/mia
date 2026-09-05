@@ -1,0 +1,49 @@
+ErrorDocument:
+  description: JSON:API error document produced by the central error registry.
+  type: object
+  required: [errors]
+  properties:
+    errors:
+      type: array
+      minItems: 1
+      items:
+        type: object
+        required: [status, code, title, detail]
+        properties:
+          status:
+            type: string
+            description: HTTP status as a string.
+          code:
+            type: string
+            description: Stable registered MIA error code.
+          title:
+            type: string
+          detail:
+            type: string
+            description: Neutral detail that never reveals resource existence.
+PageMeta:
+  description: Pagination metadata attached to every paginated collection.
+  type: object
+  required: [has_more]
+  properties:
+    has_more:
+      type: boolean
+      description: Whether more items exist beyond this page.
+PageLinks:
+  description: >-
+    Navigation links for paginated collections. `prev` and `next` are present
+    only when those pages exist; absent links are omitted rather than null.
+  type: object
+  properties:
+    prev:
+      type: string
+      description: Relative URL of the previous page.
+    next:
+      type: string
+      description: Relative URL of the next page.
+BinaryPayload:
+  type: string
+  format: binary
+NDJSONPayload:
+  type: string
+  description: UTF-8 NDJSON stream containing one normalized content segment per line.

@@ -1,25 +1,17 @@
 package invitation
 
 import (
-	"bytes"
-	"encoding/json"
 	"errors"
-	"io"
-	"mime"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/labstack/echo/v5"
 	"github.com/thorstenkramm/mia/internal/httpserver"
 	"github.com/thorstenkramm/mia/internal/identity"
 	"github.com/thorstenkramm/mia/internal/user"
 )
-
-// instantFormat is the RFC 3339 format with exactly 6 fractional digits as required by the API.
-const instantFormat = "2006-01-02T15:04:05.000000Z"
 
 // Register attaches invitation routes to the server.
 func Register(server *httpserver.Server, service *Service, publicURL string, deliveries *DeliveryManager) {
@@ -28,13 +20,14 @@ func Register(server *httpserver.Server, service *Service, publicURL string, del
 	server.AuthenticatedGET("/api/v1/invitations/:id", getHandler(service))
 	server.AuthenticatedDELETE("/api/v1/invitations/:id", deleteHandler(service))
 	server.AuthenticatedPOST("/api/v1/invitations/:id/resends", resendHandler(server, service, publicURL, deliveries))
-	server.Echo.POST("/api/v1/invitation-previews", previewHandler(server, service))
-	server.Echo.POST("/api/v1/invitation-acceptances", acceptHandler(server, service))
+	server.AuthenticationSensitive(http.MethodPost, "/api/v1/invitation-previews", previewHandler(server, service))
+	server.AuthenticationSensitive(http.MethodPost, "/api/v1/invitation-acceptances", acceptHandler(server, service))
 }
 
 type createRequest struct {
 	Data struct {
 		Type       string `json:"type"`
+		ID         string `json:"id"`
 		Attributes struct {
 			Email string `json:"email"`
 			Role  string `json:"role"`
@@ -49,10 +42,10 @@ func createHandler(_ *httpserver.Server, service *Service, publicURL string, del
 			return err
 		}
 		var request createRequest
-		if err := decode(c, &request); err != nil {
-			return decodeErrorCode(err)
+		if err := httpserver.DecodeJSONAPI(c, &request); err != nil {
+			return err
 		}
-		if request.Data.Type != "invitations" {
+		if request.Data.Type != "invitations" || request.Data.ID != "" {
 			return httpserver.NewError(httpserver.CodeInvalidRequest)
 		}
 		role := Role(request.Data.Attributes.Role)
@@ -89,74 +82,24 @@ func createHandler(_ *httpserver.Server, service *Service, publicURL string, del
 	}
 }
 
-const (
-	defaultPageLimit = 25
-	maxPageLimit     = 100
-	maxPageOffset    = 10000
-)
-
-var allowedListParams = map[string]bool{
-	"page[limit]":  true,
-	"page[offset]": true,
-}
-
 func listHandler(service *Service) echo.HandlerFunc {
 	return func(c *echo.Context) error {
 		actorID, err := authenticatedUser(c)
 		if err != nil {
 			return err
 		}
-		// Reject unknown query parameters.
-		for key := range c.QueryParams() {
-			if !allowedListParams[key] {
-				return httpserver.NewError(httpserver.CodeInvalidRequest)
-			}
-		}
-		// Pagination parameters with API conventions (Finding 7: reject malformed values).
-		// Check if parameters are present in query string (not just empty string default).
-		queryParams := c.QueryParams()
-		offsetParam := queryParams.Get("page[offset]")
-		var offset int
-		_, offsetPresent := queryParams["page[offset]"]
-		if offsetPresent && offsetParam != "" {
-			var parseErr error
-			offset, parseErr = strconv.Atoi(offsetParam)
-			if parseErr != nil {
-				return httpserver.NewError(httpserver.CodeInvalidRequest)
-			}
-		} else if offsetPresent && offsetParam == "" {
-			// Present but empty is invalid.
+		page, err := httpserver.ParsePagination(c.QueryParams())
+		if err != nil {
 			return httpserver.NewError(httpserver.CodeInvalidRequest)
 		}
-		if offset < 0 || offset > maxPageOffset {
-			return httpserver.NewError(httpserver.CodeInvalidRequest)
-		}
-		limitParam := queryParams.Get("page[limit]")
-		var limit int
-		_, limitPresent := queryParams["page[limit]"]
-		if limitPresent && limitParam != "" {
-			var parseErr error
-			limit, parseErr = strconv.Atoi(limitParam)
-			if parseErr != nil {
-				return httpserver.NewError(httpserver.CodeInvalidRequest)
-			}
-		} else if limitPresent && limitParam == "" {
-			// Present but empty is invalid.
-			return httpserver.NewError(httpserver.CodeInvalidRequest)
-		} else {
-			limit = defaultPageLimit
-		}
-		if limit <= 0 || limit > maxPageLimit {
-			return httpserver.NewError(httpserver.CodeInvalidRequest)
-		}
-		result, err := service.List(c.Request().Context(), actorID, ListInput{Offset: offset, PageSize: limit})
+		result, err := service.List(c.Request().Context(), actorID, ListInput{Offset: page.Offset, PageSize: page.Limit})
 		if errors.Is(err, ErrInvitationListUnauthorized) {
 			return httpserver.NewError(httpserver.CodeInvitationListUnauthorized)
 		}
 		if err != nil {
 			return err
 		}
-		return invitationCollection(c, result, offset, limit)
+		return invitationCollection(c, result, page)
 	}
 }
 
@@ -228,6 +171,7 @@ func resendHandler(_ *httpserver.Server, service *Service, publicURL string, del
 type previewRequest struct {
 	Data struct {
 		Type       string `json:"type"`
+		ID         string `json:"id"`
 		Attributes struct {
 			Token string `json:"token"`
 		} `json:"attributes"`
@@ -237,10 +181,10 @@ type previewRequest struct {
 func previewHandler(server *httpserver.Server, service *Service) echo.HandlerFunc {
 	return func(c *echo.Context) error {
 		var request previewRequest
-		if err := decode(c, &request); err != nil {
-			return httpserver.NewError(httpserver.CodeInvitationInvalid)
+		if err := httpserver.DecodeJSONAPI(c, &request); err != nil {
+			return err
 		}
-		if request.Data.Type != "invitation-previews" {
+		if request.Data.Type != "invitation-previews" || request.Data.ID != "" {
 			return httpserver.NewError(httpserver.CodeInvitationInvalid)
 		}
 		// Apply layered rate limits: IP and token-digest.
@@ -269,6 +213,7 @@ func previewHandler(server *httpserver.Server, service *Service) echo.HandlerFun
 type acceptRequest struct {
 	Data struct {
 		Type       string `json:"type"`
+		ID         string `json:"id"`
 		Attributes struct {
 			Token                string `json:"token"`
 			Username             string `json:"username"`
@@ -284,10 +229,10 @@ type acceptRequest struct {
 func acceptHandler(server *httpserver.Server, service *Service) echo.HandlerFunc {
 	return func(c *echo.Context) error {
 		var request acceptRequest
-		if err := decode(c, &request); err != nil {
-			return httpserver.NewError(httpserver.CodeInvitationInvalid)
+		if err := httpserver.DecodeJSONAPI(c, &request); err != nil {
+			return err
 		}
-		if request.Data.Type != "invitation-acceptances" {
+		if request.Data.Type != "invitation-acceptances" || request.Data.ID != "" {
 			return httpserver.NewError(httpserver.CodeInvitationInvalid)
 		}
 		// Apply layered rate limits: IP and token-digest.
@@ -363,196 +308,44 @@ func isIdentityValidationError(err error) bool {
 }
 
 func authenticatedUser(c *echo.Context) (string, error) {
-	id, ok := c.Get("mia.auth.user_id").(string)
-	if !ok || id == "" {
-		return "", httpserver.NewError(httpserver.CodeUnauthenticated)
-	}
-	return id, nil
+	return httpserver.AuthenticatedUser(c)
 }
 
 func invitationResource(c *echo.Context, status int, inv Invitation) error {
 	c.Response().Header().Set(echo.HeaderContentType, "application/vnd.api+json")
-	attrs := map[string]any{
-		"email":      inv.Email,
-		"role":       string(inv.Role),
-		"status":     string(inv.Status),
-		"created_at": inv.CreatedAt.Format(instantFormat),
-		"updated_at": inv.UpdatedAt.Format(instantFormat),
-	}
-	if inv.FailureCode != nil {
-		attrs["failure_code"] = *inv.FailureCode
-	}
 	return c.JSON(status, map[string]any{
 		"data": map[string]any{
 			"type":       "invitations",
 			"id":         inv.ID,
-			"attributes": attrs,
+			"attributes": invitationAttributes(inv),
 		},
 	})
 }
 
-func invitationCollection(c *echo.Context, result ListResult, offset, limit int) error {
-	c.Response().Header().Set(echo.HeaderContentType, "application/vnd.api+json")
+func invitationAttributes(inv Invitation) map[string]any {
+	attrs := map[string]any{
+		"email":      inv.Email,
+		"role":       string(inv.Role),
+		"status":     string(inv.Status),
+		"created_at": httpserver.FormatInstant(inv.CreatedAt),
+		"updated_at": httpserver.FormatInstant(inv.UpdatedAt),
+	}
+	if inv.FailureCode != nil {
+		attrs["failure_code"] = *inv.FailureCode
+	}
+	return attrs
+}
+
+func invitationCollection(c *echo.Context, result ListResult, page httpserver.Page) error {
 	data := make([]map[string]any, 0, len(result.Invitations))
 	for _, inv := range result.Invitations {
-		attrs := map[string]any{
-			"email":      inv.Email,
-			"role":       string(inv.Role),
-			"status":     string(inv.Status),
-			"created_at": inv.CreatedAt.Format(instantFormat),
-			"updated_at": inv.UpdatedAt.Format(instantFormat),
-		}
-		if inv.FailureCode != nil {
-			attrs["failure_code"] = *inv.FailureCode
-		}
 		data = append(data, map[string]any{
 			"type":       "invitations",
 			"id":         inv.ID,
-			"attributes": attrs,
+			"attributes": invitationAttributes(inv),
 		})
 	}
-	// Build navigation links per API conventions.
-	links := map[string]any{
-		"self": "/api/v1/invitations?page[limit]=" + strconv.Itoa(limit) + "&page[offset]=" + strconv.Itoa(offset),
-	}
-	if offset > 0 {
-		prevOffset := offset - limit
-		if prevOffset < 0 {
-			prevOffset = 0
-		}
-		links["prev"] = "/api/v1/invitations?page[limit]=" + strconv.Itoa(limit) + "&page[offset]=" + strconv.Itoa(prevOffset)
-	}
-	if result.HasMore {
-		nextOffset := offset + limit
-		links["next"] = "/api/v1/invitations?page[limit]=" + strconv.Itoa(limit) + "&page[offset]=" + strconv.Itoa(nextOffset)
-	}
-	return c.JSON(http.StatusOK, map[string]any{
-		"data":  data,
-		"links": links,
-		"meta":  map[string]any{"offset": offset, "limit": limit},
-	})
-}
-
-var (
-	errRequestTooLarge      = errors.New("request body too large")
-	errUnsupportedMediaType = errors.New("unsupported request media type")
-)
-
-func decode(c *echo.Context, destination any) error {
-	const maximumRequestBody = 1 << 20
-	mediaType, parameters, err := mime.ParseMediaType(c.Request().Header.Get(echo.HeaderContentType))
-	if err != nil || mediaType != "application/vnd.api+json" || len(parameters) != 0 {
-		return errUnsupportedMediaType
-	}
-	if c.Request().ContentLength > maximumRequestBody {
-		return errRequestTooLarge
-	}
-	c.Request().Body = http.MaxBytesReader(c.Response(), c.Request().Body, maximumRequestBody)
-	body, err := io.ReadAll(c.Request().Body)
-	if err != nil {
-		var tooLarge *http.MaxBytesError
-		if errors.As(err, &tooLarge) {
-			return errRequestTooLarge
-		}
-		return err
-	}
-	if !validJSONUnicode(body) {
-		return errors.New("invalid JSON Unicode")
-	}
-	decoder := json.NewDecoder(bytes.NewReader(body))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(destination); err != nil {
-		var tooLarge *http.MaxBytesError
-		if errors.As(err, &tooLarge) {
-			return errRequestTooLarge
-		}
-		return err
-	}
-	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-		return errors.New("trailing JSON input")
-	}
-	return nil
-}
-
-func validJSONUnicode(body []byte) bool {
-	if !utf8.Valid(body) {
-		return false
-	}
-	inString := false
-	for index := 0; index < len(body); index++ {
-		if !inString {
-			if body[index] == '"' {
-				inString = true
-			}
-			continue
-		}
-		if body[index] == '"' {
-			inString = false
-			continue
-		}
-		if body[index] != '\\' {
-			continue
-		}
-		index++
-		if index >= len(body) {
-			return false
-		}
-		if body[index] != 'u' {
-			continue
-		}
-		if index+4 >= len(body) {
-			return false
-		}
-		value, ok := unicodeEscape(body[index+1 : index+5])
-		if !ok {
-			return false
-		}
-		index += 4
-		if value >= 0xD800 && value <= 0xDBFF {
-			if index+6 >= len(body) || body[index+1] != '\\' || body[index+2] != 'u' {
-				return false
-			}
-			low, ok := unicodeEscape(body[index+3 : index+7])
-			if !ok || low < 0xDC00 || low > 0xDFFF {
-				return false
-			}
-			index += 6
-		} else if value >= 0xDC00 && value <= 0xDFFF {
-			return false
-		}
-	}
-	return !inString
-}
-
-func unicodeEscape(value []byte) (rune, bool) {
-	if len(value) != 4 {
-		return 0, false
-	}
-	var result rune
-	for _, character := range value {
-		result <<= 4
-		switch {
-		case character >= '0' && character <= '9':
-			result += rune(character - '0')
-		case character >= 'a' && character <= 'f':
-			result += rune(character-'a') + 10
-		case character >= 'A' && character <= 'F':
-			result += rune(character-'A') + 10
-		default:
-			return 0, false
-		}
-	}
-	return result, true
-}
-
-func decodeErrorCode(err error) error {
-	if errors.Is(err, errRequestTooLarge) {
-		return httpserver.NewError(httpserver.CodeRequestTooLarge)
-	}
-	if errors.Is(err, errUnsupportedMediaType) {
-		return httpserver.NewError(httpserver.CodeUnsupportedMediaType)
-	}
-	return httpserver.NewError(httpserver.CodeInvalidRequest)
+	return httpserver.Collection(c, data, page, result.HasMore)
 }
 
 func retryAfterSeconds(duration time.Duration) string {

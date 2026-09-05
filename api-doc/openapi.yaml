@@ -1,0 +1,165 @@
+openapi: 3.2.0
+info:
+  title: MIA API
+  version: 1.0.0
+  license:
+    name: Apache-2.0
+    identifier: Apache-2.0
+  description: |
+    Transport contract for the implemented MIA API. JSON documents use JSON:API 1.1.
+    API routes have no trailing-slash variant. Unknown routes and unsupported methods reach ordinary JSON:API 404/405
+    handling before Accept negotiation. Raw image uploads, multipart uploads, binary downloads, and NDJSON streams are
+    exempt from JSON:API Accept negotiation.
+servers:
+  - url: /
+tags:
+  - name: Authentication
+    description: Login, password recovery, browser-session stages, and MFA.
+  - name: Invitations
+    description: Staff invitation creation, management, preview, and acceptance.
+  - name: Users
+    description: User profile, mobile, avatar, role, and student-security operations.
+  - name: Courses
+    description: Course configuration, lifecycle, supervisors, students, and logos.
+  - name: Materials
+    description: Course learning materials, files, briefs, and approval lifecycle.
+  - name: Jobs
+    description: Administrator and subject-scoped background-job oversight.
+security:
+  - sessionCookie: []
+paths:
+  /api/v1/auth/login:
+    $ref: paths/auth.yaml#/login
+  /api/v1/auth/logout:
+    $ref: paths/auth.yaml#/logout
+  /api/v1/auth/password-changes:
+    $ref: paths/auth.yaml#/passwordChanges
+  /api/v1/auth/password-recovery-requests:
+    $ref: paths/auth.yaml#/passwordRecoveryRequests
+  /api/v1/auth/password-resets:
+    $ref: paths/auth.yaml#/passwordResets
+  /api/v1/auth/mfa-challenges/{id}/verifications:
+    $ref: paths/auth.yaml#/mfaChallengeVerifications
+  /api/v1/auth/mfa-challenges/{id}/recovery-code-consumptions:
+    $ref: paths/auth.yaml#/mfaChallengeRecoveryCodeConsumptions
+  /api/v1/auth/mfa-challenges/{id}/resends:
+    $ref: paths/auth.yaml#/mfaChallengeResends
+  /api/v1/auth/mfa-management-proofs:
+    $ref: paths/auth.yaml#/mfaManagementProofs
+  /api/v1/users/me/mfa-enrollments:
+    $ref: paths/auth.yaml#/mfaEnrollments
+  /api/v1/users/me/mfa-enrollments/{id}/verifications:
+    $ref: paths/auth.yaml#/mfaEnrollmentVerifications
+  /api/v1/users/me/mfa-enrollments/{id}/resends:
+    $ref: paths/auth.yaml#/mfaEnrollmentResends
+  /api/v1/users/me/mfa-enrollments/{id}:
+    $ref: paths/auth.yaml#/mfaEnrollment
+  /api/v1/invitations:
+    $ref: paths/invitations.yaml#/invitations
+  /api/v1/invitations/{id}:
+    $ref: paths/invitations.yaml#/invitation
+  /api/v1/invitations/{id}/resends:
+    $ref: paths/invitations.yaml#/invitationResends
+  /api/v1/invitation-previews:
+    $ref: paths/invitations.yaml#/invitationPreviews
+  /api/v1/invitation-acceptances:
+    $ref: paths/invitations.yaml#/invitationAcceptances
+  /api/v1/users/me:
+    $ref: paths/users.yaml#/me
+  /api/v1/users/me/mobile-change-challenges:
+    $ref: paths/users.yaml#/mobileChallenges
+  /api/v1/users/me/mobile-change-challenges/{id}/verifications:
+    $ref: paths/users.yaml#/mobileChallengeVerifications
+  /api/v1/users/me/mobile-change-challenges/{id}/resends:
+    $ref: paths/users.yaml#/mobileChallengeResends
+  /api/v1/users/me/mobile:
+    $ref: paths/users.yaml#/mobile
+  /api/v1/users/me/avatar:
+    $ref: paths/users.yaml#/avatar
+  /api/v1/users/{id}/roles:
+    $ref: paths/users.yaml#/roles
+  /api/v1/users/{id}/temporary-passwords:
+    $ref: paths/courses.yaml#/temporaryPasswords
+  /api/v1/users/{id}/bans:
+    $ref: paths/courses.yaml#/bans
+  /api/v1/courses:
+    $ref: paths/courses.yaml#/courses
+  /api/v1/courses/{id}:
+    $ref: paths/courses.yaml#/course
+  /api/v1/courses/{id}/activations:
+    $ref: paths/courses.yaml#/activations
+  /api/v1/courses/{id}/deactivations:
+    $ref: paths/courses.yaml#/deactivations
+  /api/v1/courses/{id}/supervisors:
+    $ref: paths/courses.yaml#/supervisors
+  /api/v1/courses/{id}/supervisors/{user_id}:
+    $ref: paths/courses.yaml#/supervisor
+  /api/v1/courses/{id}/logo:
+    $ref: paths/courses.yaml#/logo
+  /api/v1/courses/{id}/students:
+    $ref: paths/courses.yaml#/students
+  /api/v1/courses/{id}/students/{user_id}:
+    $ref: paths/courses.yaml#/student
+  /api/v1/courses/{course_id}/materials:
+    $ref: paths/materials.yaml#/courseMaterials
+  /api/v1/materials/{id}:
+    $ref: paths/materials.yaml#/material
+  /api/v1/materials/{id}/finalizations:
+    $ref: paths/materials.yaml#/materialFinalizations
+  /api/v1/materials/{id}/approvals:
+    $ref: paths/materials.yaml#/materialApprovals
+  /api/v1/materials/{id}/files:
+    $ref: paths/materials.yaml#/materialFiles
+  /api/v1/material-files/{id}:
+    $ref: paths/materials.yaml#/materialFile
+  /api/v1/material-files/{id}/download:
+    $ref: paths/materials.yaml#/materialFileDownload
+  /api/v1/material-files/{id}/content:
+    $ref: paths/materials.yaml#/materialFileContent
+  /api/v1/materials/{id}/jobs:
+    $ref: paths/materials.yaml#/materialJobs
+  /api/v1/jobs:
+    $ref: paths/jobs.yaml#/jobs
+  /api/v1/jobs/{id}:
+    $ref: paths/jobs.yaml#/job
+components:
+  securitySchemes:
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: __Host-mia_session
+      description: Signed and encrypted HttpOnly browser session cookie.
+    csrfToken:
+      type: apiKey
+      in: header
+      name: X-CSRF-Token
+      description: Required with the matching __Host-mia_csrf cookie on every unsafe API request.
+  parameters:
+    ResourceID:
+      name: id
+      in: path
+      required: true
+      schema: { type: string, minLength: 1 }
+    UserID:
+      name: user_id
+      in: path
+      required: true
+      schema: { type: string, minLength: 1 }
+    CourseID:
+      name: course_id
+      in: path
+      required: true
+      schema: { type: string, minLength: 1 }
+    PageLimit:
+      name: page[limit]
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 100, default: 25 }
+    PageOffset:
+      name: page[offset]
+      in: query
+      schema: { type: integer, minimum: 0, maximum: 10000, default: 0 }
+    MFAProof:
+      name: X-MFA-Management-Proof
+      in: header
+      required: false
+      schema: { type: string, format: uuid }

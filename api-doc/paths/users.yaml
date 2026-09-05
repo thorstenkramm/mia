@@ -1,0 +1,242 @@
+me:
+  get:
+    tags: [Users]
+    operationId: getMe
+    summary: Get current profile
+    security: [{ sessionCookie: [] }]
+    responses:
+      '200':
+        description: Current user profile.
+        content:
+          application/vnd.api+json:
+            schema: { $ref: ../schemas/resources/resources.yaml#/UserDocument }
+      '401': { $ref: ../responses/errors.yaml#/Unauthorized }
+      '403':
+        $ref: ../responses/errors.yaml#/Forbidden
+        description: Restricted session (`auth_password_change_required`).
+      '406': { $ref: ../responses/errors.yaml#/NotAcceptable }
+  patch:
+    tags: [Users]
+    operationId: updateMe
+    summary: Update current staff profile
+    security: [{ sessionCookie: [], csrfToken: [] }]
+    requestBody:
+      required: true
+      content:
+        application/vnd.api+json:
+          schema: { $ref: ../schemas/requests/requests.yaml#/ProfileUpdateRequestDocument }
+    responses:
+      '200':
+        description: Updated user profile.
+        content:
+          application/vnd.api+json:
+            schema: { $ref: ../schemas/resources/resources.yaml#/UserDocument }
+      '400': { $ref: ../responses/errors.yaml#/BadRequest }
+      '401': { $ref: ../responses/errors.yaml#/Unauthorized }
+      '403':
+        $ref: ../responses/errors.yaml#/Forbidden
+        description: >-
+          CSRF, restricted session, or student-only self-edit (`csrf_invalid`, `auth_password_change_required`, or
+          `user_profile_unauthorized`).
+      '406': { $ref: ../responses/errors.yaml#/NotAcceptable }
+      '413': { $ref: ../responses/errors.yaml#/RequestTooLarge }
+      '415': { $ref: ../responses/errors.yaml#/UnsupportedMediaType }
+      '422':
+        $ref: ../responses/errors.yaml#/Unprocessable
+        description: Invalid identity, empty patch, or profile field (`user_profile_invalid`).
+
+mobileChallenges:
+  post:
+    tags: [Users]
+    operationId: createMobileChallenge
+    summary: Start mobile challenge
+    security: [{ sessionCookie: [], csrfToken: [] }]
+    requestBody:
+      required: true
+      content:
+        application/vnd.api+json:
+          schema: { $ref: ../schemas/requests/requests.yaml#/MobileChallengeRequestDocument }
+    responses:
+      '201':
+        description: Identity-only mobile challenge; the code is sent by SMS.
+        content:
+          application/vnd.api+json:
+            schema: { $ref: ../schemas/resources/resources.yaml#/MobileChangeChallengeDocument }
+      '400': { $ref: ../responses/errors.yaml#/BadRequest }
+      '401': { $ref: ../responses/errors.yaml#/Unauthorized }
+      '403':
+        $ref: ../responses/errors.yaml#/Forbidden
+        description: >-
+          CSRF, restricted session, or student-only profile (`csrf_invalid`, `auth_password_change_required`, or
+          `user_profile_unauthorized`).
+      '406': { $ref: ../responses/errors.yaml#/NotAcceptable }
+      '413': { $ref: ../responses/errors.yaml#/RequestTooLarge }
+      '415': { $ref: ../responses/errors.yaml#/UnsupportedMediaType }
+      '422':
+        $ref: ../responses/errors.yaml#/Unprocessable
+        description: Invalid resource or E.164 mobile (`user_profile_invalid`).
+      '429': { $ref: ../responses/errors.yaml#/RateLimited }
+      '503':
+        $ref: ../responses/errors.yaml#/ServiceUnavailable
+        description: SMS verification unavailable (`user_mobile_unavailable`).
+
+mobileChallengeVerifications:
+  post:
+    tags: [Users]
+    operationId: verifyMobileChallenge
+    summary: Verify mobile challenge
+    security: [{ sessionCookie: [], csrfToken: [] }]
+    parameters: [{ $ref: ../openapi.yaml#/components/parameters/ResourceID }]
+    requestBody:
+      required: true
+      content:
+        application/vnd.api+json:
+          schema: { $ref: ../schemas/requests/requests.yaml#/MobileVerificationRequestDocument }
+    responses:
+      '204': { description: Mobile verified and pending SMS factors invalidated. }
+      '400': { $ref: ../responses/errors.yaml#/BadRequest }
+      '401': { $ref: ../responses/errors.yaml#/Unauthorized }
+      '403':
+        $ref: ../responses/errors.yaml#/Forbidden
+        description: >-
+          CSRF, restricted session, or student-only profile (`csrf_invalid`, `auth_password_change_required`, or
+          `user_profile_unauthorized`).
+      '406': { $ref: ../responses/errors.yaml#/NotAcceptable }
+      '413': { $ref: ../responses/errors.yaml#/RequestTooLarge }
+      '415': { $ref: ../responses/errors.yaml#/UnsupportedMediaType }
+      '422':
+        $ref: ../responses/errors.yaml#/Unprocessable
+        description: >-
+          Invalid resource, challenge, or code (`user_profile_invalid`, `user_mobile_challenge_invalid`, or
+          `user_mobile_code_invalid`).
+      '429': { $ref: ../responses/errors.yaml#/RateLimited }
+
+mobileChallengeResends:
+  post:
+    tags: [Users]
+    operationId: resendMobileChallenge
+    summary: Resend mobile challenge
+    security: [{ sessionCookie: [], csrfToken: [] }]
+    parameters: [{ $ref: ../openapi.yaml#/components/parameters/ResourceID }]
+    responses:
+      '204': { description: Existing code sent without extending challenge expiry. }
+      '401': { $ref: ../responses/errors.yaml#/Unauthorized }
+      '403':
+        $ref: ../responses/errors.yaml#/Forbidden
+        description: >-
+          CSRF, restricted session, or student-only profile (`csrf_invalid`, `auth_password_change_required`, or
+          `user_profile_unauthorized`).
+      '406': { $ref: ../responses/errors.yaml#/NotAcceptable }
+      '422':
+        $ref: ../responses/errors.yaml#/Unprocessable
+        description: Invalid or expired challenge (`user_mobile_challenge_invalid`).
+      '429': { $ref: ../responses/errors.yaml#/RateLimited }
+      '503':
+        $ref: ../responses/errors.yaml#/ServiceUnavailable
+        description: SMS verification unavailable (`user_mobile_unavailable`).
+
+mobile:
+  delete:
+    tags: [Users]
+    operationId: removeMobile
+    summary: Remove verified mobile
+    security: [{ sessionCookie: [], csrfToken: [] }]
+    responses:
+      '204': { description: Verified mobile and pending mobile state removed. }
+      '401': { $ref: ../responses/errors.yaml#/Unauthorized }
+      '403':
+        $ref: ../responses/errors.yaml#/Forbidden
+        description: >-
+          CSRF, restricted session, or student-only profile (`csrf_invalid`, `auth_password_change_required`, or
+          `user_profile_unauthorized`).
+      '406': { $ref: ../responses/errors.yaml#/NotAcceptable }
+
+avatar:
+  get:
+    tags: [Users]
+    operationId: getAvatar
+    summary: Download avatar PNG
+    security: [{ sessionCookie: [] }]
+    responses:
+      '200':
+        description: Metadata-free PNG with ETag and private no-cache headers.
+        content:
+          image/png:
+            schema: { $ref: ../schemas/json-api/documents.yaml#/BinaryPayload }
+      '304': { description: The If-None-Match validator matched. }
+      '401': { $ref: ../responses/errors.yaml#/Unauthorized }
+      '403':
+        $ref: ../responses/errors.yaml#/Forbidden
+        description: Restricted session (`auth_password_change_required`).
+      '404':
+        $ref: ../responses/errors.yaml#/NotFound
+        description: Avatar is absent (`not_found`).
+  put:
+    tags: [Users]
+    operationId: putAvatar
+    summary: Upload avatar
+    description: Raw image/jpeg or image/png body without media-type parameters; maximum 10 MiB.
+    security: [{ sessionCookie: [], csrfToken: [] }]
+    requestBody:
+      required: true
+      content:
+        image/jpeg:
+          schema: { $ref: ../schemas/requests/requests.yaml#/ImageUploadRequest }
+        image/png:
+          schema: { $ref: ../schemas/requests/requests.yaml#/ImageUploadRequest }
+    responses:
+      '204': { description: Normalized PNG avatar saved. }
+      '401': { $ref: ../responses/errors.yaml#/Unauthorized }
+      '403':
+        $ref: ../responses/errors.yaml#/Forbidden
+        description: >-
+          CSRF, restricted session, or student-only profile (`csrf_invalid`, `auth_password_change_required`, or
+          `user_profile_unauthorized`).
+      '422':
+        $ref: ../responses/errors.yaml#/Unprocessable
+        description: Invalid media type, size, signature, dimensions, or image (`user_avatar_invalid`).
+  delete:
+    tags: [Users]
+    operationId: deleteAvatar
+    summary: Delete avatar
+    security: [{ sessionCookie: [], csrfToken: [] }]
+    responses:
+      '204': { description: Avatar deleted; absence is idempotent. }
+      '401': { $ref: ../responses/errors.yaml#/Unauthorized }
+      '403':
+        $ref: ../responses/errors.yaml#/Forbidden
+        description: >-
+          CSRF, restricted session, or student-only profile (`csrf_invalid`, `auth_password_change_required`, or
+          `user_profile_unauthorized`).
+      '406': { $ref: ../responses/errors.yaml#/NotAcceptable }
+
+roles:
+  post:
+    tags: [Users]
+    operationId: grantRole
+    summary: Grant permanent staff role
+    security: [{ sessionCookie: [], csrfToken: [] }]
+    parameters: [{ $ref: ../openapi.yaml#/components/parameters/ResourceID }]
+    requestBody:
+      required: true
+      content:
+        application/vnd.api+json:
+          schema: { $ref: ../schemas/requests/requests.yaml#/RoleGrantRequestDocument }
+    responses:
+      '204': { description: Role granted immediately; an existing grant is idempotent. }
+      '400': { $ref: ../responses/errors.yaml#/BadRequest }
+      '401': { $ref: ../responses/errors.yaml#/Unauthorized }
+      '403':
+        $ref: ../responses/errors.yaml#/Forbidden
+        description: >-
+          CSRF, restricted session, or actor authorization (`csrf_invalid`, `auth_password_change_required`, or
+          `user_role_unauthorized`).
+      '404':
+        $ref: ../responses/errors.yaml#/NotFound
+        description: Missing or ineligible target is hidden (`user_not_found`).
+      '406': { $ref: ../responses/errors.yaml#/NotAcceptable }
+      '413': { $ref: ../responses/errors.yaml#/RequestTooLarge }
+      '415': { $ref: ../responses/errors.yaml#/UnsupportedMediaType }
+      '422':
+        $ref: ../responses/errors.yaml#/Unprocessable
+        description: Invalid resource type or role (`auth_invalid_request`).

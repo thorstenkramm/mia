@@ -1,0 +1,831 @@
+# Response resource schemas and JSON:API document wrappers.
+# Every schema here is wired into at least one operation in api-doc/paths/.
+
+User:
+  type: object
+  required: [type, id, attributes]
+  properties:
+    type:
+      const: users
+    id:
+      type: string
+    attributes:
+      type: object
+      required:
+        - username
+        - email
+        - name
+        - nickname
+        - preferred_language
+        - country
+        - time_zone
+        - tts_voice
+        - has_verified_mobile
+        - avatar_url
+      properties:
+        username:
+          type: string
+        email:
+          type: [string, 'null']
+          description: Verified staff email. Null for student-only accounts.
+        name:
+          type: [string, 'null']
+        nickname:
+          type: [string, 'null']
+        preferred_language:
+          type: string
+        country:
+          type: string
+        time_zone:
+          type: string
+          description: Preferred IANA time zone for display.
+        tts_voice:
+          type: [string, 'null']
+        has_verified_mobile:
+          type: boolean
+        avatar_url:
+          type: [string, 'null']
+          description: Relative avatar download URL, or null without an avatar.
+CreatedUser:
+  description: >-
+    Identity-only users resource returned by invitation acceptance. Attributes
+    are intentionally empty; the new account signs in through the normal login.
+  type: object
+  required: [type, id, attributes]
+  properties:
+    type:
+      const: users
+    id:
+      type: string
+    attributes:
+      type: object
+      additionalProperties: false
+AuthSession:
+  description: >-
+    Singleton view of the current cookie session. By the named `auth-sessions`
+    identity exception, the resource ID is the account ID: repeated logins and
+    stage transitions for one account return the same `(type, id)`.
+  type: object
+  required: [type, id, attributes]
+  properties:
+    type:
+      const: auth-sessions
+    id:
+      type: string
+      description: The account ID (named auth-sessions identity exception).
+    attributes:
+      type: object
+      required: [stage]
+      properties:
+        stage:
+          type: string
+          enum: [authenticated, mfa, password-change]
+        mfa_challenge_id:
+          type: string
+          description: Present only in the `mfa` stage.
+MFAManagementProof:
+  type: object
+  required: [type, id, attributes]
+  properties:
+    type:
+      const: mfa-management-proofs
+    id:
+      type: string
+      description: Opaque proof resource ID with the `mfp_` prefix.
+    attributes:
+      type: object
+      required: [proof]
+      properties:
+        proof:
+          type: string
+          format: uuid
+          description: >-
+            Single-use bearer proof shown exactly once. Valid for five minutes
+            in the `X-MFA-Management-Proof` header or the enrollment `proof`
+            attribute. Only its SHA-256 digest is persisted.
+MFAEnrollment:
+  type: object
+  required: [type, id, attributes]
+  properties:
+    type:
+      const: mfa-enrollments
+    id:
+      type: string
+      description: Pending enrollment ID with the `mfe_` prefix.
+    attributes:
+      type: object
+      required: [method]
+      properties:
+        method:
+          type: string
+          enum: [totp, sms]
+        provisioning_uri:
+          type: string
+          description: otpauth:// provisioning URI. Present only for TOTP.
+MFARecoveryCodes:
+  type: object
+  required: [type, id, attributes]
+  properties:
+    type:
+      const: mfa-recovery-codes
+    id:
+      type: string
+      description: The consumed enrollment ID.
+    attributes:
+      type: object
+      required: [recovery_codes]
+      properties:
+        recovery_codes:
+          type: array
+          minItems: 10
+          maxItems: 10
+          items:
+            type: string
+            minLength: 16
+            maxLength: 16
+          description: >-
+            Single-use recovery codes shown exactly once. Only non-reversible
+            digests are stored.
+MobileChangeChallenge:
+  type: object
+  required: [type, id, attributes]
+  properties:
+    type:
+      const: mobile-change-challenges
+    id:
+      type: string
+      description: Challenge ID with the `mvc_` prefix.
+    attributes:
+      type: object
+      additionalProperties: false
+      description: Intentionally empty; the code travels only by SMS.
+Invitation:
+  type: object
+  required: [type, id, attributes]
+  properties:
+    type:
+      const: invitations
+    id:
+      type: string
+    attributes:
+      type: object
+      required: [email, role, status, created_at, updated_at]
+      properties:
+        email:
+          type: string
+        role:
+          type: string
+          enum: [administrator, supervisor, mentor]
+        status:
+          type: string
+          enum: [pending, accepted, revoked, faulty]
+        failure_code:
+          type: string
+          description: Present only on faulty invitations.
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+InvitationPreview:
+  type: object
+  required: [type, id, attributes]
+  properties:
+    type:
+      const: invitation-previews
+    id:
+      const: preview
+    attributes:
+      type: object
+      required: [platform, role]
+      properties:
+        platform:
+          const: mia
+        role:
+          type: string
+          enum: [administrator, supervisor, mentor]
+Course:
+  type: object
+  required: [type, id, attributes, relationships]
+  properties:
+    type:
+      const: courses
+    id:
+      type: string
+    attributes:
+      type: object
+      required:
+        - name
+        - description
+        - curriculum
+        - learning_goals
+        - ai_tutor_instructions
+        - language
+        - state
+        - created_at
+        - activated_at
+        - deactivated_at
+        - updated_at
+        - logo_url
+      properties:
+        name:
+          type: string
+        description:
+          type: [string, 'null']
+        curriculum:
+          type: [string, 'null']
+        learning_goals:
+          type: [string, 'null']
+        ai_tutor_instructions:
+          type: [string, 'null']
+        language:
+          type: [string, 'null']
+        state:
+          type: string
+          enum: [inactive, active]
+        created_at:
+          type: string
+          format: date-time
+        activated_at:
+          type: [string, 'null']
+          format: date-time
+        deactivated_at:
+          type: [string, 'null']
+          format: date-time
+        updated_at:
+          type: [string, 'null']
+          format: date-time
+        logo_url:
+          type: [string, 'null']
+          description: Relative logo download URL, or null without a logo.
+    relationships:
+      type: object
+      required: [supervisors]
+      properties:
+        supervisors:
+          type: object
+          required: [data]
+          properties:
+            data:
+              type: array
+              items:
+                $ref: '#/UserIdentifier'
+CourseStudent:
+  type: object
+  required: [type, id, attributes, relationships]
+  properties:
+    type:
+      const: course-students
+    id:
+      type: string
+    attributes:
+      type: object
+      required: [username, joined_at]
+      properties:
+        username:
+          type: string
+        joined_at:
+          type: string
+          format: date-time
+    relationships:
+      type: object
+      required: [course, student]
+      properties:
+        course:
+          $ref: '#/ToOneCourse'
+        student:
+          $ref: '#/ToOneUser'
+Material:
+  type: object
+  required: [type, id, attributes, relationships]
+  properties:
+    type:
+      const: materials
+    id:
+      type: string
+    attributes:
+      type: object
+      required:
+        - name
+        - scope
+        - kind
+        - format
+        - state
+        - external_url
+        - brief
+        - brief_source
+        - brief_updated_at
+        - approved
+        - approved_at
+        - failure_code
+        - created_at
+        - updated_at
+      properties:
+        name:
+          type: string
+        scope:
+          type: string
+          enum: [course-wide, student-private]
+        kind:
+          type: string
+          enum: [text-book, exam, worksheet, website, youtube]
+        format:
+          type: string
+          enum: [pdf, jpeg, png, text, markdown, docx, link]
+        state:
+          type: string
+          enum: [draft, processing, ready, failed]
+        external_url:
+          type: [string, 'null']
+        brief:
+          oneOf:
+            - $ref: '#/Brief'
+            - type: 'null'
+        brief_source:
+          type: [string, 'null']
+          enum: [generated, supervisor, null]
+        brief_updated_at:
+          type: [string, 'null']
+          format: date-time
+        approved:
+          type: boolean
+        approved_at:
+          type: [string, 'null']
+          format: date-time
+        failure_code:
+          type: [string, 'null']
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: [string, 'null']
+          format: date-time
+    relationships:
+      type: object
+      required: [course]
+      properties:
+        course:
+          $ref: '#/ToOneCourse'
+MaterialFile:
+  type: object
+  required: [type, id, attributes, relationships]
+  properties:
+    type:
+      const: material-files
+    id:
+      type: string
+    attributes:
+      type: object
+      required:
+        - original_filename
+        - media_type
+        - size_bytes
+        - page_count
+        - state
+        - failure_code
+        - created_at
+        - download_url
+        - content_url
+      properties:
+        original_filename:
+          type: string
+        media_type:
+          type: string
+        size_bytes:
+          type: integer
+          format: int64
+        page_count:
+          type: integer
+        state:
+          type: string
+          enum: [draft, processing, processed, failed]
+        failure_code:
+          type: [string, 'null']
+        created_at:
+          type: string
+          format: date-time
+        download_url:
+          type: string
+        content_url:
+          type: string
+    relationships:
+      type: object
+      required: [material]
+      properties:
+        material:
+          $ref: '#/ToOneMaterial'
+Job:
+  description: Administrator diagnostic job view including provider usage.
+  type: object
+  required: [type, id, attributes, relationships]
+  properties:
+    type:
+      const: jobs
+    id:
+      type: string
+    attributes:
+      type: object
+      required:
+        - job_type
+        - subject_type
+        - subject_id
+        - state
+        - attempt_count
+        - available_at
+        - created_at
+        - started_at
+        - finished_at
+        - failure_code
+        - provider_input_units
+        - provider_output_units
+      properties:
+        job_type:
+          type: string
+        subject_type:
+          type: string
+        subject_id:
+          type: string
+        state:
+          type: string
+          enum: [queued, running, succeeded, failed, cancelled]
+        attempt_count:
+          type: integer
+          format: int64
+        available_at:
+          type: string
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+        started_at:
+          type: [string, 'null']
+          format: date-time
+        finished_at:
+          type: [string, 'null']
+          format: date-time
+        failure_code:
+          type: [string, 'null']
+        provider_input_units:
+          type: integer
+          format: int64
+        provider_output_units:
+          type: integer
+          format: int64
+    relationships:
+      type: object
+      required: [course]
+      properties:
+        course:
+          $ref: '#/ToOneCourse'
+SafeJob:
+  description: >-
+    Subject-scoped job view for supervisors. Diagnostic fields (availability,
+    failure code, provider usage) and relationships are omitted.
+  type: object
+  required: [type, id, attributes]
+  properties:
+    type:
+      const: jobs
+    id:
+      type: string
+    attributes:
+      type: object
+      required:
+        - job_type
+        - subject_type
+        - subject_id
+        - state
+        - attempt_count
+        - created_at
+        - started_at
+        - finished_at
+      properties:
+        job_type:
+          type: string
+        subject_type:
+          type: string
+        subject_id:
+          type: string
+        state:
+          type: string
+          enum: [queued, running, succeeded, failed, cancelled]
+        attempt_count:
+          type: integer
+          format: int64
+        created_at:
+          type: string
+          format: date-time
+        started_at:
+          type: [string, 'null']
+          format: date-time
+        finished_at:
+          type: [string, 'null']
+          format: date-time
+ResourceIdentifier:
+  type: object
+  required: [type, id]
+  properties:
+    type:
+      type: string
+    id:
+      type: string
+UserIdentifier:
+  type: object
+  required: [type, id]
+  properties:
+    type:
+      const: users
+    id:
+      type: string
+ToOneCourse:
+  type: object
+  required: [data]
+  properties:
+    data:
+      allOf:
+        - $ref: '#/ResourceIdentifier'
+        - properties:
+            type:
+              const: courses
+ToOneUser:
+  type: object
+  required: [data]
+  properties:
+    data:
+      allOf:
+        - $ref: '#/ResourceIdentifier'
+        - properties:
+            type:
+              const: users
+ToOneMaterial:
+  type: object
+  required: [data]
+  properties:
+    data:
+      allOf:
+        - $ref: '#/ResourceIdentifier'
+        - properties:
+            type:
+              const: materials
+Brief:
+  description: Validated material brief (version 1); encoded content is at most 256 KiB.
+  type: object
+  required:
+    - version
+    - summary
+    - subjects
+    - learning_goals
+    - sections
+    - warnings
+    - educational_level
+  properties:
+    version:
+      const: 1
+    summary:
+      type: string
+      minLength: 1
+      maxLength: 4000
+    subjects:
+      type: array
+      minItems: 1
+      maxItems: 20
+      items:
+        type: string
+        minLength: 1
+        maxLength: 100
+    learning_goals:
+      oneOf:
+        - type: array
+          maxItems: 30
+          items:
+            type: string
+            minLength: 1
+            maxLength: 300
+        - type: 'null'
+    sections:
+      oneOf:
+        - type: array
+          maxItems: 500
+          items:
+            type: object
+            required: [sequence, label, title, description, search_terms]
+            properties:
+              sequence:
+                type: integer
+                minimum: 1
+                description: One-based position matching the array order.
+              label:
+                type: [string, 'null']
+                maxLength: 100
+              title:
+                type: string
+                minLength: 1
+                maxLength: 200
+              description:
+                type: string
+                minLength: 1
+                maxLength: 500
+              search_terms:
+                type: [array, 'null']
+                maxItems: 10
+                items:
+                  type: string
+                  minLength: 1
+                  maxLength: 50
+        - type: 'null'
+    warnings:
+      oneOf:
+        - type: array
+          maxItems: 20
+          items:
+            type: string
+            minLength: 1
+            maxLength: 500
+        - type: 'null'
+    educational_level:
+      type: [string, 'null']
+      maxLength: 100
+
+# --- JSON:API document wrappers -------------------------------------------
+
+AuthSessionDocument:
+  type: object
+  required: [data]
+  properties:
+    data:
+      $ref: '#/AuthSession'
+MFAManagementProofDocument:
+  type: object
+  required: [data]
+  properties:
+    data:
+      $ref: '#/MFAManagementProof'
+MFAEnrollmentDocument:
+  type: object
+  required: [data]
+  properties:
+    data:
+      $ref: '#/MFAEnrollment'
+MFARecoveryCodesDocument:
+  type: object
+  required: [data]
+  properties:
+    data:
+      $ref: '#/MFARecoveryCodes'
+UserDocument:
+  type: object
+  required: [data]
+  properties:
+    data:
+      $ref: '#/User'
+CreatedUserDocument:
+  type: object
+  required: [data]
+  properties:
+    data:
+      $ref: '#/CreatedUser'
+MobileChangeChallengeDocument:
+  type: object
+  required: [data]
+  properties:
+    data:
+      $ref: '#/MobileChangeChallenge'
+InvitationDocument:
+  type: object
+  required: [data]
+  properties:
+    data:
+      $ref: '#/Invitation'
+InvitationCollectionDocument:
+  type: object
+  required: [data, meta]
+  properties:
+    data:
+      type: array
+      items:
+        $ref: '#/Invitation'
+    meta:
+      $ref: ../json-api/documents.yaml#/PageMeta
+    links:
+      $ref: ../json-api/documents.yaml#/PageLinks
+InvitationPreviewDocument:
+  type: object
+  required: [data]
+  properties:
+    data:
+      $ref: '#/InvitationPreview'
+CourseDocument:
+  type: object
+  required: [data]
+  properties:
+    data:
+      $ref: '#/Course'
+CourseCollectionDocument:
+  type: object
+  required: [data, meta]
+  properties:
+    data:
+      type: array
+      items:
+        $ref: '#/Course'
+    meta:
+      $ref: ../json-api/documents.yaml#/PageMeta
+    links:
+      $ref: ../json-api/documents.yaml#/PageLinks
+SupervisorCollectionDocument:
+  description: Paginated collection of supervisor user identifiers.
+  type: object
+  required: [data, meta]
+  properties:
+    data:
+      type: array
+      items:
+        $ref: '#/UserIdentifier'
+    meta:
+      $ref: ../json-api/documents.yaml#/PageMeta
+    links:
+      $ref: ../json-api/documents.yaml#/PageLinks
+CourseStudentDocument:
+  type: object
+  required: [data]
+  properties:
+    data:
+      $ref: '#/CourseStudent'
+CourseStudentCollectionDocument:
+  type: object
+  required: [data, meta]
+  properties:
+    data:
+      type: array
+      items:
+        $ref: '#/CourseStudent'
+    meta:
+      $ref: ../json-api/documents.yaml#/PageMeta
+    links:
+      $ref: ../json-api/documents.yaml#/PageLinks
+MaterialDocument:
+  type: object
+  required: [data]
+  properties:
+    data:
+      $ref: '#/Material'
+MaterialCollectionDocument:
+  type: object
+  required: [data, meta]
+  properties:
+    data:
+      type: array
+      items:
+        $ref: '#/Material'
+    meta:
+      $ref: ../json-api/documents.yaml#/PageMeta
+    links:
+      $ref: ../json-api/documents.yaml#/PageLinks
+MaterialFileDocument:
+  type: object
+  required: [data]
+  properties:
+    data:
+      $ref: '#/MaterialFile'
+MaterialFileListDocument:
+  description: >-
+    Unpaginated material-files collection. The per-material file-count hard cap
+    keeps this collection small; there is no pagination meta.
+  type: object
+  required: [data]
+  properties:
+    data:
+      type: array
+      items:
+        $ref: '#/MaterialFile'
+SafeJobCollectionDocument:
+  type: object
+  required: [data, meta]
+  properties:
+    data:
+      type: array
+      items:
+        $ref: '#/SafeJob'
+    meta:
+      $ref: ../json-api/documents.yaml#/PageMeta
+    links:
+      $ref: ../json-api/documents.yaml#/PageLinks
+JobDocument:
+  type: object
+  required: [data]
+  properties:
+    data:
+      $ref: '#/Job'
+JobCollectionDocument:
+  type: object
+  required: [data, meta]
+  properties:
+    data:
+      type: array
+      items:
+        $ref: '#/Job'
+    meta:
+      $ref: ../json-api/documents.yaml#/PageMeta
+    links:
+      $ref: ../json-api/documents.yaml#/PageLinks

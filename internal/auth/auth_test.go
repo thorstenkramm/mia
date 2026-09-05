@@ -18,6 +18,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v5"
 	"github.com/thorstenkramm/mia/internal/httpserver"
+	"github.com/thorstenkramm/mia/internal/httpserver/conformance"
 	"github.com/thorstenkramm/mia/internal/identity"
 	"github.com/thorstenkramm/mia/internal/provider/sms"
 	miSQLite "github.com/thorstenkramm/mia/internal/sqlite"
@@ -29,7 +30,15 @@ func TestLoginPasswordGateStrictInputAndAuditEvents(t *testing.T) {
 	account := createAccount(t, database, true)
 	csrf := csrfToken(t, server)
 
-	invalid := serve(t, server, http.MethodPost, "/api/v1/auth/login", csrf, nil, `{"data":{"type":"login-attempts","attributes":{"username":"student","password":"wrong password"},"unexpected":true}}`)
+	malformed := serve(t, server, http.MethodPost, "/api/v1/auth/login", csrf, nil, `{"data":{"type":"login-attempts","attributes":{"username":"student","password":"wrong password"},"unexpected":true}}`)
+	assertCode(t, malformed, http.StatusBadRequest, "malformed_request")
+	assertAuditCount(t, database, "auth.session.failed", 0)
+
+	wrongCredentials := serve(t, server, http.MethodPost, "/api/v1/auth/login", csrf, nil,
+		loginBody("student", "wrong password"))
+	assertCode(t, wrongCredentials, http.StatusUnauthorized, "auth_invalid_credentials")
+
+	invalid := serve(t, server, http.MethodPost, "/api/v1/auth/login", csrf, nil, `{"data":{"type":"login-attempts","attributes":{"password":"wrong password"}}}`)
 	assertCode(t, invalid, http.StatusUnprocessableEntity, "auth_invalid_request")
 
 	login := serve(t, server, http.MethodPost, "/api/v1/auth/login", csrf, nil, loginBody("student", "correct horse battery"))
@@ -48,7 +57,7 @@ func TestLoginPasswordGateStrictInputAndAuditEvents(t *testing.T) {
 	if err := database.QueryRow("SELECT COUNT(*) FROM audit_events WHERE action = 'auth.session.failed'").Scan(&failures); err != nil {
 		t.Fatal(err)
 	}
-	if failures != 1 {
+	if failures != 2 {
 		t.Fatalf("failed-login audits = %d", failures)
 	}
 	var sensitive int
@@ -152,9 +161,9 @@ func TestLoginRejectsUnsupportedMediaAndOversizedBody(t *testing.T) {
 	server, _ := testServer(t)
 	csrf := csrfToken(t, server)
 	unsupported := serveMedia(t, server, csrf, "application/json", loginBody("student", "password"))
-	assertCode(t, unsupported, http.StatusUnsupportedMediaType, "auth_unsupported_media_type")
+	conformance.Error(t, unsupported, http.StatusUnsupportedMediaType, "unsupported_media_type")
 	oversized := serveMedia(t, server, csrf, "application/vnd.api+json", strings.Repeat("x", 1<<20+1))
-	assertCode(t, oversized, http.StatusRequestEntityTooLarge, "auth_request_too_large")
+	conformance.Error(t, oversized, http.StatusRequestEntityTooLarge, "request_too_large")
 }
 
 func TestLoginRejectsMalformedPasswordUnicode(t *testing.T) {
@@ -166,7 +175,27 @@ func TestLoginRejectsMalformedPasswordUnicode(t *testing.T) {
 			server, _ := testServer(t)
 			csrf := csrfToken(t, server)
 			response := serveMedia(t, server, csrf, "application/vnd.api+json", body)
-			assertCode(t, response, http.StatusUnprocessableEntity, "auth_invalid_request")
+			conformance.Error(t, response, http.StatusBadRequest, "malformed_request")
+		})
+	}
+}
+
+func TestAuthCreateResourcesRejectClientGeneratedIDsAsDomainErrors(t *testing.T) {
+	server, _ := testServer(t)
+	csrf := csrfToken(t, server)
+	for _, testCase := range []struct {
+		name, path, body, code string
+	}{
+		{name: "login", path: "/api/v1/auth/login", code: "auth_invalid_request",
+			body: `{"data":{"type":"login-attempts","id":"client-id","attributes":{"username":"student","password":"password"}}}`},
+		{name: "password recovery", path: "/api/v1/auth/password-recovery-requests", code: "auth_invalid_request",
+			body: `{"data":{"type":"password-recovery-requests","id":"client-id","attributes":{"username":"staff"}}}`},
+		{name: "password reset", path: "/api/v1/auth/password-resets", code: "auth_invalid_request",
+			body: `{"data":{"type":"password-resets","id":"client-id","attributes":{"token":"invalid","password":"password","password_confirmation":"password"}}}`},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			response := serve(t, server, http.MethodPost, testCase.path, csrf, nil, testCase.body)
+			conformance.Error(t, response, http.StatusUnprocessableEntity, testCase.code)
 		})
 	}
 }
@@ -516,6 +545,83 @@ func TestTOTPEnrollmentLoginAndStepReplay(t *testing.T) {
 	_ = account
 }
 
+func TestManagementProofsUseUniqueOpaqueResourceIDs(t *testing.T) {
+	server, database := testServer(t)
+	createAccount(t, database, false)
+	csrf := csrfToken(t, server)
+	login := serve(t, server, http.MethodPost, "/api/v1/auth/login", csrf, nil, loginBody("student", "correct horse battery"))
+	session, csrf := authCookies(t, login)
+	enrollment := serve(t, server, http.MethodPost, "/api/v1/users/me/mfa-enrollments", csrf, []*http.Cookie{session}, `{"data":{"type":"mfa-enrollments","attributes":{"method":"totp"}}}`)
+	if enrollment.Code != http.StatusCreated {
+		t.Fatalf("enrollment status=%d body=%s", enrollment.Code, enrollment.Body.String())
+	}
+	var created struct {
+		Data struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(enrollment.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+	var secret []byte
+	if err := database.QueryRow("SELECT totp_secret FROM mfa_enrollments WHERE id = ?", created.Data.ID).Scan(&secret); err != nil {
+		t.Fatal(err)
+	}
+	verified := serve(t, server, http.MethodPost, "/api/v1/users/me/mfa-enrollments/"+created.Data.ID+"/verifications", csrf, []*http.Cookie{session}, `{"data":{"type":"mfa-enrollment-verifications","attributes":{"code":"`+totpCode(secret, time.Now().Unix()/30)+`"}}}`)
+	if verified.Code != http.StatusOK {
+		t.Fatalf("verification status=%d body=%s", verified.Code, verified.Body.String())
+	}
+	var recovery struct {
+		Data struct {
+			Attributes struct {
+				RecoveryCodes []string `json:"recovery_codes"`
+			} `json:"attributes"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(verified.Body.Bytes(), &recovery); err != nil {
+		t.Fatal(err)
+	}
+	if len(recovery.Data.Attributes.RecoveryCodes) < 2 {
+		t.Fatalf("recovery codes = %d", len(recovery.Data.Attributes.RecoveryCodes))
+	}
+	seen := map[string]bool{}
+	for _, code := range recovery.Data.Attributes.RecoveryCodes[:2] {
+		response := serve(t, server, http.MethodPost, "/api/v1/auth/mfa-management-proofs", csrf, []*http.Cookie{session}, `{"data":{"type":"mfa-management-proofs","attributes":{"password":"correct horse battery","code":"`+code+`"}}}`)
+		if response.Code != http.StatusCreated {
+			t.Fatalf("proof status=%d body=%s", response.Code, response.Body.String())
+		}
+		document := conformance.Document(t, response)
+		proof := conformance.Resource(t, document["data"], "mfa-management-proofs")
+		id, ok := proof["id"].(string)
+		if !ok {
+			t.Fatalf("proof id is not a string: %v", proof["id"])
+		}
+		attributes, ok := proof["attributes"].(map[string]any)
+		if !ok {
+			t.Fatalf("proof attributes are not an object: %v", proof["attributes"])
+		}
+		token, ok := attributes["proof"].(string)
+		if !ok {
+			t.Fatalf("proof token attribute is not a string")
+		}
+		if id == "mfp" || token == "" || id == token || strings.Contains(id, token) {
+			t.Fatalf("proof resource id %q is constant or derived from the secret", id)
+		}
+		digest := sha256.Sum256([]byte(token))
+		var storedID string
+		if err := database.QueryRow("SELECT id FROM mfa_management_proofs WHERE token_digest = ?", digest[:]).Scan(&storedID); err != nil {
+			t.Fatal(err)
+		}
+		if storedID != id {
+			t.Fatalf("resource id %q does not match persisted id %q", id, storedID)
+		}
+		if seen[id] {
+			t.Fatalf("duplicate proof resource id %q", id)
+		}
+		seen[id] = true
+	}
+}
+
 func TestMFAChallengeFailuresPersistAndInvalidateAtFive(t *testing.T) {
 	_, database := testServer(t)
 	account := createAccount(t, database, false)
@@ -857,11 +963,12 @@ func loginBody(username, password string) string {
 
 func assertCode(t *testing.T, response *httptest.ResponseRecorder, status int, code string) {
 	t.Helper()
+	if code != "" {
+		conformance.Error(t, response, status, code)
+		return
+	}
 	if response.Code != status {
 		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
-	}
-	if code != "" && !bytes.Contains(response.Body.Bytes(), []byte(`"code":"`+code+`"`)) {
-		t.Fatalf("body %s does not contain code %q", response.Body.String(), code)
 	}
 }
 

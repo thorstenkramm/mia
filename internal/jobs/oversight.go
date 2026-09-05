@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"strconv"
 	"strings"
 	"time"
 
@@ -165,19 +164,23 @@ func listHandler(oversight *Oversight) echo.HandlerFunc {
 		if err != nil {
 			return err
 		}
-		limit, offset, err := pagination(c)
+		page, err := httpserver.ParsePagination(c.QueryParams())
 		if err != nil {
 			return httpserver.NewError(httpserver.CodeJobInvalid)
 		}
-		records, err := oversight.List(c.Request().Context(), actorID, limit, offset)
+		records, err := oversight.List(c.Request().Context(), actorID, page.Limit, page.Offset)
 		if err != nil {
 			return jobError(err)
 		}
-		data := make([]map[string]any, len(records.Items))
-		for index, record := range records.Items {
-			data[index] = resource(record, true)
+		data := make([]map[string]any, 0, len(records.Items))
+		for _, record := range records.Items {
+			data = append(data, resource(record, true))
 		}
-		return jsonAPI(c, 200, map[string]any{"data": data, "meta": map[string]bool{"has_more": records.HasMore}})
+		document := map[string]any{"data": data, "meta": map[string]any{"has_more": records.HasMore}}
+		if links := httpserver.CollectionLinks(c.Request().URL.Path, page, records.HasMore); links != nil {
+			document["links"] = links
+		}
+		return jsonAPI(c, 200, document)
 	}
 }
 
@@ -198,8 +201,10 @@ func getHandler(oversight *Oversight) echo.HandlerFunc {
 func resource(record Record, diagnostics bool) map[string]any {
 	attributes := map[string]any{"job_type": record.Type, "subject_type": record.SubjectType,
 		"subject_id": record.SubjectID, "state": record.State, "attempt_count": record.AttemptCount,
-		"available_at": instant(record.AvailableAt), "created_at": instant(record.CreatedAt),
-		"started_at": formatOptional(record.StartedAt), "finished_at": formatOptional(record.FinishedAt)}
+		"available_at": httpserver.FormatInstant(record.AvailableAt),
+		"created_at":   httpserver.FormatInstant(record.CreatedAt),
+		"started_at":   httpserver.FormatOptionalInstant(record.StartedAt),
+		"finished_at":  httpserver.FormatOptionalInstant(record.FinishedAt)}
 	if diagnostics {
 		attributes["failure_code"] = nullable(record.FailureCode)
 		attributes["provider_input_units"] = record.ProviderInputUnits
@@ -210,39 +215,12 @@ func resource(record Record, diagnostics bool) map[string]any {
 			"type": "courses", "id": record.CourseID}}}}
 }
 
-func pagination(c *echo.Context) (int, int, error) {
-	limit, offset := 25, 0
-	for key, values := range c.QueryParams() {
-		if key != "page[limit]" && key != "page[offset]" || len(values) != 1 {
-			return 0, 0, ErrInvalidList
-		}
-		value, err := strconv.Atoi(values[0])
-		if err != nil {
-			return 0, 0, ErrInvalidList
-		}
-		if key == "page[limit]" {
-			limit = value
-		} else {
-			offset = value
-		}
-	}
-	if limit < 1 || limit > 100 || offset < 0 || offset > 10_000 {
-		return 0, 0, ErrInvalidList
-	}
-	return limit, offset, nil
-}
-
 func actor(c *echo.Context) (string, error) {
-	id, ok := c.Get("mia.auth.user_id").(string)
-	if !ok || id == "" {
-		return "", httpserver.NewError(httpserver.CodeUnauthenticated)
-	}
-	return id, nil
+	return httpserver.AuthenticatedUser(c)
 }
 
 func jsonAPI(c *echo.Context, status int, body any) error {
-	c.Response().Header().Set(echo.HeaderContentType, "application/vnd.api+json")
-	return c.JSON(status, body)
+	return httpserver.JSONAPI(c, status, body)
 }
 
 func jobError(err error) error {
@@ -272,11 +250,4 @@ func optionalInstant(value sql.NullString) (*time.Time, error) {
 	}
 	parsed, err := parseInstant(value.String)
 	return &parsed, err
-}
-
-func formatOptional(value *time.Time) any {
-	if value == nil {
-		return nil
-	}
-	return instant(*value)
 }

@@ -74,8 +74,8 @@ logs, errors, diagnostics, and any effective-configuration output.
 
 ## General Validation
 
-All configured filesystem paths must be absolute. MIA does not resolve relative paths against the configuration file or the
-process working directory.
+All configured filesystem paths must be absolute. MIA does not resolve relative paths against the configuration file or
+the process working directory.
 
 After resolving symbolic links, `main.data_dir` and `main.doc_root` must be disjoint directory trees. They cannot be equal,
 and neither can contain the other.
@@ -321,8 +321,8 @@ The SMTP server port, from 1 through 65535.
 - Environment: `MIA_SMTP_TRANSPORT`
 - Flag: `--smtp-transport`
 
-The SMTP transport mode. Valid values are `starttls`, `implicit_tls`, and `plaintext`. STARTTLS and implicit TLS always verify
-the server certificate using the system trust store. Certificate verification cannot be disabled.
+The SMTP transport mode. Valid values are `starttls`, `implicit_tls`, and `plaintext`. STARTTLS and implicit TLS always
+verify the server certificate using the system trust store. Certificate verification cannot be disabled.
 
 > [!WARNING]
 > `plaintext` exposes message content and, when configured, SMTP credentials in transit. Use it only when the operator
@@ -428,8 +428,8 @@ The ElevenLabs API key used by MIA.
 - Environment: `MIA_ELEVEN_LABS_CACHE_RETENTION_DAYS`
 - Flag: `--eleven-labs-cache-retention-days`
 
-The number of whole days generated speech is retained after generation. Valid values are 1 through 365. Access does not extend
-retention.
+The number of whole days generated speech is retained after generation. Valid values are 1 through 365. Access does not
+extend retention.
 
 ### `[uploads]`
 

@@ -552,11 +552,19 @@ func scanInvitations(rows *sql.Rows) (invitations []Invitation, err error) {
 }
 
 func scanInvitation(rows *sql.Rows) (Invitation, error) {
+	return scanInvitationValues(rows)
+}
+
+type invitationRow interface {
+	Scan(...any) error
+}
+
+func scanInvitationValues(row invitationRow) (Invitation, error) {
 	var inv Invitation
 	var roleStr, statusStr string
 	var failureCode, inviterID sql.NullString
 	var createdAt, updatedAt string
-	if err := rows.Scan(&inv.ID, &inv.Email, &inv.EmailNormalized, &roleStr, &inv.TokenGeneration, &statusStr, &failureCode, &inviterID, &createdAt, &updatedAt); err != nil {
+	if err := row.Scan(&inv.ID, &inv.Email, &inv.EmailNormalized, &roleStr, &inv.TokenGeneration, &statusStr, &failureCode, &inviterID, &createdAt, &updatedAt); err != nil {
 		return Invitation{}, fmt.Errorf("scan invitation: %w", err)
 	}
 	inv.Role = Role(roleStr)
@@ -580,32 +588,12 @@ func scanInvitation(rows *sql.Rows) (Invitation, error) {
 }
 
 func scanInvitationRow(row *sql.Row) (Invitation, error) {
-	var inv Invitation
-	var roleStr, statusStr string
-	var failureCode, inviterID sql.NullString
-	var createdAt, updatedAt string
-	if err := row.Scan(&inv.ID, &inv.Email, &inv.EmailNormalized, &roleStr, &inv.TokenGeneration, &statusStr, &failureCode, &inviterID, &createdAt, &updatedAt); err != nil {
+	inv, err := scanInvitationValues(row)
+	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return Invitation{}, ErrInvitationNotFound
 		}
-		return Invitation{}, fmt.Errorf("scan invitation: %w", err)
-	}
-	inv.Role = Role(roleStr)
-	inv.Status = Status(statusStr)
-	if failureCode.Valid {
-		inv.FailureCode = &failureCode.String
-	}
-	if inviterID.Valid {
-		inv.InviterID = &inviterID.String
-	}
-	var err error
-	inv.CreatedAt, err = time.Parse("2006-01-02T15:04:05.000000Z", createdAt)
-	if err != nil {
-		return Invitation{}, fmt.Errorf("parse invitation created_at: %w", err)
-	}
-	inv.UpdatedAt, err = time.Parse("2006-01-02T15:04:05.000000Z", updatedAt)
-	if err != nil {
-		return Invitation{}, fmt.Errorf("parse invitation updated_at: %w", err)
+		return Invitation{}, err
 	}
 	return inv, nil
 }

@@ -1,0 +1,384 @@
+courseMaterials:
+  get:
+    tags: [Materials]
+    operationId: listMaterials
+    summary: List course materials
+    security: [{ sessionCookie: [] }]
+    parameters:
+      - { $ref: ../openapi.yaml#/components/parameters/CourseID }
+      - { $ref: ../openapi.yaml#/components/parameters/PageLimit }
+      - { $ref: ../openapi.yaml#/components/parameters/PageOffset }
+    responses:
+      '200':
+        description: Paginated materials visible to the caller.
+        content:
+          application/vnd.api+json:
+            schema: { $ref: ../schemas/resources/resources.yaml#/MaterialCollectionDocument }
+      '401': { $ref: ../responses/errors.yaml#/Unauthorized }
+      '403':
+        $ref: ../responses/errors.yaml#/Forbidden
+        description: Restricted session (`auth_password_change_required`).
+      '404':
+        $ref: ../responses/errors.yaml#/NotFound
+        description: Missing or out-of-scope course (`material_not_found`).
+      '406': { $ref: ../responses/errors.yaml#/NotAcceptable }
+      '422':
+        $ref: ../responses/errors.yaml#/Unprocessable
+        description: Invalid pagination (`material_invalid`).
+  post:
+    tags: [Materials]
+    operationId: createMaterial
+    summary: Create material
+    security: [{ sessionCookie: [], csrfToken: [] }]
+    parameters: [{ $ref: ../openapi.yaml#/components/parameters/CourseID }]
+    requestBody:
+      required: true
+      content:
+        application/vnd.api+json:
+          schema: { $ref: ../schemas/requests/requests.yaml#/MaterialCreateRequestDocument }
+    responses:
+      '201':
+        description: Created draft material.
+        content:
+          application/vnd.api+json:
+            schema: { $ref: ../schemas/resources/resources.yaml#/MaterialDocument }
+      '400': { $ref: ../responses/errors.yaml#/BadRequest }
+      '401': { $ref: ../responses/errors.yaml#/Unauthorized }
+      '403':
+        $ref: ../responses/errors.yaml#/Forbidden
+        description: CSRF or restricted session (`csrf_invalid` or `auth_password_change_required`).
+      '404':
+        $ref: ../responses/errors.yaml#/NotFound
+        description: Missing or out-of-scope course (`material_not_found`).
+      '406': { $ref: ../responses/errors.yaml#/NotAcceptable }
+      '409':
+        $ref: ../responses/errors.yaml#/Conflict
+        description: Material name already exists in the course (`material_name_taken`).
+      '413': { $ref: ../responses/errors.yaml#/RequestTooLarge }
+      '415': { $ref: ../responses/errors.yaml#/UnsupportedMediaType }
+      '422':
+        $ref: ../responses/errors.yaml#/Unprocessable
+        description: Invalid scope, kind, format, URL, name, or brief (`material_invalid`).
+
+material:
+  get:
+    tags: [Materials]
+    operationId: getMaterial
+    summary: Get material
+    security: [{ sessionCookie: [] }]
+    parameters: [{ $ref: ../openapi.yaml#/components/parameters/ResourceID }]
+    responses:
+      '200':
+        description: Material visible to the caller.
+        content:
+          application/vnd.api+json:
+            schema: { $ref: ../schemas/resources/resources.yaml#/MaterialDocument }
+      '401': { $ref: ../responses/errors.yaml#/Unauthorized }
+      '403':
+        $ref: ../responses/errors.yaml#/Forbidden
+        description: Restricted session (`auth_password_change_required`).
+      '404':
+        $ref: ../responses/errors.yaml#/NotFound
+        description: Missing or out-of-scope material (`material_not_found`).
+      '406': { $ref: ../responses/errors.yaml#/NotAcceptable }
+  patch:
+    tags: [Materials]
+    operationId: updateMaterialBrief
+    summary: Replace material brief
+    security: [{ sessionCookie: [], csrfToken: [] }]
+    parameters: [{ $ref: ../openapi.yaml#/components/parameters/ResourceID }]
+    requestBody:
+      required: true
+      content:
+        application/vnd.api+json:
+          schema: { $ref: ../schemas/requests/requests.yaml#/MaterialBriefUpdateRequestDocument }
+    responses:
+      '200':
+        description: Updated material; changed approved content has approval revoked.
+        content:
+          application/vnd.api+json:
+            schema: { $ref: ../schemas/resources/resources.yaml#/MaterialDocument }
+      '400': { $ref: ../responses/errors.yaml#/BadRequest }
+      '401': { $ref: ../responses/errors.yaml#/Unauthorized }
+      '403':
+        $ref: ../responses/errors.yaml#/Forbidden
+        description: CSRF or restricted session (`csrf_invalid` or `auth_password_change_required`).
+      '404':
+        $ref: ../responses/errors.yaml#/NotFound
+        description: Missing or out-of-scope material (`material_not_found`).
+      '406': { $ref: ../responses/errors.yaml#/NotAcceptable }
+      '409':
+        $ref: ../responses/errors.yaml#/Conflict
+        description: Material state or scope does not permit correction (`material_invalid_state`).
+      '413': { $ref: ../responses/errors.yaml#/RequestTooLarge }
+      '415': { $ref: ../responses/errors.yaml#/UnsupportedMediaType }
+      '422':
+        $ref: ../responses/errors.yaml#/Unprocessable
+        description: Invalid PATCH identity or complete brief (`material_invalid`).
+  delete:
+    tags: [Materials]
+    operationId: deleteMaterial
+    summary: Delete material
+    security: [{ sessionCookie: [], csrfToken: [] }]
+    parameters: [{ $ref: ../openapi.yaml#/components/parameters/ResourceID }]
+    responses:
+      '204': { description: 'Material source, generated brief, and retrievable files deleted.' }
+      '401': { $ref: ../responses/errors.yaml#/Unauthorized }
+      '403':
+        $ref: ../responses/errors.yaml#/Forbidden
+        description: CSRF or restricted session (`csrf_invalid` or `auth_password_change_required`).
+      '404':
+        $ref: ../responses/errors.yaml#/NotFound
+        description: Missing or out-of-scope material (`material_not_found`).
+      '406': { $ref: ../responses/errors.yaml#/NotAcceptable }
+      '409':
+        $ref: ../responses/errors.yaml#/Conflict
+        description: Material is selected by an active tutoring session (`material_invalid_state`).
+
+materialFinalizations:
+  post:
+    tags: [Materials]
+    operationId: finalizeMaterial
+    summary: Finalize material
+    security: [{ sessionCookie: [], csrfToken: [] }]
+    parameters: [{ $ref: ../openapi.yaml#/components/parameters/ResourceID }]
+    responses:
+      '200':
+        description: Ready link material or processing file-backed material.
+        content:
+          application/vnd.api+json:
+            schema: { $ref: ../schemas/resources/resources.yaml#/MaterialDocument }
+      '401': { $ref: ../responses/errors.yaml#/Unauthorized }
+      '403':
+        $ref: ../responses/errors.yaml#/Forbidden
+        description: CSRF or restricted session (`csrf_invalid` or `auth_password_change_required`).
+      '404':
+        $ref: ../responses/errors.yaml#/NotFound
+        description: Missing or out-of-scope material (`material_not_found`).
+      '406': { $ref: ../responses/errors.yaml#/NotAcceptable }
+      '409':
+        $ref: ../responses/errors.yaml#/Conflict
+        description: Material cannot be finalized from its current state (`material_invalid_state`).
+      '422':
+        $ref: ../responses/errors.yaml#/Unprocessable
+        description: Required files or valid link brief are absent (`material_invalid`).
+
+materialApprovals:
+  post:
+    tags: [Materials]
+    operationId: approveMaterial
+    summary: Approve material
+    security: [{ sessionCookie: [], csrfToken: [] }]
+    parameters: [{ $ref: ../openapi.yaml#/components/parameters/ResourceID }]
+    responses:
+      '200':
+        description: Approved course-wide ready material.
+        content:
+          application/vnd.api+json:
+            schema: { $ref: ../schemas/resources/resources.yaml#/MaterialDocument }
+      '401': { $ref: ../responses/errors.yaml#/Unauthorized }
+      '403':
+        $ref: ../responses/errors.yaml#/Forbidden
+        description: CSRF or restricted session (`csrf_invalid` or `auth_password_change_required`).
+      '404':
+        $ref: ../responses/errors.yaml#/NotFound
+        description: Missing or out-of-scope material (`material_not_found`).
+      '406': { $ref: ../responses/errors.yaml#/NotAcceptable }
+      '409':
+        $ref: ../responses/errors.yaml#/Conflict
+        description: Scope, state, or brief prevents approval (`material_invalid_state`).
+  delete:
+    tags: [Materials]
+    operationId: revokeMaterialApproval
+    summary: Revoke material approval
+    security: [{ sessionCookie: [], csrfToken: [] }]
+    parameters: [{ $ref: ../openapi.yaml#/components/parameters/ResourceID }]
+    responses:
+      '200':
+        description: Course-wide ready material with approval revoked.
+        content:
+          application/vnd.api+json:
+            schema: { $ref: ../schemas/resources/resources.yaml#/MaterialDocument }
+      '401': { $ref: ../responses/errors.yaml#/Unauthorized }
+      '403':
+        $ref: ../responses/errors.yaml#/Forbidden
+        description: CSRF or restricted session (`csrf_invalid` or `auth_password_change_required`).
+      '404':
+        $ref: ../responses/errors.yaml#/NotFound
+        description: Missing or out-of-scope material (`material_not_found`).
+      '406': { $ref: ../responses/errors.yaml#/NotAcceptable }
+      '409':
+        $ref: ../responses/errors.yaml#/Conflict
+        description: Scope, state, or brief prevents approval changes (`material_invalid_state`).
+
+materialFiles:
+  get:
+    tags: [Materials]
+    operationId: listMaterialFiles
+    summary: List material files
+    description: Unpaginated because the configured per-material file limit is bounded by a fixed hard cap.
+    security: [{ sessionCookie: [] }]
+    parameters: [{ $ref: ../openapi.yaml#/components/parameters/ResourceID }]
+    responses:
+      '200':
+        description: Bounded material-file collection.
+        content:
+          application/vnd.api+json:
+            schema: { $ref: ../schemas/resources/resources.yaml#/MaterialFileListDocument }
+      '400':
+        $ref: ../responses/errors.yaml#/BadRequest
+        description: Any query parameter is rejected (`malformed_request`).
+      '401': { $ref: ../responses/errors.yaml#/Unauthorized }
+      '403':
+        $ref: ../responses/errors.yaml#/Forbidden
+        description: Restricted session (`auth_password_change_required`).
+      '404':
+        $ref: ../responses/errors.yaml#/NotFound
+        description: Missing or out-of-scope material (`material_not_found`).
+      '406': { $ref: ../responses/errors.yaml#/NotAcceptable }
+  post:
+    tags: [Materials]
+    operationId: uploadMaterialFile
+    summary: Upload one material file
+    security: [{ sessionCookie: [], csrfToken: [] }]
+    parameters: [{ $ref: ../openapi.yaml#/components/parameters/ResourceID }]
+    requestBody:
+      required: true
+      content:
+        multipart/form-data:
+          schema: { $ref: ../schemas/requests/requests.yaml#/MaterialFileUploadRequest }
+    responses:
+      '201':
+        description: Uploaded draft material file.
+        content:
+          application/vnd.api+json:
+            schema: { $ref: ../schemas/resources/resources.yaml#/MaterialFileDocument }
+      '401': { $ref: ../responses/errors.yaml#/Unauthorized }
+      '403':
+        $ref: ../responses/errors.yaml#/Forbidden
+        description: CSRF or restricted session (`csrf_invalid` or `auth_password_change_required`).
+      '404':
+        $ref: ../responses/errors.yaml#/NotFound
+        description: Missing or out-of-scope material (`material_not_found`).
+      '409':
+        $ref: ../responses/errors.yaml#/Conflict
+        description: Material state or format does not permit upload (`material_invalid_state`).
+      '422':
+        $ref: ../responses/errors.yaml#/Unprocessable
+        description: Invalid multipart shape, filename, content, or configured limit (`material_invalid`).
+
+materialFile:
+  get:
+    tags: [Materials]
+    operationId: getMaterialFile
+    summary: Get material-file metadata
+    security: [{ sessionCookie: [] }]
+    parameters: [{ $ref: ../openapi.yaml#/components/parameters/ResourceID }]
+    responses:
+      '200':
+        description: Material-file metadata visible to the caller.
+        content:
+          application/vnd.api+json:
+            schema: { $ref: ../schemas/resources/resources.yaml#/MaterialFileDocument }
+      '401': { $ref: ../responses/errors.yaml#/Unauthorized }
+      '403':
+        $ref: ../responses/errors.yaml#/Forbidden
+        description: Restricted session (`auth_password_change_required`).
+      '404':
+        $ref: ../responses/errors.yaml#/NotFound
+        description: Missing or out-of-scope file (`material_not_found`).
+      '406': { $ref: ../responses/errors.yaml#/NotAcceptable }
+  delete:
+    tags: [Materials]
+    operationId: deleteMaterialFile
+    summary: Delete material file
+    security: [{ sessionCookie: [], csrfToken: [] }]
+    parameters: [{ $ref: ../openapi.yaml#/components/parameters/ResourceID }]
+    responses:
+      '204': { description: 'File, normalized content, and file jobs deleted.' }
+      '401': { $ref: ../responses/errors.yaml#/Unauthorized }
+      '403':
+        $ref: ../responses/errors.yaml#/Forbidden
+        description: CSRF or restricted session (`csrf_invalid` or `auth_password_change_required`).
+      '404':
+        $ref: ../responses/errors.yaml#/NotFound
+        description: Missing or out-of-scope file (`material_not_found`).
+      '406': { $ref: ../responses/errors.yaml#/NotAcceptable }
+      '409':
+        $ref: ../responses/errors.yaml#/Conflict
+        description: Material state does not permit file deletion (`material_invalid_state`).
+
+materialFileDownload:
+  get:
+    tags: [Materials]
+    operationId: downloadMaterialFile
+    summary: Download material source bytes
+    security: [{ sessionCookie: [] }]
+    parameters: [{ $ref: ../openapi.yaml#/components/parameters/ResourceID }]
+    responses:
+      '200':
+        description: Source bytes with stored media type and safe attachment disposition.
+        content:
+          application/pdf: { schema: { $ref: ../schemas/json-api/documents.yaml#/BinaryPayload } }
+          image/jpeg: { schema: { $ref: ../schemas/json-api/documents.yaml#/BinaryPayload } }
+          image/png: { schema: { $ref: ../schemas/json-api/documents.yaml#/BinaryPayload } }
+          text/plain: { schema: { $ref: ../schemas/json-api/documents.yaml#/BinaryPayload } }
+          text/markdown: { schema: { $ref: ../schemas/json-api/documents.yaml#/BinaryPayload } }
+          application/vnd.openxmlformats-officedocument.wordprocessingml.document:
+            schema: { $ref: ../schemas/json-api/documents.yaml#/BinaryPayload }
+      '401': { $ref: ../responses/errors.yaml#/Unauthorized }
+      '403':
+        $ref: ../responses/errors.yaml#/Forbidden
+        description: Restricted session (`auth_password_change_required`).
+      '404':
+        $ref: ../responses/errors.yaml#/NotFound
+        description: Missing source or out-of-scope file (`material_not_found`).
+
+materialFileContent:
+  get:
+    tags: [Materials]
+    operationId: downloadMaterialContent
+    summary: Download normalized material content
+    security: [{ sessionCookie: [] }]
+    parameters: [{ $ref: ../openapi.yaml#/components/parameters/ResourceID }]
+    responses:
+      '200':
+        description: Normalized content segments as NDJSON.
+        content:
+          application/x-ndjson:
+            schema: { $ref: ../schemas/json-api/documents.yaml#/NDJSONPayload }
+      '401': { $ref: ../responses/errors.yaml#/Unauthorized }
+      '403':
+        $ref: ../responses/errors.yaml#/Forbidden
+        description: Restricted session (`auth_password_change_required`).
+      '404':
+        $ref: ../responses/errors.yaml#/NotFound
+        description: Content unavailable, missing, or out of scope (`material_not_found`).
+
+materialJobs:
+  get:
+    tags: [Jobs]
+    operationId: listMaterialJobs
+    summary: List safe material jobs
+    security: [{ sessionCookie: [] }]
+    parameters:
+      - { $ref: ../openapi.yaml#/components/parameters/ResourceID }
+      - { $ref: ../openapi.yaml#/components/parameters/PageLimit }
+      - { $ref: ../openapi.yaml#/components/parameters/PageOffset }
+    responses:
+      '200':
+        description: Paginated subject-scoped jobs without provider diagnostics.
+        content:
+          application/vnd.api+json:
+            schema: { $ref: ../schemas/resources/resources.yaml#/SafeJobCollectionDocument }
+      '401': { $ref: ../responses/errors.yaml#/Unauthorized }
+      '403':
+        $ref: ../responses/errors.yaml#/Forbidden
+        description: Restricted session (`auth_password_change_required`).
+      '404':
+        $ref: ../responses/errors.yaml#/NotFound
+        description: Missing or out-of-scope material (`material_not_found`).
+      '406': { $ref: ../responses/errors.yaml#/NotAcceptable }
+      '422':
+        $ref: ../responses/errors.yaml#/Unprocessable
+        description: Invalid pagination or job query (`job_invalid`).

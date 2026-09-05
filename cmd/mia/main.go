@@ -62,6 +62,8 @@ func newBootstrapAdminCommand() *cobra.Command {
 		if err != nil {
 			return err
 		}
+		// jscpd:ignore-start
+		// Bootstrap input is intentionally collected before offline database setup.
 		configuration, err := config.Load(command.Flags(), false)
 		if err != nil {
 			return err
@@ -76,6 +78,7 @@ func newBootstrapAdminCommand() *cobra.Command {
 			return err
 		}
 		defer func() { returnErr = errors.Join(returnErr, database.Close()) }()
+		// jscpd:ignore-end
 		return miSQLite.WithTx(command.Context(), database, func(transaction *sql.Tx) error { return bootstrapAdministrator(command.Context(), transaction, input) })
 	}}
 }

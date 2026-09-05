@@ -42,13 +42,16 @@ type Options struct {
 	Logger            *slog.Logger
 }
 
-// Server is safe for concurrent use after construction.
+// Server is safe for concurrent use after construction and route
+// registration. Register every route during single-threaded startup wiring
+// before the server starts handling requests.
 type Server struct {
 	Echo           *echo.Echo
 	Sessions       *sessions.CookieStore
 	identityLoader IdentityLoader
 	limiter        *Limiter
 	resolver       *ClientIPResolver
+	routes         map[string]routeRegistration
 }
 
 // AuthRouteRegistrar is a wiring-issued capability for auth's restricted routes.
@@ -133,21 +136,15 @@ func (server *Server) CheckMFA(c *echo.Context, accountID string) Result {
 
 // CheckInvitationPreview consumes layered IP and token-digest limits.
 func (server *Server) CheckInvitationPreview(c *echo.Context, token string) Result {
-	key, err := TokenKey(token)
-	if err != nil {
-		key = "token:invalid"
-	}
-	now := time.Now()
-	ip := server.limiter.Check(LimitInvitationIP, server.resolver.Resolve(c.Request()), now)
-	challenge := server.limiter.Check(LimitInvitationToken, key, now)
-	if !ip.Allowed {
-		return ip
-	}
-	return challenge
+	return server.checkInvitation(c, token)
 }
 
 // CheckInvitationAccept consumes layered IP and token-digest limits.
 func (server *Server) CheckInvitationAccept(c *echo.Context, token string) Result {
+	return server.checkInvitation(c, token)
+}
+
+func (server *Server) checkInvitation(c *echo.Context, token string) Result {
 	key, err := TokenKey(token)
 	if err != nil {
 		key = "token:invalid"
@@ -180,27 +177,27 @@ func (server *Server) SetIdentityLoader(loader IdentityLoader) { server.identity
 
 // AuthenticatedPOST registers an ordinary protected POST. Ordinary routes always require a full session.
 func (server *Server) AuthenticatedPOST(path string, next echo.HandlerFunc) {
-	server.authenticatedPOST(path, "authenticated", next)
+	server.AuthenticatedRoute(http.MethodPost, path, RepresentationJSONAPI, next)
 }
 
 // AuthenticatedGET registers an ordinary protected GET. Ordinary routes always require a full session.
 func (server *Server) AuthenticatedGET(path string, next echo.HandlerFunc) {
-	server.authenticatedGET(path, "authenticated", next)
+	server.AuthenticatedRoute(http.MethodGet, path, RepresentationJSONAPI, next)
 }
 
 // AuthenticatedPATCH registers an ordinary protected PATCH.
 func (server *Server) AuthenticatedPATCH(path string, next echo.HandlerFunc) {
-	server.authenticatedPATCH(path, "authenticated", next)
+	server.AuthenticatedRoute(http.MethodPatch, path, RepresentationJSONAPI, next)
 }
 
 // AuthenticatedPUT registers an ordinary protected PUT.
 func (server *Server) AuthenticatedPUT(path string, next echo.HandlerFunc) {
-	server.authenticatedPUT(path, "authenticated", next)
+	server.AuthenticatedRoute(http.MethodPut, path, RepresentationJSONAPI, next)
 }
 
 // AuthenticatedDELETE registers an ordinary protected DELETE. Ordinary routes always require a full session.
 func (server *Server) AuthenticatedDELETE(path string, next echo.HandlerFunc) {
-	server.authenticatedDELETE(path, "authenticated", next)
+	server.AuthenticatedRoute(http.MethodDelete, path, RepresentationJSONAPI, next)
 }
 
 // POST registers an auth route and centrally validates its allowed login stage.
@@ -208,6 +205,7 @@ func (registrar AuthRouteRegistrar) POST(path, stage string, next echo.HandlerFu
 	if stage != "authenticated" && stage != "mfa" && stage != "password-change" && stage != "any" {
 		panic("invalid auth route stage")
 	}
+	registrar.server.classify(http.MethodPost, path, stageClass(stage), RepresentationJSONAPI)
 	registrar.server.authenticatedPOST(path, stage, next)
 }
 
@@ -216,6 +214,7 @@ func (registrar AuthRouteRegistrar) DELETE(path, stage string, next echo.Handler
 	if stage != "authenticated" && stage != "mfa" && stage != "password-change" && stage != "any" {
 		panic("invalid auth route stage")
 	}
+	registrar.server.classify(http.MethodDelete, path, stageClass(stage), RepresentationJSONAPI)
 	registrar.server.authenticatedDELETE(path, stage, next)
 }
 
@@ -247,18 +246,6 @@ func (server *Server) EndSession(c *echo.Context) error {
 
 func (server *Server) authenticatedPOST(path, stage string, next echo.HandlerFunc) {
 	server.authenticated(path, stage, next, server.Echo.POST)
-}
-
-func (server *Server) authenticatedGET(path, stage string, next echo.HandlerFunc) {
-	server.authenticated(path, stage, next, server.Echo.GET)
-}
-
-func (server *Server) authenticatedPATCH(path, stage string, next echo.HandlerFunc) {
-	server.authenticated(path, stage, next, server.Echo.PATCH)
-}
-
-func (server *Server) authenticatedPUT(path, stage string, next echo.HandlerFunc) {
-	server.authenticated(path, stage, next, server.Echo.PUT)
 }
 
 func (server *Server) authenticatedDELETE(path, stage string, next echo.HandlerFunc) {
@@ -409,8 +396,8 @@ func New(options Options) (*Server, AuthRouteRegistrar, error) {
 	application.GET("/*", staticHandler(options.DocRoot))
 	application.HEAD("/*", staticHandler(options.DocRoot))
 	limiter := NewLimiter(50_000)
-	application.Use(recoverMiddleware(logger), requestMiddleware(logger), securityHeaders, rateLimitMiddleware(limiter, resolver), csrfMiddleware)
-	server := &Server{Echo: application, Sessions: store, limiter: limiter, resolver: resolver}
+	server := &Server{Echo: application, Sessions: store, limiter: limiter, resolver: resolver, routes: make(map[string]routeRegistration)}
+	application.Use(recoverMiddleware(logger), requestMiddleware(logger), securityHeaders, server.rateLimitMiddleware, csrfMiddleware, server.acceptMiddleware)
 	return server, AuthRouteRegistrar{server: server}, nil
 }
 

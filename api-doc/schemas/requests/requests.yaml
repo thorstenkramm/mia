@@ -1,0 +1,722 @@
+LoginRequestDocument:
+  type: object
+  required: [data]
+  additionalProperties: false
+  properties:
+    data:
+      type: object
+      required: [type, attributes]
+      additionalProperties: false
+      properties:
+        type: { const: login-attempts }
+        id: false
+        attributes:
+          type: object
+          required: [username, password]
+          additionalProperties: false
+          properties:
+            username: { type: string, minLength: 1 }
+            password: { type: string }
+
+PasswordChangeRequestDocument:
+  type: object
+  required: [data]
+  additionalProperties: false
+  properties:
+    data:
+      type: object
+      required: [type, attributes]
+      additionalProperties: false
+      properties:
+        type: { const: password-changes }
+        id: false
+        attributes:
+          type: object
+          required: [password, password_confirmation]
+          additionalProperties: false
+          properties:
+            password: { $ref: '#/NewPassword' }
+            password_confirmation: { $ref: '#/NewPassword' }
+
+PasswordRecoveryRequestDocument:
+  type: object
+  required: [data]
+  additionalProperties: false
+  properties:
+    data:
+      type: object
+      required: [type, attributes]
+      additionalProperties: false
+      properties:
+        type: { const: password-recovery-requests }
+        id: false
+        attributes:
+          type: object
+          required: [username]
+          additionalProperties: false
+          properties:
+            username: { $ref: '#/Username' }
+
+PasswordResetRequestDocument:
+  type: object
+  required: [data]
+  additionalProperties: false
+  properties:
+    data:
+      type: object
+      required: [type, attributes]
+      additionalProperties: false
+      properties:
+        type: { const: password-resets }
+        id: false
+        attributes:
+          type: object
+          required: [token, password, password_confirmation]
+          additionalProperties: false
+          properties:
+            token: { $ref: '#/CanonicalUUIDv4' }
+            password: { $ref: '#/NewPassword' }
+            password_confirmation: { $ref: '#/NewPassword' }
+
+MFAVerificationRequestDocument:
+  $ref: '#/SixDigitCodeRequestDocument'
+
+MFARecoveryCodeConsumptionRequestDocument:
+  type: object
+  required: [data]
+  additionalProperties: false
+  properties:
+    data:
+      type: object
+      required: [type, attributes]
+      additionalProperties: false
+      properties:
+        type: { const: mfa-recovery-code-consumptions }
+        id: false
+        attributes:
+          type: object
+          required: [code]
+          additionalProperties: false
+          properties:
+            code:
+              type: string
+              pattern: '^[0-9A-HJKMNP-TV-Z]{16}$'
+
+MFAManagementProofRequestDocument:
+  type: object
+  required: [data]
+  additionalProperties: false
+  properties:
+    data:
+      type: object
+      required: [type, attributes]
+      additionalProperties: false
+      properties:
+        type: { const: mfa-management-proofs }
+        id: false
+        attributes:
+          type: object
+          required: [password, code]
+          additionalProperties: false
+          properties:
+            password: { type: string }
+            code:
+              type: string
+              oneOf:
+                - pattern: '^[0-9]{6}$'
+                - pattern: '^[0-9A-HJKMNP-TV-Z]{16}$'
+
+MFAEnrollmentRequestDocument:
+  type: object
+  required: [data]
+  additionalProperties: false
+  properties:
+    data:
+      type: object
+      required: [type, attributes]
+      additionalProperties: false
+      properties:
+        type: { const: mfa-enrollments }
+        id: false
+        attributes:
+          type: object
+          required: [method]
+          additionalProperties: false
+          properties:
+            method: { type: string, enum: [totp, sms] }
+            proof: { $ref: '#/CanonicalUUIDv4' }
+
+MFAEnrollmentVerificationRequestDocument:
+  type: object
+  required: [data]
+  additionalProperties: false
+  properties:
+    data:
+      type: object
+      required: [type, attributes]
+      additionalProperties: false
+      properties:
+        type: { const: mfa-enrollment-verifications }
+        id: false
+        attributes:
+          type: object
+          required: [code]
+          additionalProperties: false
+          properties:
+            code: { $ref: '#/SixDigitCode' }
+
+InvitationCreateRequestDocument:
+  type: object
+  required: [data]
+  additionalProperties: false
+  properties:
+    data:
+      type: object
+      required: [type, attributes]
+      additionalProperties: false
+      properties:
+        type: { const: invitations }
+        id: false
+        attributes:
+          type: object
+          required: [email, role]
+          additionalProperties: false
+          properties:
+            email:
+              type: string
+              format: email
+              minLength: 1
+              maxLength: 254
+            role: { $ref: '#/StaffRole' }
+
+InvitationPreviewRequestDocument:
+  type: object
+  required: [data]
+  additionalProperties: false
+  properties:
+    data:
+      type: object
+      required: [type, attributes]
+      additionalProperties: false
+      properties:
+        type: { const: invitation-previews }
+        id: false
+        attributes:
+          type: object
+          required: [token]
+          additionalProperties: false
+          properties:
+            token: { $ref: '#/CanonicalUUIDv4' }
+
+InvitationAcceptanceRequestDocument:
+  type: object
+  required: [data]
+  additionalProperties: false
+  properties:
+    data:
+      type: object
+      required: [type, attributes]
+      additionalProperties: false
+      properties:
+        type: { const: invitation-acceptances }
+        id: false
+        attributes:
+          type: object
+          required:
+            - token
+            - username
+            - password
+            - password_confirmation
+            - language
+            - country
+            - time_zone
+          additionalProperties: false
+          properties:
+            token: { $ref: '#/CanonicalUUIDv4' }
+            username: { $ref: '#/Username' }
+            password: { $ref: '#/NewPassword' }
+            password_confirmation: { $ref: '#/NewPassword' }
+            language: { $ref: '#/Language' }
+            country: { $ref: '#/Country' }
+            time_zone: { $ref: '#/TimeZone' }
+
+ProfileUpdateRequestDocument:
+  type: object
+  required: [data]
+  additionalProperties: false
+  properties:
+    data:
+      type: object
+      required: [type, id, attributes]
+      additionalProperties: false
+      properties:
+        type: { const: users }
+        id:
+          type: string
+          minLength: 1
+          description: Must equal the authenticated account ID.
+        attributes:
+          type: object
+          minProperties: 1
+          additionalProperties: false
+          properties:
+            name:
+              type: [string, 'null']
+              maxLength: 100
+              description: At most 400 UTF-8 bytes before normalization.
+            nickname:
+              type: [string, 'null']
+              maxLength: 24
+              description: At most 96 UTF-8 bytes before normalization.
+            preferred_language: { $ref: '#/Language' }
+            country: { $ref: '#/Country' }
+            time_zone: { $ref: '#/TimeZone' }
+            tts_voice:
+              type: [string, 'null']
+              maxLength: 128
+              pattern: '^[\x20-\x7e]*$'
+
+MobileChallengeRequestDocument:
+  type: object
+  required: [data]
+  additionalProperties: false
+  properties:
+    data:
+      type: object
+      required: [type, attributes]
+      additionalProperties: false
+      properties:
+        type: { const: mobile-change-challenges }
+        id: false
+        attributes:
+          type: object
+          required: [mobile]
+          additionalProperties: false
+          properties:
+            mobile:
+              type: string
+              pattern: '^\+[1-9][0-9]{7,14}$'
+
+MobileVerificationRequestDocument:
+  type: object
+  required: [data]
+  additionalProperties: false
+  properties:
+    data:
+      type: object
+      required: [type, attributes]
+      additionalProperties: false
+      properties:
+        type: { const: mobile-change-verifications }
+        id: false
+        attributes:
+          type: object
+          required: [code]
+          additionalProperties: false
+          properties:
+            code: { $ref: '#/SixDigitCode' }
+
+RoleGrantRequestDocument:
+  type: object
+  required: [data]
+  additionalProperties: false
+  properties:
+    data:
+      type: object
+      required: [type, attributes]
+      additionalProperties: false
+      properties:
+        type: { const: user-roles }
+        id: false
+        attributes:
+          type: object
+          required: [role]
+          additionalProperties: false
+          properties:
+            role: { $ref: '#/StaffRole' }
+
+CourseCreateRequestDocument:
+  type: object
+  required: [data]
+  additionalProperties: false
+  properties:
+    data:
+      type: object
+      required: [type, attributes, relationships]
+      additionalProperties: false
+      properties:
+        type: { const: courses }
+        id: false
+        attributes:
+          $ref: '#/CourseCreateAttributes'
+        relationships:
+          type: object
+          required: [supervisors]
+          additionalProperties: false
+          properties:
+            supervisors:
+              type: object
+              required: [data]
+              additionalProperties: false
+              properties:
+                data:
+                  type: array
+                  minItems: 1
+                  items: { $ref: '#/UserIdentifier' }
+
+CourseUpdateRequestDocument:
+  type: object
+  required: [data]
+  additionalProperties: false
+  properties:
+    data:
+      type: object
+      required: [type, id, attributes]
+      additionalProperties: false
+      properties:
+        type: { const: courses }
+        id:
+          type: string
+          minLength: 1
+          description: Must exactly match the path course ID.
+        attributes:
+          allOf:
+            - $ref: '#/CourseAttributes'
+            - minProperties: 1
+
+SupervisorAssignmentRequestDocument:
+  type: object
+  required: [data]
+  additionalProperties: false
+  properties:
+    data: { $ref: '#/UserIdentifier' }
+
+CourseStudentRequestDocument:
+  type: object
+  required: [data]
+  additionalProperties: false
+  properties:
+    data:
+      type: object
+      required: [type, attributes]
+      additionalProperties: false
+      properties:
+        type: { const: course-students }
+        id: false
+        attributes:
+          oneOf:
+            - $ref: '#/ExistingStudentAttributes'
+            - $ref: '#/ProvisionedStudentAttributes'
+
+TemporaryPasswordRequestDocument:
+  type: object
+  required: [data]
+  additionalProperties: false
+  properties:
+    data:
+      type: object
+      required: [type, attributes]
+      additionalProperties: false
+      properties:
+        type: { const: temporary-passwords }
+        id: false
+        attributes:
+          type: object
+          required: [password]
+          additionalProperties: false
+          properties:
+            password: { $ref: '#/NewPassword' }
+
+MaterialCreateRequestDocument:
+  type: object
+  required: [data]
+  additionalProperties: false
+  properties:
+    data:
+      type: object
+      required: [type, attributes]
+      additionalProperties: false
+      properties:
+        type: { const: materials }
+        id: false
+        attributes:
+          oneOf:
+            - $ref: '#/FileMaterialAttributes'
+            - $ref: '#/LinkMaterialAttributes'
+
+MaterialBriefUpdateRequestDocument:
+  type: object
+  required: [data]
+  additionalProperties: false
+  properties:
+    data:
+      type: object
+      required: [type, id, attributes]
+      additionalProperties: false
+      properties:
+        type: { const: materials }
+        id:
+          type: string
+          minLength: 1
+          description: Must exactly match the path material ID.
+        attributes:
+          type: object
+          required: [brief]
+          additionalProperties: false
+          properties:
+            brief: { $ref: '#/BriefRequest' }
+
+MaterialFileUploadRequest:
+  type: object
+  required: [file]
+  additionalProperties: false
+  properties:
+    file:
+      type: string
+      format: binary
+      description: The only multipart part. Runtime size limits are operator configured within fixed hard caps.
+
+ImageUploadRequest:
+  type: string
+  format: binary
+  maxLength: 10485760
+  description: JPEG or PNG source bytes, at most 10 MiB.
+
+SixDigitCodeRequestDocument:
+  type: object
+  required: [data]
+  additionalProperties: false
+  properties:
+    data:
+      type: object
+      required: [type, attributes]
+      additionalProperties: false
+      properties:
+        type: { const: mfa-verifications }
+        id: false
+        attributes:
+          type: object
+          required: [code]
+          additionalProperties: false
+          properties:
+            code: { $ref: '#/SixDigitCode' }
+
+CourseCreateAttributes:
+  allOf:
+    - $ref: '#/CourseAttributes'
+    - required: [name]
+
+CourseAttributes:
+  type: object
+  additionalProperties: false
+  properties:
+    name:
+      type: string
+      minLength: 1
+      maxLength: 200
+      description: At most 800 UTF-8 bytes after trimming and NFC normalization.
+    description:
+      type: [string, 'null']
+      maxLength: 4000
+      description: At most 16 KiB before normalization.
+    curriculum:
+      type: [string, 'null']
+      maxLength: 16000
+      description: At most 64 KiB before normalization.
+    learning_goals:
+      type: [string, 'null']
+      maxLength: 16000
+      description: At most 64 KiB before normalization.
+    ai_tutor_instructions:
+      type: [string, 'null']
+      maxLength: 16000
+      description: At most 64 KiB before normalization.
+    language:
+      oneOf:
+        - $ref: '#/Language'
+        - type: 'null'
+
+ExistingStudentAttributes:
+  type: object
+  required: [mode, username]
+  additionalProperties: false
+  properties:
+    mode: { const: existing }
+    username: { $ref: '#/Username' }
+
+ProvisionedStudentAttributes:
+  type: object
+  required: [mode, username, temporary_password, preferred_language, country, time_zone]
+  additionalProperties: false
+  properties:
+    mode: { const: provision }
+    username: { $ref: '#/Username' }
+    temporary_password: { $ref: '#/NewPassword' }
+    preferred_language: { $ref: '#/Language' }
+    country: { $ref: '#/Country' }
+    time_zone: { $ref: '#/TimeZone' }
+
+FileMaterialAttributes:
+  type: object
+  required: [name, scope, kind, format]
+  additionalProperties: false
+  properties:
+    name: { $ref: '#/MaterialName' }
+    scope: { type: string, enum: [course-wide, student-private] }
+    kind: { type: string, enum: [text-book, exam, worksheet] }
+    format: { type: string, enum: [pdf, jpeg, png, text, markdown, docx] }
+    external_url:
+      type: [string, 'null']
+      maxLength: 0
+    brief: { type: 'null' }
+
+LinkMaterialAttributes:
+  type: object
+  required: [name, scope, kind, format, external_url, brief]
+  additionalProperties: false
+  properties:
+    name: { $ref: '#/MaterialName' }
+    scope: { const: course-wide }
+    kind: { type: string, enum: [website, youtube] }
+    format: { const: link }
+    external_url:
+      type: string
+      format: uri
+      pattern: '^https://'
+      maxLength: 2048
+      description: YouTube material is additionally restricted to recognized YouTube hosts.
+    brief: { $ref: '#/BriefRequest' }
+
+MaterialName:
+  type: string
+  minLength: 1
+  maxLength: 200
+  description: At most 800 UTF-8 bytes after trimming.
+
+UserIdentifier:
+  type: object
+  required: [type, id]
+  additionalProperties: false
+  properties:
+    type: { const: users }
+    id: { type: string, minLength: 1 }
+
+StaffRole:
+  type: string
+  enum: [administrator, supervisor, mentor]
+
+Username:
+  type: string
+  minLength: 3
+  maxLength: 32
+  pattern: '^[A-Za-z0-9][A-Za-z0-9._-]*[A-Za-z0-9]$'
+
+NewPassword:
+  type: string
+  minLength: 12
+  maxLength: 128
+  description: >-
+    Unicode code-point bounds; the encoded value may not exceed 512 UTF-8 bytes and known-common passwords are
+    rejected locally.
+
+Language:
+  type: string
+  minLength: 1
+  description: Valid, non-private-use BCP 47 language tag.
+
+Country:
+  type: string
+  pattern: '^[A-Za-z]{2}$'
+  description: ISO 3166-1 alpha-2 country code; normalized to uppercase.
+
+TimeZone:
+  type: string
+  minLength: 1
+  description: IANA time-zone name other than Local or a fixed numeric offset.
+
+SixDigitCode:
+  type: string
+  pattern: '^[0-9]{6}$'
+
+CanonicalUUIDv4:
+  type: string
+  format: uuid
+  pattern: '^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'
+
+BriefRequest:
+  description: Validated version 1 brief; the encoded brief may not exceed 256 KiB.
+  type: object
+  required: [version, summary, subjects]
+  additionalProperties: false
+  properties:
+    version: { const: 1 }
+    summary:
+      type: string
+      minLength: 1
+      maxLength: 4000
+      description: At most 16 KiB before normalization.
+    subjects:
+      type: array
+      minItems: 1
+      maxItems: 20
+      items:
+        type: string
+        minLength: 1
+        maxLength: 100
+        description: At most 400 UTF-8 bytes before normalization.
+    learning_goals:
+      type: array
+      maxItems: 30
+      items:
+        type: string
+        minLength: 1
+        maxLength: 300
+        description: At most 1,200 UTF-8 bytes before normalization.
+    sections:
+      type: array
+      maxItems: 500
+      items:
+        type: object
+        required: [sequence, title, description]
+        additionalProperties: false
+        properties:
+          sequence:
+            type: integer
+            minimum: 1
+            description: One-based position that must exactly match array order.
+          label:
+            type: [string, 'null']
+            minLength: 1
+            maxLength: 100
+            description: At most 400 UTF-8 bytes before normalization.
+          title:
+            type: string
+            minLength: 1
+            maxLength: 200
+            description: At most 800 UTF-8 bytes before normalization.
+          description:
+            type: string
+            minLength: 1
+            maxLength: 500
+            description: At most 2,000 UTF-8 bytes before normalization.
+          search_terms:
+            type: array
+            maxItems: 10
+            items:
+              type: string
+              minLength: 1
+              maxLength: 50
+              description: At most 200 UTF-8 bytes before normalization.
+    warnings:
+      type: array
+      maxItems: 20
+      items:
+        type: string
+        minLength: 1
+        maxLength: 500
+        description: At most 2,000 UTF-8 bytes before normalization.
+    educational_level:
+      type: [string, 'null']
+      minLength: 1
+      maxLength: 100
+      description: At most 400 UTF-8 bytes before normalization.

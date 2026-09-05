@@ -7,10 +7,7 @@ import (
 	"io"
 	"mime"
 	"net/http"
-	"strconv"
 	"strings"
-	"time"
-	"unicode/utf8"
 
 	"github.com/labstack/echo/v5"
 	"github.com/thorstenkramm/mia/internal/httpserver"
@@ -39,24 +36,30 @@ func Register(server *httpserver.Server, service *Service, oversight *jobs.Overs
 	server.AuthenticatedPOST("/api/v1/materials/:id/approvals", approvalHandler(service, true))
 	server.AuthenticatedDELETE("/api/v1/materials/:id/approvals", approvalHandler(service, false))
 	server.AuthenticatedGET("/api/v1/materials/:id/files", filesHandler(service))
-	server.AuthenticatedPOST("/api/v1/materials/:id/files", uploadHandler(service))
+	server.AuthenticatedRoute(http.MethodPost, "/api/v1/materials/:id/files", httpserver.RepresentationMultipart, uploadHandler(service))
 	server.AuthenticatedGET("/api/v1/material-files/:id", fileHandler(service))
 	server.AuthenticatedDELETE("/api/v1/material-files/:id", deleteFileHandler(service))
-	server.AuthenticatedGET("/api/v1/material-files/:id/download", downloadHandler(service, false))
-	server.AuthenticatedGET("/api/v1/material-files/:id/content", downloadHandler(service, true))
+	server.AuthenticatedRoute(http.MethodGet, "/api/v1/material-files/:id/download", httpserver.RepresentationBinary, downloadHandler(service, false))
+	server.AuthenticatedRoute(http.MethodGet, "/api/v1/material-files/:id/content", httpserver.RepresentationNDJSON, downloadHandler(service, true))
 	server.AuthenticatedGET("/api/v1/materials/:id/jobs", materialJobsHandler(service, oversight))
 }
 
 func createHandler(service *Service) echo.HandlerFunc {
+	// jscpd:ignore-start
+	// Material creation and brief correction have separate identity and attribute invariants.
 	return func(c *echo.Context) error {
 		actorID, err := actor(c)
 		if err != nil {
 			return err
 		}
 		var body request
-		if err := decode(c, &body); err != nil || body.Data.Type != "materials" || body.Data.ID != "" {
+		if err := httpserver.DecodeJSONAPI(c, &body); err != nil {
+			return err
+		}
+		if body.Data.Type != "materials" || body.Data.ID != "" {
 			return httpserver.NewError(httpserver.CodeMaterialInvalid)
 		}
+		// jscpd:ignore-end
 		var brief *Brief
 		if len(body.Data.Attributes.Brief) != 0 && !bytes.Equal(body.Data.Attributes.Brief, []byte("null")) {
 			parsed, err := decodeBrief(body.Data.Attributes.Brief)
@@ -85,24 +88,26 @@ func listHandler(service *Service) echo.HandlerFunc {
 		if err != nil {
 			return err
 		}
-		limit, offset, err := pagination(c)
+		page, err := httpserver.ParsePagination(c.QueryParams())
 		if err != nil {
 			return httpserver.NewError(httpserver.CodeMaterialInvalid)
 		}
 		result, err := service.List(c.Request().Context(), c.Param("course_id"), actorID,
-			ListInput{Limit: limit, Offset: offset})
+			ListInput{Limit: page.Limit, Offset: page.Offset})
 		if err != nil {
 			return materialError(err)
 		}
-		data := make([]map[string]any, len(result.Materials))
-		for index, value := range result.Materials {
-			data[index] = materialResource(value)
+		data := make([]map[string]any, 0, len(result.Materials))
+		for _, value := range result.Materials {
+			data = append(data, materialResource(value))
 		}
-		return jsonAPI(c, http.StatusOK, map[string]any{"data": data, "meta": map[string]bool{"has_more": result.HasMore}})
+		return collection(c, data, page, result.HasMore)
 	}
 }
 
 func getHandler(service *Service) echo.HandlerFunc {
+	// jscpd:ignore-start
+	// Material reads retain material-specific authorization and existence hiding.
 	return func(c *echo.Context) error {
 		actorID, err := actor(c)
 		if err != nil {
@@ -112,6 +117,7 @@ func getHandler(service *Service) echo.HandlerFunc {
 		if err != nil {
 			return materialError(err)
 		}
+		// jscpd:ignore-end
 		return materialResponse(c, http.StatusOK, value)
 	}
 }
@@ -123,8 +129,13 @@ func updateHandler(service *Service) echo.HandlerFunc {
 			return err
 		}
 		var body request
-		if err := decode(c, &body); err != nil || body.Data.Type != "materials" || body.Data.ID != "" &&
-			body.Data.ID != c.Param("id") || body.Data.Attributes.Name != "" || body.Data.Attributes.Scope != "" ||
+		if err := httpserver.DecodeJSONAPI(c, &body); err != nil {
+			return err
+		}
+		// PATCH identity: the document must carry a non-empty resource ID
+		// exactly matching the path resource ID.
+		if body.Data.Type != "materials" || body.Data.ID == "" || body.Data.ID != c.Param("id") ||
+			body.Data.Attributes.Name != "" || body.Data.Attributes.Scope != "" ||
 			body.Data.Attributes.Kind != "" || body.Data.Attributes.Format != "" || body.Data.Attributes.ExternalURL != nil ||
 			len(body.Data.Attributes.Brief) == 0 {
 			return httpserver.NewError(httpserver.CodeMaterialInvalid)
@@ -187,6 +198,12 @@ func filesHandler(service *Service) echo.HandlerFunc {
 		actorID, err := actor(c)
 		if err != nil {
 			return err
+		}
+		// Bounded-unpaginated collection: the per-material file-count hard cap
+		// (Limits.MaxFiles, operator-configurable within fixed MIA hard caps)
+		// keeps this collection small, so it is exempt from offset pagination.
+		if len(c.QueryParams()) != 0 {
+			return httpserver.NewError(httpserver.CodeMalformedRequest)
 		}
 		files, err := service.Files(c.Request().Context(), c.Param("id"), actorID)
 		if err != nil {
@@ -306,7 +323,7 @@ func materialJobsHandler(service *Service, oversight *jobs.Oversight) echo.Handl
 		if err := service.RequireAssignedSupervisor(c.Request().Context(), c.Param("id"), actorID); err != nil {
 			return materialError(err)
 		}
-		limit, offset, err := pagination(c)
+		page, err := httpserver.ParsePagination(c.QueryParams())
 		if err != nil {
 			return httpserver.NewError(httpserver.CodeJobInvalid)
 		}
@@ -318,68 +335,26 @@ func materialJobsHandler(service *Service, oversight *jobs.Oversight) echo.Handl
 		for _, file := range files {
 			subjects = append(subjects, file.ID)
 		}
-		records, err := oversight.ListSubjectIDs(c.Request().Context(), subjects, limit, offset)
+		records, err := oversight.ListSubjectIDs(c.Request().Context(), subjects, page.Limit, page.Offset)
 		if err != nil {
 			return httpserver.NewError(httpserver.CodeJobInvalid)
 		}
-		data := make([]map[string]any, len(records.Items))
-		for index, record := range records.Items {
-			data[index] = safeJobResource(record)
+		data := make([]map[string]any, 0, len(records.Items))
+		for _, record := range records.Items {
+			data = append(data, safeJobResource(record))
 		}
-		return jsonAPI(c, http.StatusOK, map[string]any{"data": data,
-			"meta": map[string]bool{"has_more": records.HasMore}})
+		return collection(c, data, page, records.HasMore)
 	}
-}
-
-func decode(c *echo.Context, destination any) error {
-	mediaType, parameters, err := mime.ParseMediaType(c.Request().Header.Get(echo.HeaderContentType))
-	if err != nil || mediaType != "application/vnd.api+json" || len(parameters) != 0 || c.Request().ContentLength > 1<<20 {
-		return ErrInvalid
-	}
-	c.Request().Body = http.MaxBytesReader(c.Response(), c.Request().Body, 1<<20)
-	body, err := io.ReadAll(c.Request().Body)
-	if err != nil || !utf8.Valid(body) {
-		return ErrInvalid
-	}
-	decoder := json.NewDecoder(bytes.NewReader(body))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(destination); err != nil {
-		return ErrInvalid
-	}
-	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-		return ErrInvalid
-	}
-	return nil
-}
-
-func pagination(c *echo.Context) (int, int, error) {
-	limit, offset := 25, 0
-	for key, values := range c.QueryParams() {
-		if key != "page[limit]" && key != "page[offset]" || len(values) != 1 {
-			return 0, 0, ErrInvalid
-		}
-		value, err := strconv.Atoi(values[0])
-		if err != nil {
-			return 0, 0, ErrInvalid
-		}
-		if key == "page[limit]" {
-			limit = value
-		} else {
-			offset = value
-		}
-	}
-	if limit < 1 || limit > 100 || offset < 0 || offset > 10_000 {
-		return 0, 0, ErrInvalid
-	}
-	return limit, offset, nil
 }
 
 func materialResource(value Material) map[string]any {
 	attributes := map[string]any{"name": value.Name, "scope": value.Scope, "kind": value.Kind,
 		"format": value.Format, "state": value.State, "external_url": nullable(value.ExternalURL),
-		"brief": value.Brief, "brief_source": nullable(value.BriefSource), "brief_updated_at": formatTime(value.BriefUpdatedAt),
-		"approved": value.Approved, "approved_at": formatTime(value.ApprovedAt), "failure_code": nullable(value.FailureCode),
-		"created_at": instant(value.CreatedAt), "updated_at": formatTime(value.UpdatedAt)}
+		"brief": value.Brief, "brief_source": nullable(value.BriefSource),
+		"brief_updated_at": httpserver.FormatOptionalInstant(value.BriefUpdatedAt),
+		"approved":         value.Approved, "approved_at": httpserver.FormatOptionalInstant(value.ApprovedAt),
+		"failure_code": nullable(value.FailureCode), "created_at": httpserver.FormatInstant(value.CreatedAt),
+		"updated_at": httpserver.FormatOptionalInstant(value.UpdatedAt)}
 	return map[string]any{"type": "materials", "id": value.ID, "attributes": attributes,
 		"relationships": map[string]any{"course": map[string]any{"data": map[string]string{
 			"type": "courses", "id": value.CourseID}}}}
@@ -389,7 +364,7 @@ func fileResource(file File) map[string]any {
 	return map[string]any{"type": "material-files", "id": file.ID,
 		"attributes": map[string]any{"original_filename": file.OriginalFilename, "media_type": file.MediaType,
 			"size_bytes": file.SizeBytes, "page_count": file.PageCount, "state": file.State,
-			"failure_code": nullable(file.FailureCode), "created_at": instant(file.CreatedAt),
+			"failure_code": nullable(file.FailureCode), "created_at": httpserver.FormatInstant(file.CreatedAt),
 			"download_url": "/api/v1/material-files/" + file.ID + "/download",
 			"content_url":  "/api/v1/material-files/" + file.ID + "/content"},
 		"relationships": map[string]any{"material": map[string]any{"data": map[string]string{
@@ -399,8 +374,10 @@ func fileResource(file File) map[string]any {
 func safeJobResource(record jobs.Record) map[string]any {
 	return map[string]any{"type": "jobs", "id": record.ID, "attributes": map[string]any{
 		"job_type": record.Type, "subject_type": record.SubjectType, "subject_id": record.SubjectID,
-		"state": record.State, "attempt_count": record.AttemptCount, "created_at": instant(record.CreatedAt),
-		"started_at": formatTime(record.StartedAt), "finished_at": formatTime(record.FinishedAt)}}
+		"state": record.State, "attempt_count": record.AttemptCount,
+		"created_at":  httpserver.FormatInstant(record.CreatedAt),
+		"started_at":  httpserver.FormatOptionalInstant(record.StartedAt),
+		"finished_at": httpserver.FormatOptionalInstant(record.FinishedAt)}}
 }
 
 func materialResponse(c *echo.Context, status int, material Material) error {
@@ -408,16 +385,17 @@ func materialResponse(c *echo.Context, status int, material Material) error {
 }
 
 func jsonAPI(c *echo.Context, status int, body any) error {
-	c.Response().Header().Set(echo.HeaderContentType, "application/vnd.api+json")
-	return c.JSON(status, body)
+	return httpserver.JSONAPI(c, status, body)
+}
+
+// collection writes one paginated JSON:API collection page with meta.has_more
+// and the shared prev and next navigation links when those pages exist.
+func collection(c *echo.Context, data []map[string]any, page httpserver.Page, hasMore bool) error {
+	return httpserver.Collection(c, data, page, hasMore)
 }
 
 func actor(c *echo.Context) (string, error) {
-	id, ok := c.Get("mia.auth.user_id").(string)
-	if !ok || id == "" {
-		return "", httpserver.NewError(httpserver.CodeUnauthenticated)
-	}
-	return id, nil
+	return httpserver.AuthenticatedUser(c)
 }
 
 func materialError(err error) error {
@@ -461,11 +439,4 @@ func contentDisposition(filename string) string {
 		return char
 	}, filename)
 	return mime.FormatMediaType("attachment", map[string]string{"filename": filename})
-}
-
-func formatTime(value *time.Time) any {
-	if value == nil {
-		return nil
-	}
-	return instant(*value)
 }

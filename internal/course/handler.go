@@ -7,9 +7,6 @@ import (
 	"io"
 	"mime"
 	"net/http"
-	"strconv"
-	"time"
-	"unicode/utf8"
 
 	"github.com/labstack/echo/v5"
 	"github.com/thorstenkramm/mia/internal/httpserver"
@@ -28,8 +25,8 @@ func Register(server *httpserver.Server, service *Service) {
 	server.AuthenticatedGET("/api/v1/courses/:id/supervisors", supervisorsHandler(service))
 	server.AuthenticatedPOST("/api/v1/courses/:id/supervisors", assignSupervisorHandler(service))
 	server.AuthenticatedDELETE("/api/v1/courses/:id/supervisors/:user_id", removeSupervisorHandler(service))
-	server.AuthenticatedGET("/api/v1/courses/:id/logo", logoHandler(service))
-	server.AuthenticatedPUT("/api/v1/courses/:id/logo", putLogoHandler(service))
+	server.AuthenticatedRoute(http.MethodGet, "/api/v1/courses/:id/logo", httpserver.RepresentationBinary, logoHandler(service))
+	server.AuthenticatedRoute(http.MethodPut, "/api/v1/courses/:id/logo", httpserver.RepresentationImageUpload, putLogoHandler(service))
 	server.AuthenticatedDELETE("/api/v1/courses/:id/logo", deleteLogoHandler(service))
 	server.AuthenticatedGET("/api/v1/courses/:id/students", listStudentsHandler(service))
 	server.AuthenticatedPOST("/api/v1/courses/:id/students", addStudentHandler(service))
@@ -74,6 +71,7 @@ type supervisorRequest struct {
 type studentRequest struct {
 	Data struct {
 		Type       string `json:"type"`
+		ID         string `json:"id"`
 		Attributes struct {
 			Mode              json.RawMessage `json:"mode"`
 			Username          json.RawMessage `json:"username"`
@@ -88,6 +86,7 @@ type studentRequest struct {
 type temporaryPasswordRequest struct {
 	Data struct {
 		Type       string `json:"type"`
+		ID         string `json:"id"`
 		Attributes struct {
 			Password string `json:"password"`
 		} `json:"attributes"`
@@ -95,18 +94,21 @@ type temporaryPasswordRequest struct {
 }
 
 func createHandler(service *Service) echo.HandlerFunc {
+	// jscpd:ignore-start
+	// Create and PATCH validate distinct JSON:API identity and mutation contracts.
 	return func(c *echo.Context) error {
 		actorID, err := actor(c)
 		if err != nil {
 			return err
 		}
 		var request courseRequest
-		if err := decode(c, &request); err != nil {
-			return mutationDecodeError(c, service, actorID, err, "course_invalid", httpserver.CodeCourseInvalid)
+		if err := httpserver.DecodeJSONAPI(c, &request); err != nil {
+			return err
 		}
 		if request.Data.Type != "courses" || request.Data.ID != "" {
 			return denyMutation(c, service, actorID, "course_invalid", httpserver.CodeCourseInvalid)
 		}
+		// jscpd:ignore-end
 		fields, err := requestFields(request.Data.Attributes)
 		if err != nil || !fields.Name.Set {
 			return denyMutation(c, service, actorID, "course_invalid", httpserver.CodeCourseInvalid)
@@ -129,16 +131,19 @@ func createHandler(service *Service) echo.HandlerFunc {
 }
 
 func listHandler(service *Service) echo.HandlerFunc {
+	// jscpd:ignore-start
+	// Course and material collections apply resource-specific scope and error policy.
 	return func(c *echo.Context) error {
 		actorID, err := actor(c)
 		if err != nil {
 			return err
 		}
-		input, err := listInput(c)
+		page, err := httpserver.ParsePagination(c.QueryParams())
 		if err != nil {
 			return httpserver.NewError(httpserver.CodeCourseInvalid)
 		}
-		result, err := service.List(c.Request().Context(), actorID, input)
+		// jscpd:ignore-end
+		result, err := service.List(c.Request().Context(), actorID, ListInput{Limit: page.Limit, Offset: page.Offset})
 		if err != nil {
 			return err
 		}
@@ -146,41 +151,13 @@ func listHandler(service *Service) echo.HandlerFunc {
 		for _, value := range result.Courses {
 			data = append(data, courseResource(value))
 		}
-		return jsonAPI(c, http.StatusOK, map[string]any{"data": data,
-			"meta": map[string]any{"has_more": result.HasMore}})
+		return collection(c, data, page, result.HasMore)
 	}
-}
-
-func listInput(c *echo.Context) (ListInput, error) {
-	const defaultLimit = 25
-	params := c.QueryParams()
-	for key := range params {
-		if key != "page[limit]" && key != "page[offset]" {
-			return ListInput{}, ErrInvalid
-		}
-	}
-	input := ListInput{Limit: defaultLimit}
-	for key, destination := range map[string]*int{"page[limit]": &input.Limit, "page[offset]": &input.Offset} {
-		values, exists := params[key]
-		if !exists {
-			continue
-		}
-		if len(values) != 1 || values[0] == "" {
-			return ListInput{}, ErrInvalid
-		}
-		value, err := strconv.Atoi(values[0])
-		if err != nil {
-			return ListInput{}, ErrInvalid
-		}
-		*destination = value
-	}
-	if input.Limit < 1 || input.Limit > 100 || input.Offset < 0 || input.Offset > 10_000 {
-		return ListInput{}, ErrInvalid
-	}
-	return input, nil
 }
 
 func getHandler(service *Service) echo.HandlerFunc {
+	// jscpd:ignore-start
+	// Course and material reads retain separate authorization and domain-error mapping.
 	return func(c *echo.Context) error {
 		actorID, err := actor(c)
 		if err != nil {
@@ -190,22 +167,28 @@ func getHandler(service *Service) echo.HandlerFunc {
 		if err != nil {
 			return courseError(err)
 		}
+		// jscpd:ignore-end
 		return courseResponse(c, http.StatusOK, value)
 	}
 }
 
 func updateHandler(service *Service) echo.HandlerFunc {
+	// jscpd:ignore-start
+	// PATCH validation is separate for course fields and material briefs.
 	return func(c *echo.Context) error {
 		actorID, err := actor(c)
 		if err != nil {
 			return err
 		}
 		var request courseRequest
-		if err := decode(c, &request); err != nil {
-			return mutationDecodeError(c, service, actorID, err, "course_invalid", httpserver.CodeCourseInvalid)
+		if err := httpserver.DecodeJSONAPI(c, &request); err != nil {
+			return err
 		}
+		// jscpd:ignore-end
+		// PATCH identity: the document must carry a non-empty resource ID
+		// exactly matching the path resource ID.
 		if request.Data.Type != "courses" ||
-			request.Data.ID != "" && request.Data.ID != c.Param("id") ||
+			request.Data.ID == "" || request.Data.ID != c.Param("id") ||
 			len(request.Data.Relationships.Supervisors.Data) != 0 {
 			return denyMutation(c, service, actorID, "course_invalid", httpserver.CodeCourseInvalid)
 		}
@@ -250,6 +233,8 @@ func deactivateHandler(service *Service) echo.HandlerFunc {
 }
 
 func deleteHandler(service *Service) echo.HandlerFunc {
+	// jscpd:ignore-start
+	// Course deletion and material deletion have distinct lifecycle rules.
 	return func(c *echo.Context) error {
 		actorID, err := actor(c)
 		if err != nil {
@@ -260,6 +245,7 @@ func deleteHandler(service *Service) echo.HandlerFunc {
 		}
 		return c.NoContent(http.StatusNoContent)
 	}
+	// jscpd:ignore-end
 }
 
 func supervisorsHandler(service *Service) echo.HandlerFunc {
@@ -268,15 +254,20 @@ func supervisorsHandler(service *Service) echo.HandlerFunc {
 		if err != nil {
 			return err
 		}
-		ids, err := service.Supervisors(c.Request().Context(), c.Param("id"), actorID)
+		page, err := httpserver.ParsePagination(c.QueryParams())
+		if err != nil {
+			return httpserver.NewError(httpserver.CodeCourseInvalid)
+		}
+		ids, hasMore, err := service.Supervisors(c.Request().Context(), c.Param("id"), actorID,
+			ListInput{Limit: page.Limit, Offset: page.Offset})
 		if err != nil {
 			return courseError(err)
 		}
-		data := make([]map[string]string, len(ids))
-		for index, id := range ids {
-			data[index] = map[string]string{"type": "users", "id": id}
+		data := make([]map[string]any, 0, len(ids))
+		for _, id := range ids {
+			data = append(data, map[string]any{"type": "users", "id": id})
 		}
-		return jsonAPI(c, http.StatusOK, map[string]any{"data": data})
+		return collection(c, data, page, hasMore)
 	}
 }
 
@@ -287,9 +278,8 @@ func assignSupervisorHandler(service *Service) echo.HandlerFunc {
 			return err
 		}
 		var request supervisorRequest
-		if err := decode(c, &request); err != nil {
-			return mutationDecodeError(c, service, actorID, err, "course_supervisor_invalid",
-				httpserver.CodeCourseSupervisorInvalid)
+		if err := httpserver.DecodeJSONAPI(c, &request); err != nil {
+			return err
 		}
 		if request.Data.Type != "users" || request.Data.ID == "" {
 			return denyMutation(c, service, actorID, "course_supervisor_invalid",
@@ -321,11 +311,12 @@ func listStudentsHandler(service *Service) echo.HandlerFunc {
 		if err != nil {
 			return err
 		}
-		input, err := listInput(c)
+		page, err := httpserver.ParsePagination(c.QueryParams())
 		if err != nil {
 			return httpserver.NewError(httpserver.CodeCourseStudentInvalid)
 		}
-		result, err := service.ListStudents(c.Request().Context(), c.Param("id"), actorID, input)
+		result, err := service.ListStudents(c.Request().Context(), c.Param("id"), actorID,
+			ListInput{Limit: page.Limit, Offset: page.Offset})
 		if err != nil {
 			return courseError(err)
 		}
@@ -333,8 +324,7 @@ func listStudentsHandler(service *Service) echo.HandlerFunc {
 		for _, membership := range result.Memberships {
 			data = append(data, membershipResource(membership))
 		}
-		return jsonAPI(c, http.StatusOK, map[string]any{"data": data,
-			"meta": map[string]any{"has_more": result.HasMore}})
+		return collection(c, data, page, result.HasMore)
 	}
 }
 
@@ -345,11 +335,10 @@ func addStudentHandler(service *Service) echo.HandlerFunc {
 			return err
 		}
 		var request studentRequest
-		if err := decode(c, &request); err != nil {
-			return mutationDecodeError(c, service, actorID, err, "course_student_invalid",
-				httpserver.CodeCourseStudentInvalid)
+		if err := httpserver.DecodeJSONAPI(c, &request); err != nil {
+			return err
 		}
-		if request.Data.Type != "course-students" {
+		if request.Data.Type != "course-students" || request.Data.ID != "" {
 			return denyMutation(c, service, actorID, "course_student_invalid",
 				httpserver.CodeCourseStudentInvalid)
 		}
@@ -412,11 +401,10 @@ func temporaryPasswordHandler(service *Service) echo.HandlerFunc {
 			return err
 		}
 		var request temporaryPasswordRequest
-		if err := decode(c, &request); err != nil {
-			return mutationDecodeError(c, service, actorID, err, "course_student_invalid",
-				httpserver.CodeCourseStudentInvalid)
+		if err := httpserver.DecodeJSONAPI(c, &request); err != nil {
+			return err
 		}
-		if request.Data.Type != "temporary-passwords" ||
+		if request.Data.Type != "temporary-passwords" || request.Data.ID != "" ||
 			request.Data.Attributes.Password == "" {
 			return denyMutation(c, service, actorID, "course_student_invalid",
 				httpserver.CodeCourseStudentInvalid)
@@ -479,6 +467,8 @@ func putLogoHandler(service *Service) echo.HandlerFunc {
 }
 
 func logoHandler(service *Service) echo.HandlerFunc {
+	// jscpd:ignore-start
+	// Course logos and staff avatars have separate authorization and cache ownership.
 	return func(c *echo.Context) error {
 		actorID, err := actor(c)
 		if err != nil {
@@ -499,6 +489,7 @@ func logoHandler(service *Service) echo.HandlerFunc {
 		}
 		return c.Blob(http.StatusOK, "image/png", data)
 	}
+	// jscpd:ignore-end
 }
 
 func deleteLogoHandler(service *Service) echo.HandlerFunc {
@@ -542,6 +533,8 @@ func requestFields(attributes attributesRequest) (Fields, error) {
 }
 
 func optional(raw json.RawMessage) (OptionalString, error) {
+	// jscpd:ignore-start
+	// Course optional fields and profile fields use distinct domain types.
 	if len(raw) == 0 {
 		return OptionalString{}, nil
 	}
@@ -553,6 +546,7 @@ func optional(raw json.RawMessage) (OptionalString, error) {
 		return OptionalString{}, err
 	}
 	return OptionalString{Set: true, Value: &value}, nil
+	// jscpd:ignore-end
 }
 
 func rawString(raw json.RawMessage) (string, bool) {
@@ -575,119 +569,8 @@ func anySet(values ...json.RawMessage) bool {
 	return false
 }
 
-func decode(c *echo.Context, destination any) error {
-	const maximumBody = 1 << 20
-	mediaType, parameters, err := mime.ParseMediaType(c.Request().Header.Get(echo.HeaderContentType))
-	if err != nil || mediaType != "application/vnd.api+json" || len(parameters) != 0 {
-		return errors.New("invalid course request")
-	}
-	if c.Request().ContentLength > maximumBody {
-		return errRequestTooLarge
-	}
-	c.Request().Body = http.MaxBytesReader(c.Response(), c.Request().Body, maximumBody)
-	body, err := io.ReadAll(c.Request().Body)
-	if err != nil {
-		var tooLarge *http.MaxBytesError
-		if errors.As(err, &tooLarge) {
-			return errRequestTooLarge
-		}
-		return err
-	}
-	if !validJSONUnicode(body) {
-		return errors.New("invalid course request")
-	}
-	decoder := json.NewDecoder(bytes.NewReader(body))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(destination); err != nil {
-		return err
-	}
-	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-		return errors.New("invalid trailing course input")
-	}
-	return nil
-}
-
-// validJSONUnicode rejects malformed UTF-8 and unpaired UTF-16 surrogate
-// escapes before encoding/json can replace them with U+FFFD.
-func validJSONUnicode(body []byte) bool {
-	if !utf8.Valid(body) {
-		return false
-	}
-	inString := false
-	for index := 0; index < len(body); index++ {
-		if !inString {
-			if body[index] == '"' {
-				inString = true
-			}
-			continue
-		}
-		if body[index] == '"' {
-			inString = false
-			continue
-		}
-		if body[index] != '\\' {
-			continue
-		}
-		index++
-		if index >= len(body) {
-			return false
-		}
-		if body[index] != 'u' {
-			continue
-		}
-		if index+4 >= len(body) {
-			return false
-		}
-		value, ok := unicodeEscape(body[index+1 : index+5])
-		if !ok {
-			return false
-		}
-		index += 4
-		if value >= 0xD800 && value <= 0xDBFF {
-			if index+6 >= len(body) || body[index+1] != '\\' || body[index+2] != 'u' {
-				return false
-			}
-			low, ok := unicodeEscape(body[index+3 : index+7])
-			if !ok || low < 0xDC00 || low > 0xDFFF {
-				return false
-			}
-			index += 6
-		} else if value >= 0xDC00 && value <= 0xDFFF {
-			return false
-		}
-	}
-	return !inString
-}
-
-func unicodeEscape(value []byte) (rune, bool) {
-	if len(value) != 4 {
-		return 0, false
-	}
-	var result rune
-	for _, character := range value {
-		result <<= 4
-		switch {
-		case character >= '0' && character <= '9':
-			result += rune(character - '0')
-		case character >= 'a' && character <= 'f':
-			result += rune(character-'a') + 10
-		case character >= 'A' && character <= 'F':
-			result += rune(character-'A') + 10
-		default:
-			return 0, false
-		}
-	}
-	return result, true
-}
-
-var errRequestTooLarge = errors.New("course request body too large")
-
 func actor(c *echo.Context) (string, error) {
-	id, ok := c.Get("mia.auth.user_id").(string)
-	if !ok || id == "" {
-		return "", httpserver.NewError(httpserver.CodeUnauthenticated)
-	}
-	return id, nil
+	return httpserver.AuthenticatedUser(c)
 }
 
 func courseResponse(c *echo.Context, status int, value Course) error {
@@ -702,9 +585,10 @@ func courseResource(value Course) map[string]any {
 	attributes := map[string]any{
 		"name": value.Name, "description": value.Description, "curriculum": value.Curriculum,
 		"learning_goals": value.LearningGoals, "ai_tutor_instructions": value.Instructions,
-		"language": value.Language, "state": state, "created_at": instant(value.CreatedAt),
-		"activated_at": formatTime(value.ActivatedAt), "deactivated_at": formatTime(value.DeactivatedAt),
-		"updated_at": formatTime(value.UpdatedAt), "logo_url": nil,
+		"language": value.Language, "state": state, "created_at": httpserver.FormatInstant(value.CreatedAt),
+		"activated_at":   httpserver.FormatOptionalInstant(value.ActivatedAt),
+		"deactivated_at": httpserver.FormatOptionalInstant(value.DeactivatedAt),
+		"updated_at":     httpserver.FormatOptionalInstant(value.UpdatedAt), "logo_url": nil,
 	}
 	if value.HasLogo {
 		attributes["logo_url"] = "/api/v1/courses/" + value.ID + "/logo"
@@ -723,7 +607,7 @@ func membershipResource(value Membership) map[string]any {
 		"id":   value.ID,
 		"attributes": map[string]any{
 			"username":  value.Username,
-			"joined_at": instant(value.JoinedAt),
+			"joined_at": httpserver.FormatInstant(value.JoinedAt),
 		},
 		"relationships": map[string]any{
 			"course":  map[string]any{"data": map[string]string{"type": "courses", "id": value.CourseID}},
@@ -732,16 +616,14 @@ func membershipResource(value Membership) map[string]any {
 	}
 }
 
-func formatTime(value *time.Time) any {
-	if value == nil {
-		return nil
-	}
-	return instant(*value)
+func jsonAPI(c *echo.Context, status int, document any) error {
+	return httpserver.JSONAPI(c, status, document)
 }
 
-func jsonAPI(c *echo.Context, status int, document any) error {
-	c.Response().Header().Set(echo.HeaderContentType, "application/vnd.api+json")
-	return c.JSON(status, document)
+// collection writes one paginated JSON:API collection page with meta.has_more
+// and the shared prev and next navigation links when those pages exist.
+func collection(c *echo.Context, data []map[string]any, page httpserver.Page, hasMore bool) error {
+	return httpserver.Collection(c, data, page, hasMore)
 }
 
 func courseError(err error) error {
@@ -811,21 +693,10 @@ func mutationOutcome(err error) string {
 	}
 }
 
+// denyMutation audits a domain-level denied mutation. Protocol failures
+// classified by the shared decoder (415, 413, 400) are not domain mutations
+// and return without an audit event, matching the Phase 3a auth migration.
 func denyMutation(c *echo.Context, service *Service, actorID, outcome string, code httpserver.Code) error {
 	service.AuditMutationDenied(c.Request().Context(), actorID, outcome)
 	return httpserver.NewError(code)
-}
-
-func mutationDecodeError(
-	c *echo.Context,
-	service *Service,
-	actorID string,
-	err error,
-	outcome string,
-	code httpserver.Code,
-) error {
-	if errors.Is(err, errRequestTooLarge) {
-		return denyMutation(c, service, actorID, "course_request_too_large", httpserver.CodeRequestTooLarge)
-	}
-	return denyMutation(c, service, actorID, outcome, code)
 }

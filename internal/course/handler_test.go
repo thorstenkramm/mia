@@ -19,6 +19,7 @@ import (
 	"github.com/labstack/echo/v5"
 	"github.com/thorstenkramm/mia/internal/auth"
 	"github.com/thorstenkramm/mia/internal/httpserver"
+	"github.com/thorstenkramm/mia/internal/httpserver/conformance"
 	"github.com/thorstenkramm/mia/internal/identity"
 	miSQLite "github.com/thorstenkramm/mia/internal/sqlite"
 	"github.com/thorstenkramm/mia/internal/user"
@@ -73,7 +74,8 @@ func TestCourseHandlersCreateAndBlockActivationUntilMaterialOwnerIsWired(t *test
 		t.Fatalf("course create document = %#v, %v", document, err)
 	}
 	supervisorSession, supervisorCSRF := courseSession(t, server, supervisor)
-	renameBody := []byte(`{"data":{"type":"courses","attributes":{"name":"Renamed"}}}`)
+	renameBody := []byte(`{"data":{"type":"courses","id":"` + document.Data.ID +
+		`","attributes":{"name":"Renamed"}}}`)
 	deniedRename := courseHTTP(t, server, http.MethodPatch, "/api/v1/courses/"+document.Data.ID,
 		supervisorSession, supervisorCSRF, "application/vnd.api+json", renameBody)
 	assertCourseError(t, deniedRename, http.StatusForbidden, "course_unauthorized")
@@ -212,6 +214,64 @@ func TestCourseLogoHandlersNormalizeAuthorizeAndDelete(t *testing.T) {
 	}
 }
 
+func TestCourseLogoRoutesAreExemptFromJSONAPIAcceptNegotiation(t *testing.T) {
+	server, database, dataDir := courseServerFixture(t)
+	admin := createAccount(t, database, "acceptadmin", user.Administrator)
+	supervisor := createAccount(t, database, "acceptsupervisor", user.Supervisor)
+	service := NewService(database, dataDir, nil, nil, nil, nil, nil, nil)
+	created, err := service.Create(context.Background(), CreateInput{ActorID: admin,
+		SupervisorIDs: []string{supervisor}, Fields: preparedFields("Accept logo")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	Register(server, service)
+	session, csrf := courseSession(t, server, supervisor)
+	for _, method := range []string{http.MethodGet, http.MethodPut} {
+		request := httptest.NewRequest(method, "http://mia.test/api/v1/courses/"+created.ID+"/logo",
+			bytes.NewReader([]byte("not an image")))
+		request.Header.Set("Accept", `application/vnd.api+json;profile="a,b"`)
+		request.AddCookie(session)
+		if method == http.MethodPut {
+			request.Header.Set("Content-Type", "image/png")
+			request.AddCookie(&http.Cookie{Name: "__Host-mia_csrf", Value: csrf})
+			request.Header.Set("X-CSRF-Token", csrf)
+		}
+		response := httptest.NewRecorder()
+		server.Echo.ServeHTTP(response, request)
+		want := http.StatusNotFound
+		if method == http.MethodPut {
+			want = http.StatusUnprocessableEntity
+		}
+		if response.Code != want {
+			t.Fatalf("%s status = %d %s", method, response.Code, response.Body.String())
+		}
+	}
+}
+
+func TestCourseCreateResourcesRejectClientGeneratedIDs(t *testing.T) {
+	server, database, dataDir := courseServerFixture(t)
+	admin := createAccount(t, database, "idadmin", user.Administrator)
+	supervisor := createAccount(t, database, "idsupervisor", user.Supervisor)
+	Register(server, NewService(database, dataDir, nil, nil, nil, nil, nil, nil))
+	session, csrf := courseSession(t, server, admin)
+	for _, testCase := range []struct {
+		name, path, body, code string
+	}{
+		{name: "course", path: "/api/v1/courses", code: "course_invalid",
+			body: `{"data":{"type":"courses","id":"client-id","attributes":{"name":"Course"},"relationships":{"supervisors":{"data":[{"type":"users","id":"` + supervisor + `"}]}}}}`},
+		{name: "course student", path: "/api/v1/courses/missing/students", code: "course_student_invalid",
+			body: `{"data":{"type":"course-students","id":"client-id","attributes":{"mode":"existing","username":"student"}}}`},
+		{name: "temporary password", path: "/api/v1/users/missing/temporary-passwords", code: "course_student_invalid",
+			body: `{"data":{"type":"temporary-passwords","id":"client-id","attributes":{"password":"a valid temporary password"}}}`},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			response := courseHTTP(t, server, http.MethodPost, testCase.path, session, csrf,
+				"application/vnd.api+json", []byte(testCase.body))
+			conformance.Error(t, response, http.StatusUnprocessableEntity, testCase.code)
+		})
+	}
+}
+
 func TestStudentAdministrationHandlersInvalidateCookiesAndHideTargets(t *testing.T) {
 	root := t.TempDir()
 	dataDir, docRoot := filepath.Join(root, "data"), filepath.Join(root, "frontend")
@@ -253,7 +313,7 @@ func TestStudentAdministrationHandlersInvalidateCookiesAndHideTargets(t *testing
 	supervisorSession, supervisorCSRF := courseSession(t, server, supervisor)
 	oversized := courseHTTPUnknownLength(t, server, http.MethodPost, "/api/v1/courses/"+created.ID+"/students",
 		supervisorSession, supervisorCSRF, "application/vnd.api+json", bytes.Repeat([]byte("x"), (1<<20)+1))
-	assertCourseError(t, oversized, http.StatusRequestEntityTooLarge, "auth_request_too_large")
+	conformance.Error(t, oversized, http.StatusRequestEntityTooLarge, "request_too_large")
 	provisionBody := []byte(`{"data":{"type":"course-students","attributes":{"mode":"provision",` +
 		`"username":"newstudent","temporary_password":"Qz7 first temporary phrase",` +
 		`"preferred_language":"en","country":"DE","time_zone":"UTC"}}}`)
@@ -283,7 +343,7 @@ func TestStudentAdministrationHandlersInvalidateCookiesAndHideTargets(t *testing
 		`{"password":"Qz7 malformed \ud800 phrase"}}}`)
 	malformedUnicode := courseHTTP(t, server, http.MethodPost, "/api/v1/users/"+studentID+"/temporary-passwords",
 		supervisorSession, supervisorCSRF, "application/vnd.api+json", malformedUnicodeBody)
-	assertCourseError(t, malformedUnicode, http.StatusUnprocessableEntity, "course_student_invalid")
+	conformance.Error(t, malformedUnicode, http.StatusBadRequest, "malformed_request")
 	var originalHash string
 	if err := database.QueryRow("SELECT password_hash FROM users WHERE id = ?", studentID).Scan(&originalHash); err != nil {
 		t.Fatal(err)
@@ -330,6 +390,134 @@ func TestStudentAdministrationHandlersInvalidateCookiesAndHideTargets(t *testing
 		supervisorCSRF, "", nil)
 	assertCourseError(t, unknown, http.StatusNotFound, "course_student_not_found")
 	assertCourseError(t, staffResponse, http.StatusNotFound, "course_student_not_found")
+}
+
+func TestCoursePatchRequiresMatchingResourceIdentity(t *testing.T) {
+	server, database, dataDir := courseServerFixture(t)
+	admin := createAccount(t, database, "admin", user.Administrator)
+	supervisor := createAccount(t, database, "supervisor", user.Supervisor)
+	service := NewService(database, dataDir, nil, nil, nil, nil, nil, nil)
+	created, err := service.Create(context.Background(), CreateInput{ActorID: admin,
+		SupervisorIDs: []string{supervisor}, Fields: preparedFields("History")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	Register(server, service)
+	session, csrf := courseSession(t, server, admin)
+	for name, body := range map[string]string{
+		"missing_id":    `{"data":{"type":"courses","attributes":{"name":"Renamed"}}}`,
+		"empty_id":      `{"data":{"type":"courses","id":"","attributes":{"name":"Renamed"}}}`,
+		"mismatched_id": `{"data":{"type":"courses","id":"cou_other","attributes":{"name":"Renamed"}}}`,
+		"wrong_type":    `{"data":{"type":"course","id":"` + created.ID + `","attributes":{"name":"Renamed"}}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			response := courseHTTP(t, server, http.MethodPatch, "/api/v1/courses/"+created.ID, session, csrf,
+				"application/vnd.api+json", []byte(body))
+			conformance.Error(t, response, http.StatusUnprocessableEntity, "course_invalid")
+		})
+	}
+	valid := courseHTTP(t, server, http.MethodPatch, "/api/v1/courses/"+created.ID, session, csrf,
+		"application/vnd.api+json",
+		[]byte(`{"data":{"type":"courses","id":"`+created.ID+`","attributes":{"name":"Renamed"}}}`))
+	if valid.Code != http.StatusOK {
+		t.Fatalf("matching PATCH = %d %s", valid.Code, valid.Body.String())
+	}
+	document := conformance.Document(t, valid)
+	conformance.Resource(t, document["data"], "courses")
+}
+
+func TestCourseCollectionsUseSharedPaginationAndNavigationLinks(t *testing.T) {
+	server, database, dataDir := courseServerFixture(t)
+	admin := createAccount(t, database, "admin", user.Administrator)
+	first := createAccount(t, database, "supone", user.Supervisor)
+	second := createAccount(t, database, "suptwo", user.Supervisor)
+	service := NewService(database, dataDir, nil, nil, nil, nil, nil, nil)
+	created, err := service.Create(context.Background(), CreateInput{ActorID: admin,
+		SupervisorIDs: []string{first, second}, Fields: preparedFields("Algebra")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Create(context.Background(), CreateInput{ActorID: admin,
+		SupervisorIDs: []string{first}, Fields: preparedFields("Biology")}); err != nil {
+		t.Fatal(err)
+	}
+	Register(server, service)
+	session, csrf := courseSession(t, server, admin)
+	invalid := courseHTTP(t, server, http.MethodGet, "/api/v1/courses?page[limit]=abc", session, csrf, "", nil)
+	conformance.Error(t, invalid, http.StatusUnprocessableEntity, "course_invalid")
+	firstPage := courseHTTP(t, server, http.MethodGet, "/api/v1/courses?page[limit]=1", session, csrf, "", nil)
+	assertCollectionPage(t, firstPage, 1, true, false, true)
+	supervisorsInvalid := courseHTTP(t, server, http.MethodGet,
+		"/api/v1/courses/"+created.ID+"/supervisors?page[limit]=0", session, csrf, "", nil)
+	conformance.Error(t, supervisorsInvalid, http.StatusUnprocessableEntity, "course_invalid")
+	supervisorsFirst := courseHTTP(t, server, http.MethodGet,
+		"/api/v1/courses/"+created.ID+"/supervisors?page[limit]=1", session, csrf, "", nil)
+	assertCollectionPage(t, supervisorsFirst, 1, true, false, true)
+	supervisorsLast := courseHTTP(t, server, http.MethodGet,
+		"/api/v1/courses/"+created.ID+"/supervisors?page[limit]=1&page[offset]=1", session, csrf, "", nil)
+	assertCollectionPage(t, supervisorsLast, 1, false, true, false)
+	supervisorsEmpty := courseHTTP(t, server, http.MethodGet,
+		"/api/v1/courses/"+created.ID+"/supervisors?page[limit]=1&page[offset]=2", session, csrf, "", nil)
+	assertCollectionPage(t, supervisorsEmpty, 0, false, true, false)
+	if !bytes.Contains(supervisorsEmpty.Body.Bytes(), []byte(`"data":[]`)) {
+		t.Fatalf("empty page data = %s", supervisorsEmpty.Body.String())
+	}
+}
+
+// assertCollectionPage verifies one paginated collection page: item count,
+// meta.has_more, and presence of the prev and next navigation links.
+func assertCollectionPage(t *testing.T, response *httptest.ResponseRecorder, items int,
+	wantNext, wantPrev, wantHasMore bool) map[string]any {
+	t.Helper()
+	document := conformance.Document(t, response)
+	data, ok := document["data"].([]any)
+	if !ok || len(data) != items {
+		t.Fatalf("collection data = %s, want %d items", response.Body.String(), items)
+	}
+	meta, ok := document["meta"].(map[string]any)
+	if !ok || meta["has_more"] != wantHasMore {
+		t.Fatalf("collection meta = %s, want has_more=%v", response.Body.String(), wantHasMore)
+	}
+	var links map[string]any
+	if raw, present := document["links"]; present {
+		links, ok = raw.(map[string]any)
+		if !ok {
+			t.Fatalf("collection links are not an object: %s", response.Body.String())
+		}
+	}
+	if _, exists := links["next"]; exists != wantNext {
+		t.Fatalf("collection next link presence = %v, want %v: %s", exists, wantNext, response.Body.String())
+	}
+	if _, exists := links["prev"]; exists != wantPrev {
+		t.Fatalf("collection prev link presence = %v, want %v: %s", exists, wantPrev, response.Body.String())
+	}
+	return document
+}
+
+func courseServerFixture(t *testing.T) (*httpserver.Server, *sql.DB, string) {
+	t.Helper()
+	root := t.TempDir()
+	dataDir, docRoot := filepath.Join(root, "data"), filepath.Join(root, "frontend")
+	if err := os.Mkdir(dataDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(docRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(docRoot, "index.html"), []byte("frontend"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	database := courseDatabaseAt(t, dataDir)
+	server, _, err := httpserver.New(httpserver.Options{DataDir: dataDir, DocRoot: docRoot})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server.SetIdentityLoader(func(ctx context.Context, id string) (httpserver.IdentityState, error) {
+		account, loadErr := user.LoadSecurityState(ctx, database, id)
+		return httpserver.IdentityState{SecurityGeneration: account.SecurityGeneration,
+			MustChangePassword: account.MustChangePassword, Banned: account.Banned}, loadErr
+	})
+	return server, database, dataDir
 }
 
 func courseDatabaseAt(t *testing.T, directory string) *sql.DB {

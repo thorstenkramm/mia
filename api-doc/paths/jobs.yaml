@@ -1,0 +1,45 @@
+jobs:
+  get:
+    tags: [Jobs]
+    operationId: listJobs
+    summary: List platform jobs
+    security: [{ sessionCookie: [] }]
+    parameters:
+      - { $ref: ../openapi.yaml#/components/parameters/PageLimit }
+      - { $ref: ../openapi.yaml#/components/parameters/PageOffset }
+    responses:
+      '200':
+        description: Paginated administrator diagnostic job collection.
+        content:
+          application/vnd.api+json:
+            schema: { $ref: ../schemas/resources/resources.yaml#/JobCollectionDocument }
+      '401': { $ref: ../responses/errors.yaml#/Unauthorized }
+      '403':
+        $ref: ../responses/errors.yaml#/Forbidden
+        description: Restricted session or non-administrator (`auth_password_change_required` or `job_unauthorized`).
+      '406': { $ref: ../responses/errors.yaml#/NotAcceptable }
+      '422':
+        $ref: ../responses/errors.yaml#/Unprocessable
+        description: Invalid pagination (`job_invalid`).
+
+job:
+  get:
+    tags: [Jobs]
+    operationId: getJob
+    summary: Get platform job
+    security: [{ sessionCookie: [] }]
+    parameters: [{ $ref: ../openapi.yaml#/components/parameters/ResourceID }]
+    responses:
+      '200':
+        description: Administrator diagnostic job.
+        content:
+          application/vnd.api+json:
+            schema: { $ref: ../schemas/resources/resources.yaml#/JobDocument }
+      '401': { $ref: ../responses/errors.yaml#/Unauthorized }
+      '403':
+        $ref: ../responses/errors.yaml#/Forbidden
+        description: Restricted session or non-administrator (`auth_password_change_required` or `job_unauthorized`).
+      '404':
+        $ref: ../responses/errors.yaml#/NotFound
+        description: Job not found (`job_not_found`).
+      '406': { $ref: ../responses/errors.yaml#/NotAcceptable }

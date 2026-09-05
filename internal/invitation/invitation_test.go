@@ -16,6 +16,7 @@ import (
 
 	"github.com/labstack/echo/v5"
 	"github.com/thorstenkramm/mia/internal/httpserver"
+	"github.com/thorstenkramm/mia/internal/httpserver/conformance"
 	"github.com/thorstenkramm/mia/internal/identity"
 	"github.com/thorstenkramm/mia/internal/provider/smtp"
 	miSQLite "github.com/thorstenkramm/mia/internal/sqlite"
@@ -91,6 +92,9 @@ func TestInvitationListPagination(t *testing.T) {
 	if result.Links["next"] == nil {
 		t.Fatal("expected next link with 5 total invitations and limit 2")
 	}
+	if result.Meta["has_more"] != true {
+		t.Fatal("expected meta.has_more true with 5 total invitations and limit 2")
+	}
 
 	_ = admin
 }
@@ -148,6 +152,8 @@ func TestInvitationHidesExistenceFromUnauthorized(t *testing.T) {
 	response := serve(t, server, http.MethodPost, "/api/v1/invitations", csrf, session,
 		`{"data":{"type":"invitations","attributes":{"email":"secret-admin@example.test","role":"administrator"}}}`)
 	assertStatus(t, response, http.StatusCreated)
+	document := conformance.Document(t, response)
+	conformance.Resource(t, document["data"], "invitations")
 	var created struct {
 		Data struct {
 			ID string `json:"id"`
@@ -179,12 +185,67 @@ func TestInvitationTokenRateLimiting(t *testing.T) {
 			assertCode(t, response, http.StatusUnprocessableEntity, "invitation_invalid")
 		} else {
 			// 11th should be rate limited with Retry-After header and 429 status.
-			assertCode(t, response, http.StatusTooManyRequests, "rate_limited")
+			conformance.Error(t, response, http.StatusTooManyRequests, "rate_limited")
 			if response.Header().Get("Retry-After") == "" {
 				t.Fatal("expected Retry-After header on rate limited request")
 			}
 		}
 	}
+}
+
+func TestInvitationCreateAndCommandResourcesRejectClientGeneratedIDs(t *testing.T) {
+	server, database := testServer(t)
+	admin := createAdminAccount(t, database, "id-admin")
+	csrf, session := loginSession(t, server, "id-admin", "correct horse battery")
+	for _, testCase := range []struct {
+		name, path, body, code string
+		cookie                 *http.Cookie
+	}{
+		{name: "invitation create", path: "/api/v1/invitations", code: "auth_invalid_request", cookie: session,
+			body: `{"data":{"type":"invitations","id":"client-id","attributes":{"email":"id@example.test","role":"supervisor"}}}`},
+		{name: "invitation preview", path: "/api/v1/invitation-previews", code: "invitation_invalid",
+			body: `{"data":{"type":"invitation-previews","id":"client-id","attributes":{"token":"invalid"}}}`},
+		{name: "invitation acceptance", path: "/api/v1/invitation-acceptances", code: "invitation_invalid",
+			body: `{"data":{"type":"invitation-acceptances","id":"client-id","attributes":{}}}`},
+		{name: "role grant", path: "/api/v1/users/" + admin.ID + "/roles", code: "auth_invalid_request",
+			cookie: session, body: `{"data":{"type":"user-roles","id":"client-id","attributes":{"role":"mentor"}}}`},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			response := serve(t, server, http.MethodPost, testCase.path, csrf, testCase.cookie, testCase.body)
+			conformance.Error(t, response, http.StatusUnprocessableEntity, testCase.code)
+		})
+	}
+}
+
+// Public invitation routes must classify protocol failures like every other
+// JSON:API route (415/413/400) while keeping domain failures at the generic
+// existence-hiding 422 invitation_invalid.
+func TestPublicInvitationRoutesClassifyProtocolErrors(t *testing.T) {
+	server, _ := testServer(t)
+	csrf := csrfToken(t, server)
+	for _, path := range []string{"/api/v1/invitation-previews", "/api/v1/invitation-acceptances"} {
+		unsupported := serveWithMedia(t, server, path, csrf, "application/json", `{"data":{"type":"x","attributes":{}}}`)
+		conformance.Error(t, unsupported, http.StatusUnsupportedMediaType, "unsupported_media_type")
+		oversized := serveWithMedia(t, server, path, csrf, "application/vnd.api+json", strings.Repeat("x", 1<<20+1))
+		conformance.Error(t, oversized, http.StatusRequestEntityTooLarge, "request_too_large")
+		malformed := serveWithMedia(t, server, path, csrf, "application/vnd.api+json", `{"data":`)
+		conformance.Error(t, malformed, http.StatusBadRequest, "malformed_request")
+	}
+	// A valid document with an unusable token keeps the generic domain error.
+	domain := serve(t, server, http.MethodPost, "/api/v1/invitation-previews", csrf, nil,
+		`{"data":{"type":"invitation-previews","attributes":{"token":"no-such-token"}}}`)
+	conformance.Error(t, domain, http.StatusUnprocessableEntity, "invitation_invalid")
+}
+
+func serveWithMedia(t *testing.T, server *httpserver.Server, path, csrf, mediaType, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	request := httptest.NewRequest(http.MethodPost, "http://mia.test"+path, bytes.NewBufferString(body))
+	request.Header.Set("Content-Type", mediaType)
+	request.Header.Set("X-CSRF-Token", csrf)
+	request.AddCookie(&http.Cookie{Name: "__Host-mia_csrf", Value: csrf})
+	response := httptest.NewRecorder()
+	server.Echo.ServeHTTP(response, request)
+	return response
 }
 
 func TestInvitationTimestampFormat(t *testing.T) {
@@ -289,6 +350,9 @@ func TestAdministratorCanViewAllInvitations(t *testing.T) {
 	}
 	if len(list.Data) != 1 {
 		t.Fatalf("expected 1 invitation in admin list, got %d", len(list.Data))
+	}
+	if list.Meta["has_more"] != false {
+		t.Fatal("expected meta.has_more false with a single invitation")
 	}
 
 	_ = supervisor
@@ -748,9 +812,13 @@ func TestPaginationLimitsAndUnknownParams(t *testing.T) {
 	response5 := serve(t, server, http.MethodGet, "/api/v1/invitations?page[limit]=0", csrf, session, "")
 	assertCode(t, response5, http.StatusUnprocessableEntity, "auth_invalid_request")
 
+	// Duplicate pagination parameters should be rejected (shared parser wiring).
+	response6 := serve(t, server, http.MethodGet, "/api/v1/invitations?page[limit]=2&page[limit]=3", csrf, session, "")
+	assertCode(t, response6, http.StatusUnprocessableEntity, "auth_invalid_request")
+
 	// Valid pagination should work.
-	response6 := serve(t, server, http.MethodGet, "/api/v1/invitations?page[limit]=25&page[offset]=0", csrf, session, "")
-	assertStatus(t, response6, http.StatusOK)
+	response7 := serve(t, server, http.MethodGet, "/api/v1/invitations?page[limit]=25&page[offset]=0", csrf, session, "")
+	assertStatus(t, response7, http.StatusOK)
 }
 
 func TestListNavigationLinks(t *testing.T) {
@@ -785,6 +853,9 @@ func TestListNavigationLinks(t *testing.T) {
 	if result.Links["prev"] != nil {
 		t.Fatal("expected no prev link at offset 0")
 	}
+	if result.Meta["has_more"] != true {
+		t.Fatal("expected meta.has_more true on the first page")
+	}
 
 	// List from offset 2 - should have prev link but no next.
 	response2 := serve(t, server, http.MethodGet, "/api/v1/invitations?page[limit]=2&page[offset]=2", csrf, session, "")
@@ -792,6 +863,7 @@ func TestListNavigationLinks(t *testing.T) {
 	var result2 struct {
 		Data  []any          `json:"data"`
 		Links map[string]any `json:"links"`
+		Meta  map[string]any `json:"meta"`
 	}
 	if err := json.Unmarshal(response2.Body.Bytes(), &result2); err != nil {
 		t.Fatal(err)
@@ -804,6 +876,9 @@ func TestListNavigationLinks(t *testing.T) {
 	}
 	if result2.Links["next"] != nil {
 		t.Fatal("expected no next link")
+	}
+	if result2.Meta["has_more"] != false {
+		t.Fatal("expected meta.has_more false on the last page")
 	}
 }
 

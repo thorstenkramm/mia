@@ -1,0 +1,477 @@
+courses:
+  get:
+    tags: [Courses]
+    operationId: listCourses
+    summary: List courses
+    security: [{ sessionCookie: [] }]
+    parameters:
+      - { $ref: ../openapi.yaml#/components/parameters/PageLimit }
+      - { $ref: ../openapi.yaml#/components/parameters/PageOffset }
+    responses:
+      '200':
+        description: Paginated visible courses.
+        content:
+          application/vnd.api+json:
+            schema: { $ref: ../schemas/resources/resources.yaml#/CourseCollectionDocument }
+      '401': { $ref: ../responses/errors.yaml#/Unauthorized }
+      '403':
+        $ref: ../responses/errors.yaml#/Forbidden
+        description: Restricted session (`auth_password_change_required`).
+      '406': { $ref: ../responses/errors.yaml#/NotAcceptable }
+      '422':
+        $ref: ../responses/errors.yaml#/Unprocessable
+        description: Invalid pagination (`course_invalid`).
+  post:
+    tags: [Courses]
+    operationId: createCourse
+    summary: Create course
+    security: [{ sessionCookie: [], csrfToken: [] }]
+    requestBody:
+      required: true
+      content:
+        application/vnd.api+json:
+          schema: { $ref: ../schemas/requests/requests.yaml#/CourseCreateRequestDocument }
+    responses:
+      '201':
+        description: Created inactive course.
+        content:
+          application/vnd.api+json:
+            schema: { $ref: ../schemas/resources/resources.yaml#/CourseDocument }
+      '400': { $ref: ../responses/errors.yaml#/BadRequest }
+      '401': { $ref: ../responses/errors.yaml#/Unauthorized }
+      '403':
+        $ref: ../responses/errors.yaml#/Forbidden
+        description: >-
+          CSRF, restricted session, or administrator authorization (`csrf_invalid`,
+          `auth_password_change_required`, or `course_unauthorized`).
+      '406': { $ref: ../responses/errors.yaml#/NotAcceptable }
+      '409':
+        $ref: ../responses/errors.yaml#/Conflict
+        description: Course name already exists (`course_name_taken`).
+      '413': { $ref: ../responses/errors.yaml#/RequestTooLarge }
+      '415': { $ref: ../responses/errors.yaml#/UnsupportedMediaType }
+      '422':
+        $ref: ../responses/errors.yaml#/Unprocessable
+        description: Invalid course or supervisor set (`course_invalid` or `course_supervisor_invalid`).
+
+course:
+  get:
+    tags: [Courses]
+    operationId: getCourse
+    summary: Get course
+    security: [{ sessionCookie: [] }]
+    parameters: [{ $ref: ../openapi.yaml#/components/parameters/ResourceID }]
+    responses:
+      '200':
+        description: Visible course.
+        content:
+          application/vnd.api+json:
+            schema: { $ref: ../schemas/resources/resources.yaml#/CourseDocument }
+      '401': { $ref: ../responses/errors.yaml#/Unauthorized }
+      '403':
+        $ref: ../responses/errors.yaml#/Forbidden
+        description: Restricted session (`auth_password_change_required`).
+      '404':
+        $ref: ../responses/errors.yaml#/NotFound
+        description: Missing or out-of-scope course (`course_not_found`).
+      '406': { $ref: ../responses/errors.yaml#/NotAcceptable }
+  patch:
+    tags: [Courses]
+    operationId: updateCourse
+    summary: Update course
+    security: [{ sessionCookie: [], csrfToken: [] }]
+    parameters: [{ $ref: ../openapi.yaml#/components/parameters/ResourceID }]
+    requestBody:
+      required: true
+      content:
+        application/vnd.api+json:
+          schema: { $ref: ../schemas/requests/requests.yaml#/CourseUpdateRequestDocument }
+    responses:
+      '200':
+        description: Updated course.
+        content:
+          application/vnd.api+json:
+            schema: { $ref: ../schemas/resources/resources.yaml#/CourseDocument }
+      '400': { $ref: ../responses/errors.yaml#/BadRequest }
+      '401': { $ref: ../responses/errors.yaml#/Unauthorized }
+      '403':
+        $ref: ../responses/errors.yaml#/Forbidden
+        description: >-
+          CSRF, restricted session, or name-change authorization (`csrf_invalid`,
+          `auth_password_change_required`, or `course_unauthorized`).
+      '404':
+        $ref: ../responses/errors.yaml#/NotFound
+        description: Missing or out-of-scope course (`course_not_found`).
+      '406': { $ref: ../responses/errors.yaml#/NotAcceptable }
+      '409':
+        $ref: ../responses/errors.yaml#/Conflict
+        description: Name conflict or active-course requirements lost (`course_name_taken` or `course_activation_unavailable`).
+      '413': { $ref: ../responses/errors.yaml#/RequestTooLarge }
+      '415': { $ref: ../responses/errors.yaml#/UnsupportedMediaType }
+      '422':
+        $ref: ../responses/errors.yaml#/Unprocessable
+        description: Invalid PATCH identity or fields (`course_invalid`).
+  delete:
+    tags: [Courses]
+    operationId: deleteCourse
+    summary: Delete course
+    security: [{ sessionCookie: [], csrfToken: [] }]
+    parameters: [{ $ref: ../openapi.yaml#/components/parameters/ResourceID }]
+    responses:
+      '204': { description: Inactive course and its course-scoped data deleted. }
+      '401': { $ref: ../responses/errors.yaml#/Unauthorized }
+      '403':
+        $ref: ../responses/errors.yaml#/Forbidden
+        description: >-
+          CSRF, restricted session, or administrator authorization (`csrf_invalid`,
+          `auth_password_change_required`, or `course_unauthorized`).
+      '404':
+        $ref: ../responses/errors.yaml#/NotFound
+        description: Course not found (`course_not_found`).
+      '406': { $ref: ../responses/errors.yaml#/NotAcceptable }
+      '409':
+        $ref: ../responses/errors.yaml#/Conflict
+        description: Active course or tutoring session (`course_invalid_state`).
+
+activations:
+  post:
+    tags: [Courses]
+    operationId: activateCourse
+    summary: Activate course
+    security: [{ sessionCookie: [], csrfToken: [] }]
+    parameters: [{ $ref: ../openapi.yaml#/components/parameters/ResourceID }]
+    responses:
+      '200':
+        description: Activated course.
+        content:
+          application/vnd.api+json:
+            schema: { $ref: ../schemas/resources/resources.yaml#/CourseDocument }
+      '401': { $ref: ../responses/errors.yaml#/Unauthorized }
+      '403':
+        $ref: ../responses/errors.yaml#/Forbidden
+        description: CSRF or restricted session (`csrf_invalid` or `auth_password_change_required`).
+      '404':
+        $ref: ../responses/errors.yaml#/NotFound
+        description: Missing or out-of-scope course (`course_not_found`).
+      '406': { $ref: ../responses/errors.yaml#/NotAcceptable }
+      '409':
+        $ref: ../responses/errors.yaml#/Conflict
+        description: Already active or activation requirements unmet (`course_invalid_state` or `course_activation_unavailable`).
+
+deactivations:
+  post:
+    tags: [Courses]
+    operationId: deactivateCourse
+    summary: Deactivate course
+    security: [{ sessionCookie: [], csrfToken: [] }]
+    parameters: [{ $ref: ../openapi.yaml#/components/parameters/ResourceID }]
+    responses:
+      '200':
+        description: Deactivated course.
+        content:
+          application/vnd.api+json:
+            schema: { $ref: ../schemas/resources/resources.yaml#/CourseDocument }
+      '401': { $ref: ../responses/errors.yaml#/Unauthorized }
+      '403':
+        $ref: ../responses/errors.yaml#/Forbidden
+        description: CSRF or restricted session (`csrf_invalid` or `auth_password_change_required`).
+      '404':
+        $ref: ../responses/errors.yaml#/NotFound
+        description: Missing or out-of-scope course (`course_not_found`).
+      '406': { $ref: ../responses/errors.yaml#/NotAcceptable }
+      '409':
+        $ref: ../responses/errors.yaml#/Conflict
+        description: Course is already inactive (`course_invalid_state`).
+
+supervisors:
+  get:
+    tags: [Courses]
+    operationId: listCourseSupervisors
+    summary: List course supervisors
+    security: [{ sessionCookie: [] }]
+    parameters:
+      - { $ref: ../openapi.yaml#/components/parameters/ResourceID }
+      - { $ref: ../openapi.yaml#/components/parameters/PageLimit }
+      - { $ref: ../openapi.yaml#/components/parameters/PageOffset }
+    responses:
+      '200':
+        description: Paginated supervisor identifiers.
+        content:
+          application/vnd.api+json:
+            schema: { $ref: ../schemas/resources/resources.yaml#/SupervisorCollectionDocument }
+      '401': { $ref: ../responses/errors.yaml#/Unauthorized }
+      '403':
+        $ref: ../responses/errors.yaml#/Forbidden
+        description: Restricted session (`auth_password_change_required`).
+      '404':
+        $ref: ../responses/errors.yaml#/NotFound
+        description: Missing or out-of-scope course (`course_not_found`).
+      '406': { $ref: ../responses/errors.yaml#/NotAcceptable }
+      '422':
+        $ref: ../responses/errors.yaml#/Unprocessable
+        description: Invalid pagination (`course_invalid`).
+  post:
+    tags: [Courses]
+    operationId: assignCourseSupervisor
+    summary: Assign course supervisor
+    security: [{ sessionCookie: [], csrfToken: [] }]
+    parameters: [{ $ref: ../openapi.yaml#/components/parameters/ResourceID }]
+    requestBody:
+      required: true
+      content:
+        application/vnd.api+json:
+          schema: { $ref: ../schemas/requests/requests.yaml#/SupervisorAssignmentRequestDocument }
+    responses:
+      '204': { description: Supervisor assigned; an existing assignment is idempotent. }
+      '400': { $ref: ../responses/errors.yaml#/BadRequest }
+      '401': { $ref: ../responses/errors.yaml#/Unauthorized }
+      '403':
+        $ref: ../responses/errors.yaml#/Forbidden
+        description: >-
+          CSRF, restricted session, or administrator authorization (`csrf_invalid`,
+          `auth_password_change_required`, or `course_unauthorized`).
+      '404':
+        $ref: ../responses/errors.yaml#/NotFound
+        description: Course not found (`course_not_found`).
+      '406': { $ref: ../responses/errors.yaml#/NotAcceptable }
+      '413': { $ref: ../responses/errors.yaml#/RequestTooLarge }
+      '415': { $ref: ../responses/errors.yaml#/UnsupportedMediaType }
+      '422':
+        $ref: ../responses/errors.yaml#/Unprocessable
+        description: Invalid or ineligible supervisor identifier (`course_supervisor_invalid`).
+
+supervisor:
+  delete:
+    tags: [Courses]
+    operationId: removeCourseSupervisor
+    summary: Remove course supervisor
+    security: [{ sessionCookie: [], csrfToken: [] }]
+    parameters:
+      - { $ref: ../openapi.yaml#/components/parameters/ResourceID }
+      - { $ref: ../openapi.yaml#/components/parameters/UserID }
+    responses:
+      '204': { description: Supervisor assignment removed. }
+      '401': { $ref: ../responses/errors.yaml#/Unauthorized }
+      '403':
+        $ref: ../responses/errors.yaml#/Forbidden
+        description: >-
+          CSRF, restricted session, or administrator authorization (`csrf_invalid`,
+          `auth_password_change_required`, or `course_unauthorized`).
+      '404':
+        $ref: ../responses/errors.yaml#/NotFound
+        description: Course or assignment not found (`course_not_found`).
+      '406': { $ref: ../responses/errors.yaml#/NotAcceptable }
+      '409':
+        $ref: ../responses/errors.yaml#/Conflict
+        description: Assignment is the course's last supervisor (`course_last_supervisor`).
+
+logo:
+  get:
+    tags: [Courses]
+    operationId: getCourseLogo
+    summary: Download course logo
+    security: [{ sessionCookie: [] }]
+    parameters: [{ $ref: ../openapi.yaml#/components/parameters/ResourceID }]
+    responses:
+      '200':
+        description: Metadata-free PNG with ETag and private no-cache headers.
+        content:
+          image/png:
+            schema: { $ref: ../schemas/json-api/documents.yaml#/BinaryPayload }
+      '304': { description: The If-None-Match validator matched. }
+      '401': { $ref: ../responses/errors.yaml#/Unauthorized }
+      '403':
+        $ref: ../responses/errors.yaml#/Forbidden
+        description: Restricted session (`auth_password_change_required`).
+      '404':
+        $ref: ../responses/errors.yaml#/NotFound
+        description: Missing, out-of-scope, or absent logo (`course_not_found`).
+  put:
+    tags: [Courses]
+    operationId: putCourseLogo
+    summary: Upload course logo
+    security: [{ sessionCookie: [], csrfToken: [] }]
+    parameters: [{ $ref: ../openapi.yaml#/components/parameters/ResourceID }]
+    requestBody:
+      required: true
+      content:
+        image/jpeg:
+          schema: { $ref: ../schemas/requests/requests.yaml#/ImageUploadRequest }
+        image/png:
+          schema: { $ref: ../schemas/requests/requests.yaml#/ImageUploadRequest }
+    responses:
+      '204': { description: Normalized PNG logo saved. }
+      '401': { $ref: ../responses/errors.yaml#/Unauthorized }
+      '403':
+        $ref: ../responses/errors.yaml#/Forbidden
+        description: CSRF or restricted session (`csrf_invalid` or `auth_password_change_required`).
+      '404':
+        $ref: ../responses/errors.yaml#/NotFound
+        description: Missing or out-of-scope course (`course_not_found`).
+      '422':
+        $ref: ../responses/errors.yaml#/Unprocessable
+        description: Invalid media type, size, signature, dimensions, or image (`course_logo_invalid`).
+  delete:
+    tags: [Courses]
+    operationId: deleteCourseLogo
+    summary: Delete course logo
+    security: [{ sessionCookie: [], csrfToken: [] }]
+    parameters: [{ $ref: ../openapi.yaml#/components/parameters/ResourceID }]
+    responses:
+      '204': { description: Logo deleted; absence is idempotent. }
+      '401': { $ref: ../responses/errors.yaml#/Unauthorized }
+      '403':
+        $ref: ../responses/errors.yaml#/Forbidden
+        description: CSRF or restricted session (`csrf_invalid` or `auth_password_change_required`).
+      '404':
+        $ref: ../responses/errors.yaml#/NotFound
+        description: Missing or out-of-scope course (`course_not_found`).
+      '406': { $ref: ../responses/errors.yaml#/NotAcceptable }
+
+students:
+  get:
+    tags: [Courses]
+    operationId: listCourseStudents
+    summary: List course students
+    security: [{ sessionCookie: [] }]
+    parameters:
+      - { $ref: ../openapi.yaml#/components/parameters/ResourceID }
+      - { $ref: ../openapi.yaml#/components/parameters/PageLimit }
+      - { $ref: ../openapi.yaml#/components/parameters/PageOffset }
+    responses:
+      '200':
+        description: Paginated course-student memberships.
+        content:
+          application/vnd.api+json:
+            schema: { $ref: ../schemas/resources/resources.yaml#/CourseStudentCollectionDocument }
+      '401': { $ref: ../responses/errors.yaml#/Unauthorized }
+      '403':
+        $ref: ../responses/errors.yaml#/Forbidden
+        description: Restricted session (`auth_password_change_required`).
+      '404':
+        $ref: ../responses/errors.yaml#/NotFound
+        description: Missing or out-of-scope course (`course_not_found`).
+      '406': { $ref: ../responses/errors.yaml#/NotAcceptable }
+      '422':
+        $ref: ../responses/errors.yaml#/Unprocessable
+        description: Invalid pagination (`course_student_invalid`).
+  post:
+    tags: [Courses]
+    operationId: addCourseStudent
+    summary: Add or provision student
+    security: [{ sessionCookie: [], csrfToken: [] }]
+    parameters: [{ $ref: ../openapi.yaml#/components/parameters/ResourceID }]
+    requestBody:
+      required: true
+      content:
+        application/vnd.api+json:
+          schema: { $ref: ../schemas/requests/requests.yaml#/CourseStudentRequestDocument }
+    responses:
+      '201':
+        description: Created or existing membership.
+        content:
+          application/vnd.api+json:
+            schema: { $ref: ../schemas/resources/resources.yaml#/CourseStudentDocument }
+      '400': { $ref: ../responses/errors.yaml#/BadRequest }
+      '401': { $ref: ../responses/errors.yaml#/Unauthorized }
+      '403':
+        $ref: ../responses/errors.yaml#/Forbidden
+        description: CSRF or restricted session (`csrf_invalid` or `auth_password_change_required`).
+      '404':
+        $ref: ../responses/errors.yaml#/NotFound
+        description: Hidden course or existing student (`course_not_found` or `course_student_not_found`).
+      '406': { $ref: ../responses/errors.yaml#/NotAcceptable }
+      '409':
+        $ref: ../responses/errors.yaml#/Conflict
+        description: Inactive course or duplicate provisioned username (`course_invalid_state` or `username_taken`).
+      '413': { $ref: ../responses/errors.yaml#/RequestTooLarge }
+      '415': { $ref: ../responses/errors.yaml#/UnsupportedMediaType }
+      '422':
+        $ref: ../responses/errors.yaml#/Unprocessable
+        description: Invalid mode, credentials, or profile (`course_student_invalid`).
+
+student:
+  delete:
+    tags: [Courses]
+    operationId: removeCourseStudent
+    summary: Remove course membership
+    security: [{ sessionCookie: [], csrfToken: [] }]
+    parameters:
+      - { $ref: ../openapi.yaml#/components/parameters/ResourceID }
+      - { $ref: ../openapi.yaml#/components/parameters/UserID }
+    responses:
+      '204': { description: Membership and student course-scoped data removed. }
+      '401': { $ref: ../responses/errors.yaml#/Unauthorized }
+      '403':
+        $ref: ../responses/errors.yaml#/Forbidden
+        description: CSRF or restricted session (`csrf_invalid` or `auth_password_change_required`).
+      '404':
+        $ref: ../responses/errors.yaml#/NotFound
+        description: Hidden course or membership (`course_not_found` or `course_student_not_found`).
+      '406': { $ref: ../responses/errors.yaml#/NotAcceptable }
+      '409':
+        $ref: ../responses/errors.yaml#/Conflict
+        description: Student has an active tutoring session (`course_invalid_state`).
+
+temporaryPasswords:
+  post:
+    tags: [Users]
+    operationId: setTemporaryPassword
+    summary: Set temporary student password
+    security: [{ sessionCookie: [], csrfToken: [] }]
+    parameters: [{ $ref: ../openapi.yaml#/components/parameters/ResourceID }]
+    requestBody:
+      required: true
+      content:
+        application/vnd.api+json:
+          schema: { $ref: ../schemas/requests/requests.yaml#/TemporaryPasswordRequestDocument }
+    responses:
+      '204': { description: 'Temporary password set, sessions invalidated, and replacement required.' }
+      '400': { $ref: ../responses/errors.yaml#/BadRequest }
+      '401': { $ref: ../responses/errors.yaml#/Unauthorized }
+      '403':
+        $ref: ../responses/errors.yaml#/Forbidden
+        description: CSRF or restricted session (`csrf_invalid` or `auth_password_change_required`).
+      '404':
+        $ref: ../responses/errors.yaml#/NotFound
+        description: Missing, ineligible, or out-of-scope student (`course_student_not_found`).
+      '406': { $ref: ../responses/errors.yaml#/NotAcceptable }
+      '413': { $ref: ../responses/errors.yaml#/RequestTooLarge }
+      '415': { $ref: ../responses/errors.yaml#/UnsupportedMediaType }
+      '422':
+        $ref: ../responses/errors.yaml#/Unprocessable
+        description: Invalid resource or password (`course_student_invalid`).
+
+bans:
+  post:
+    tags: [Users]
+    operationId: banStudent
+    summary: Ban student
+    security: [{ sessionCookie: [], csrfToken: [] }]
+    parameters: [{ $ref: ../openapi.yaml#/components/parameters/ResourceID }]
+    responses:
+      '204': { description: Student banned and security artifacts invalidated. }
+      '401': { $ref: ../responses/errors.yaml#/Unauthorized }
+      '403':
+        $ref: ../responses/errors.yaml#/Forbidden
+        description: CSRF or restricted session (`csrf_invalid` or `auth_password_change_required`).
+      '404':
+        $ref: ../responses/errors.yaml#/NotFound
+        description: Missing, ineligible, or out-of-scope student (`course_student_not_found`).
+      '406': { $ref: ../responses/errors.yaml#/NotAcceptable }
+  delete:
+    tags: [Users]
+    operationId: unbanStudent
+    summary: Unban student
+    security: [{ sessionCookie: [], csrfToken: [] }]
+    parameters: [{ $ref: ../openapi.yaml#/components/parameters/ResourceID }]
+    responses:
+      '204': { description: Student unbanned and security artifacts invalidated. }
+      '401': { $ref: ../responses/errors.yaml#/Unauthorized }
+      '403':
+        $ref: ../responses/errors.yaml#/Forbidden
+        description: CSRF or restricted session (`csrf_invalid` or `auth_password_change_required`).
+      '404':
+        $ref: ../responses/errors.yaml#/NotFound
+        description: Missing, ineligible, or out-of-scope student (`course_student_not_found`).
+      '406': { $ref: ../responses/errors.yaml#/NotAcceptable }

@@ -1,0 +1,182 @@
+invitations:
+  get:
+    tags: [Invitations]
+    operationId: listInvitations
+    summary: List invitations
+    security: [{ sessionCookie: [] }]
+    parameters:
+      - { $ref: ../openapi.yaml#/components/parameters/PageLimit }
+      - { $ref: ../openapi.yaml#/components/parameters/PageOffset }
+    responses:
+      '200':
+        description: Paginated invitations with unified `meta.has_more` and navigation links.
+        content:
+          application/vnd.api+json:
+            schema: { $ref: ../schemas/resources/resources.yaml#/InvitationCollectionDocument }
+      '401': { $ref: ../responses/errors.yaml#/Unauthorized }
+      '403':
+        $ref: ../responses/errors.yaml#/Forbidden
+        description: >-
+          Restricted session or invitation-list authorization (`auth_password_change_required` or
+          `invitation_list_unauthorized`).
+      '406': { $ref: ../responses/errors.yaml#/NotAcceptable }
+      '422':
+        $ref: ../responses/errors.yaml#/Unprocessable
+        description: Invalid pagination (`auth_invalid_request`).
+  post:
+    tags: [Invitations]
+    operationId: createInvitation
+    summary: Create invitation
+    security: [{ sessionCookie: [], csrfToken: [] }]
+    requestBody:
+      required: true
+      content:
+        application/vnd.api+json:
+          schema: { $ref: ../schemas/requests/requests.yaml#/InvitationCreateRequestDocument }
+    responses:
+      '201':
+        description: Created invitation.
+        content:
+          application/vnd.api+json:
+            schema: { $ref: ../schemas/resources/resources.yaml#/InvitationDocument }
+      '400': { $ref: ../responses/errors.yaml#/BadRequest }
+      '401': { $ref: ../responses/errors.yaml#/Unauthorized }
+      '403':
+        $ref: ../responses/errors.yaml#/Forbidden
+        description: >-
+          CSRF, restricted session, or role authorization (`csrf_invalid`, `auth_password_change_required`, or
+          `invitation_role_unauthorized`).
+      '406': { $ref: ../responses/errors.yaml#/NotAcceptable }
+      '409':
+        $ref: ../responses/errors.yaml#/Conflict
+        description: Email is registered or already has a pending invitation (`invitation_email_registered`).
+      '413': { $ref: ../responses/errors.yaml#/RequestTooLarge }
+      '415': { $ref: ../responses/errors.yaml#/UnsupportedMediaType }
+      '422':
+        $ref: ../responses/errors.yaml#/Unprocessable
+        description: Invalid resource or email (`auth_invalid_request`).
+
+invitation:
+  get:
+    tags: [Invitations]
+    operationId: getInvitation
+    summary: Get invitation
+    security: [{ sessionCookie: [] }]
+    parameters: [{ $ref: ../openapi.yaml#/components/parameters/ResourceID }]
+    responses:
+      '200':
+        description: Invitation visible to the caller.
+        content:
+          application/vnd.api+json:
+            schema: { $ref: ../schemas/resources/resources.yaml#/InvitationDocument }
+      '401': { $ref: ../responses/errors.yaml#/Unauthorized }
+      '403':
+        $ref: ../responses/errors.yaml#/Forbidden
+        description: Restricted session (`auth_password_change_required`).
+      '404':
+        $ref: ../responses/errors.yaml#/NotFound
+        description: Missing or out-of-scope invitation (`invitation_not_found`).
+      '406': { $ref: ../responses/errors.yaml#/NotAcceptable }
+  delete:
+    tags: [Invitations]
+    operationId: deleteInvitation
+    summary: Revoke pending or delete faulty invitation
+    security: [{ sessionCookie: [], csrfToken: [] }]
+    parameters: [{ $ref: ../openapi.yaml#/components/parameters/ResourceID }]
+    responses:
+      '204': { description: Pending invitation revoked or faulty invitation deleted. }
+      '401': { $ref: ../responses/errors.yaml#/Unauthorized }
+      '403':
+        $ref: ../responses/errors.yaml#/Forbidden
+        description: CSRF or restricted session (`csrf_invalid` or `auth_password_change_required`).
+      '404':
+        $ref: ../responses/errors.yaml#/NotFound
+        description: Missing or out-of-scope invitation (`invitation_not_found`).
+      '406': { $ref: ../responses/errors.yaml#/NotAcceptable }
+      '422':
+        $ref: ../responses/errors.yaml#/Unprocessable
+        description: Accepted or revoked invitation (`invitation_invalid`).
+
+invitationResends:
+  post:
+    tags: [Invitations]
+    operationId: resendInvitation
+    summary: Resend invitation
+    security: [{ sessionCookie: [], csrfToken: [] }]
+    parameters: [{ $ref: ../openapi.yaml#/components/parameters/ResourceID }]
+    responses:
+      '204': { description: Pending invitation token rotated and delivery admitted. }
+      '401': { $ref: ../responses/errors.yaml#/Unauthorized }
+      '403':
+        $ref: ../responses/errors.yaml#/Forbidden
+        description: CSRF or restricted session (`csrf_invalid` or `auth_password_change_required`).
+      '404':
+        $ref: ../responses/errors.yaml#/NotFound
+        description: Missing or out-of-scope invitation (`invitation_not_found`).
+      '406': { $ref: ../responses/errors.yaml#/NotAcceptable }
+      '422':
+        $ref: ../responses/errors.yaml#/Unprocessable
+        description: Invitation is not pending (`invitation_invalid`).
+
+invitationPreviews:
+  post:
+    tags: [Invitations]
+    operationId: previewInvitation
+    summary: Preview invitation
+    security: [{ csrfToken: [] }]
+    requestBody:
+      required: true
+      content:
+        application/vnd.api+json:
+          schema: { $ref: ../schemas/requests/requests.yaml#/InvitationPreviewRequestDocument }
+    responses:
+      '200':
+        description: Platform and role for a valid pending invitation.
+        content:
+          application/vnd.api+json:
+            schema: { $ref: ../schemas/resources/resources.yaml#/InvitationPreviewDocument }
+      '400': { $ref: ../responses/errors.yaml#/BadRequest }
+      '403':
+        $ref: ../responses/errors.yaml#/Forbidden
+        description: CSRF validation failed (`csrf_invalid`).
+      '406': { $ref: ../responses/errors.yaml#/NotAcceptable }
+      '413': { $ref: ../responses/errors.yaml#/RequestTooLarge }
+      '415': { $ref: ../responses/errors.yaml#/UnsupportedMediaType }
+      '422':
+        $ref: ../responses/errors.yaml#/Unprocessable
+        description: Invalid, missing, consumed, or non-pending token (`invitation_invalid`).
+      '429': { $ref: ../responses/errors.yaml#/RateLimited }
+
+invitationAcceptances:
+  post:
+    tags: [Invitations]
+    operationId: acceptInvitation
+    summary: Accept invitation
+    security: [{ csrfToken: [] }]
+    requestBody:
+      required: true
+      content:
+        application/vnd.api+json:
+          schema: { $ref: ../schemas/requests/requests.yaml#/InvitationAcceptanceRequestDocument }
+    responses:
+      '201':
+        description: Identity-only user created; the account signs in through normal login.
+        content:
+          application/vnd.api+json:
+            schema: { $ref: ../schemas/resources/resources.yaml#/CreatedUserDocument }
+      '400': { $ref: ../responses/errors.yaml#/BadRequest }
+      '403':
+        $ref: ../responses/errors.yaml#/Forbidden
+        description: CSRF validation failed (`csrf_invalid`).
+      '406': { $ref: ../responses/errors.yaml#/NotAcceptable }
+      '409':
+        $ref: ../responses/errors.yaml#/Conflict
+        description: Email or username conflict (`invitation_email_registered` or `username_taken`).
+      '413': { $ref: ../responses/errors.yaml#/RequestTooLarge }
+      '415': { $ref: ../responses/errors.yaml#/UnsupportedMediaType }
+      '422':
+        $ref: ../responses/errors.yaml#/Unprocessable
+        description: >-
+          Invalid invitation, password, username, or profile (`invitation_invalid`, `auth_invalid_password`, or
+          `auth_invalid_request`).
+      '429': { $ref: ../responses/errors.yaml#/RateLimited }

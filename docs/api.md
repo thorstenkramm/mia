@@ -1,11 +1,12 @@
 # API Design
 
-Audience: frontend and backend developers. This document defines the current API
-layout draft. The [product requirements](product-requirements.md) remain
-authoritative for behavior, authorization, and security boundaries.
-
-The API is not implemented yet. Attribute schemas and the open transport
-decisions at the end of this document must be completed before implementation.
+Audience: frontend and backend developers. This document explains product
+rationale, authorization boundaries, and workflows that span API routes. The
+[OpenAPI 3.2 contract](../api-doc/openapi.yaml) is the source of truth for
+implemented paths, methods, media types, schemas, status codes, stable errors,
+security requirements, and request bounds. The
+[product requirements](product-requirements.md) remain authoritative for product
+behavior, authorization, and security boundaries.
 
 ## Contents
 
@@ -25,25 +26,19 @@ decisions at the end of this document must be completed before implementation.
 
 ## Conventions
 
-### Prefix and media types
+### Transport contract
 
-- Versioned API routes use `/api/v1`.
-- JSON resources and errors use JSON:API with
-  `application/vnd.api+json`.
-- Resource types use plural kebab-case. Attributes use snake_case.
-- Collections and resources have no trailing slash. The router does not serve
-  the same resource at both forms.
-- Uploads, downloads, generated audio, and tutor-response event streams use
-  their explicitly documented non-JSON:API media types.
-- A non-upload request body is limited to one MiB before parsing. Oversized
-  requests return HTTP `413 Content Too Large`.
+Implemented transport details are defined only in
+[`api-doc/openapi.yaml`](../api-doc/openapi.yaml). JSON resources use JSON:API;
+raw images, multipart uploads, downloads, normalized-content streams, generated
+audio, and tutor-response event streams use their operation-specific media
+types. Unknown routes and unsupported methods reach ordinary API `404` or `405`
+handling before JSON:API `Accept` negotiation.
 
 ### Identifiers and time
 
 - Resource IDs are opaque and clients never derive authorization from them.
 - Every instant uses RFC 3339 UTC with the `Z` suffix.
-- Responses and persistence normalize instants to exactly six fractional digits.
-- Requests may contain at most nine fractional digits.
 - Clients convert display-local values to UTC before sending an instant.
 - One-time mentoring appointments use `scheduled_for` as a UTC instant.
 
@@ -59,18 +54,10 @@ decisions at the end of this document must be completed before implementation.
 
 ### Pagination and filtering
 
-- Collection routes use offset pagination with `page[limit]` and
-  `page[offset]`.
-- The default limit is 25, the maximum limit is 100, and the default offset is
-  zero. MIA rejects a negative value or an offset above 10,000.
-- Unless a route documents a more meaningful fixed order, collections sort by
-  `created_at` descending and then resource ID descending.
-- Collections fetch one row beyond the requested limit to determine whether a
-  next page exists. Responses provide offset, limit, and navigation links but do
-  not calculate or return an exact total by default.
-- Each collection documents its supported filters and stable sort order before
-  implementation.
-- Limits are bounded by MIA; clients cannot request unbounded collections.
+Growing collections use bounded deterministic pagination without calculating an
+exact total by default. Each implemented operation's allowed parameters, bounds,
+and response links are defined in OpenAPI. Bounded unpaginated collections reject
+all query parameters rather than silently accepting pagination or filters.
 
 ### Included relationships
 
@@ -83,9 +70,7 @@ decisions at the end of this document must be completed before implementation.
 
 ### Errors and resource hiding
 
-- Errors use JSON:API error objects with HTTP status, stable machine-readable
-  code, title, and safe detail.
-- Validation errors identify the relevant source pointer or parameter.
+- Errors use the JSON:API shapes and stable codes defined in OpenAPI.
 - Authentication-sensitive public responses do not reveal account existence.
 - An out-of-scope sensitive resource returns the same public result as an
   unknown resource.
@@ -102,6 +87,9 @@ decisions at the end of this document must be completed before implementation.
 - Hidden-resource responses retain ordinary caller and IP limiting but create no
   limiter key derived from an unauthorized resource. Denied reads are not
   individually audited.
+- Protocol failures rejected before domain handling do not count as login or
+  domain attempts and do not create domain-denial audit events. Valid credential,
+  authorization, and domain failures retain their documented audit behavior.
 
 ### Authorization
 
@@ -192,38 +180,20 @@ replacement and logout when MIA next checks account state.
 - `POST /api/v1/auth/mfa-challenges/{id}/recovery-code-consumptions`
 - `POST /api/v1/auth/mfa-management-proofs`
 
-### First password-authentication slice
+### Authentication transport
 
-`POST /api/v1/auth/login` accepts a `login-attempts` JSON:API resource with `username` and `password`
-attributes. A successful response is `200` and contains an `auth-sessions` resource whose ID is the authenticated
-user ID and whose attributes contain only `stage` (`authenticated`, `mfa`, or `password-change`). An `mfa` response
-also contains the opaque `mfa_challenge_id`. It never returns credentials, password hashes, roles, or profile data.
-Invalid credentials and banned accounts both return `401 auth_invalid_credentials`; invalid request shape returns
-`422 auth_invalid_request`; a body exceeding 1 MiB returns `413 auth_request_too_large`; an unsupported request
-media type returns `415 auth_unsupported_media_type`; throttling returns `429 auth_login_throttled` with
-`Retry-After`.
+The concrete login, logout, password-change, recovery, reset, and MFA request and
+response contracts are defined under the Authentication tag in OpenAPI. Responses
+never expose credentials, password hashes, recovery tokens, roles, or profile
+data. The `auth-sessions` resource is a singleton view whose ID is the
+authenticated account ID, including during restricted login stages.
 
-`POST /api/v1/auth/logout` requires a valid login-stage cookie, clears that browser's cookie, rotates CSRF state, and
-returns `204`. A missing, invalid, or expired stage cookie returns `401 auth_unauthenticated`.
-
-`POST /api/v1/auth/password-changes` requires the `password-change` stage and accepts a `password-changes`
-resource with `password` and `password_confirmation` attributes. It validates equality and normal password policy,
-clears the password gate, rotates into a fresh authenticated session and CSRF state, and returns the safe
-`auth-sessions` resource. A missing or different stage returns `403 auth_password_change_required`; invalid or
-non-compliant input returns `422 auth_invalid_password` without echoing the submitted value.
-
-`POST /api/v1/auth/password-recovery-requests` accepts a `password-recovery-requests` resource with the complete
-`username` attribute. It always returns `204` for a well-formed request, including for unknown, banned, student-only,
-syntactically invalid usernames, and rate-limited requests; it does not send `Retry-After`. An invalid resource shape
-returns `422 auth_invalid_request`, oversized input returns `413 auth_request_too_large`, and an unsupported media type
-returns `415 auth_unsupported_media_type`.
-
-`POST /api/v1/auth/password-resets` accepts a `password-resets` resource with `token`, `password`, and
-`password_confirmation` attributes. It returns `204` after a valid reset and never creates a browser session. Unknown,
-expired, consumed, malformed, banned, or deleted-token owners return `422 auth_invalid_reset_token` uniformly; throttled
-submissions return the same error without `Retry-After`. A valid token with non-compliant or mismatched passwords
-returns `422 auth_invalid_password` and leaves the token usable; request shape, body size, and media type errors use the
-same codes as recovery requests.
+Password recovery intentionally returns the same empty response for unknown,
+banned, student-only, invalid, accepted, and throttled usernames. Dedicated
+recovery throttling therefore sends no `Retry-After` and cannot become an
+account-existence oracle. Password reset never creates a browser session; an
+invalid or unusable token has one uniform public result, while a password-policy
+failure leaves an otherwise valid token usable.
 
 ### Password blocklist provenance
 
@@ -282,42 +252,19 @@ It is valid for five minutes and one MFA disable or replacement. The mutation
 consumes it atomically. Password, MFA, ban-state, or account-state changes
 invalidate all outstanding MFA challenges and management proofs for the user.
 
-### MFA request resources
+### MFA transport
 
-`POST /api/v1/users/me/mfa-enrollments` accepts an `mfa-enrollments` resource
-with `method`. TOTP enrollment returns an `mfa-enrollments` resource containing
-the provisioning URI. SMS enrollment is unavailable until ClickSend and verified
-profile-mobile support are configured. Verification accepts an
-`mfa-enrollment-verifications` resource with `code`; success returns exactly ten
-`mfa-recovery-codes` once. Codes are 16-character uppercase Crockford Base32
-values and cannot be retrieved again.
-
-MFA challenge verification accepts `mfa-verifications` with `code`; recovery
-consumption accepts `mfa-recovery-code-consumptions` with `code`. Both require a
-matching `mfa` session cookie and challenge ID. Invalid values return
-`auth_invalid_mfa_code` or `auth_invalid_recovery_code`; replayed TOTP steps
-return `auth_mfa_step_used`.
-
-`POST /api/v1/auth/mfa-management-proofs` accepts an
-`mfa-management-proofs` resource with the current password and MFA `code`. It
-returns an opaque UUID proof. Supplying that proof in `X-MFA-Management-Proof`
-allows one factor disable through `DELETE /api/v1/users/me/mfa-enrollments/{id}`
-or one replacement enrollment. A missing, expired, or consumed proof returns
-`auth_mfa_proof_required`.
+OpenAPI defines the concrete enrollment, verification, resend, recovery-code,
+and management-proof resources. Successful activation shows exactly ten
+single-use recovery codes once; they cannot be retrieved again. A management
+proof is an opaque five-minute bearer value for one factor disable or replacement
+and is distinct from its non-secret JSON:API resource ID.
 
 ## Invitations
 
-Authenticated invitation management uses stable invitation IDs:
-
-- `GET|POST /api/v1/invitations`
-- `GET|DELETE /api/v1/invitations/{id}`
-- `POST /api/v1/invitations/{id}/resends`
-
-Public preview and acceptance submit the invitation token in the request body so
-tokens do not appear in access-log paths:
-
-- `POST /api/v1/invitation-previews`
-- `POST /api/v1/invitation-acceptances`
+OpenAPI defines the authenticated invitation-management and public preview and
+acceptance operations. Public operations submit invitation tokens in request
+bodies so tokens do not appear in access-log paths.
 
 Administrator, supervisor, and mentor invitations are single-use, do not expire,
 and normally remain pending until accepted or revoked. Definite initial SMTP
@@ -345,16 +292,9 @@ The same actor authorization governs pending revocation and faulty deletion.
 
 ## Current user and MFA
 
-- `GET|PATCH /api/v1/users/me`
-- `GET|POST /api/v1/users/me/mfa-enrollments`
-- `POST /api/v1/users/me/mfa-enrollments/{id}/verifications`
-- `POST /api/v1/users/me/mfa-enrollments/{id}/resends`
-- `DELETE /api/v1/users/me/mfa-enrollments/{id}`
-- `POST /api/v1/users/me/mobile-change-challenges`
-- `POST /api/v1/users/me/mobile-change-challenges/{id}/verifications`
-- `POST /api/v1/users/me/mobile-change-challenges/{id}/resends`
-- `DELETE /api/v1/users/me/mobile`
-- `GET|PUT|DELETE /api/v1/users/me/avatar`
+OpenAPI defines current-profile, MFA, mobile, and avatar transport details. For
+the singleton `/users/me` alias, PATCH identity is the authenticated account ID,
+not the literal string `me`.
 
 Field-level authorization still applies to `PATCH /users/me`. Student-only
 accounts cannot mutate their profiles. Administrators, supervisors, and mentors
@@ -381,33 +321,15 @@ never exposes an internal filesystem path. Download authorization is identical
 to profile-view authorization for that user and responses use `image/png`, safe
 content headers, a strong content ETag, and `Cache-Control: private, no-cache`.
 
-The implemented current-user resource has type `users`. `GET /users/me` returns
-`username`, nullable `email`, nullable `name`, nullable `nickname`,
-`preferred_language`, `country`, `time_zone`, nullable `tts_voice`,
-`has_verified_mobile`, and nullable `avatar_url`. It deliberately does not return
-the mobile number. `PATCH /users/me` accepts only `name`, `nickname`,
-`preferred_language`, `country`, `time_zone`, and `tts_voice`; unknown or
-security-owned fields reject the whole request. It returns the updated resource.
-
-Creating a mobile challenge accepts a `mobile-change-challenges` resource with
-one `mobile` attribute and returns only its challenge ID. Verification accepts a
-`mobile-change-verifications` resource with one `code` attribute. Resend and
-verification success return 204 and never return a destination or code. Mobile
-removal returns 204. Profile and mobile mutations use JSON:API; avatar PUT uses
-exactly `image/jpeg` or `image/png` and successful avatar PUT/DELETE return 204.
+Current-profile responses deliberately omit the mobile number. Mobile challenge
+responses never return the destination or verification code. Raw avatar upload
+uses JPEG or PNG rather than multipart form data; the normalized stored and
+downloaded representation remains PNG.
 
 ## User administration
 
-- `GET /api/v1/users`
-- `GET|PATCH|DELETE /api/v1/users/{id}`
-- `POST /api/v1/users/{id}/roles`
-- `GET|PUT|DELETE /api/v1/users/{id}/avatar`
-- `POST /api/v1/users/{id}/temporary-passwords`
-- `POST /api/v1/users/{id}/mfa-resets`
-- `POST /api/v1/users/{id}/bans`
-- `DELETE /api/v1/users/{id}/bans`
-
-These routes do not create a generic administrator override. Each operation
+The implemented operations are listed in OpenAPI. Planned user-administration
+operations do not create a generic administrator override. Each operation
 enforces its role, course, student, and protected-field rules. Student
 provisioning and course membership use the course routes below.
 
@@ -453,31 +375,20 @@ after password verification and any required MFA stage.
 
 ## Courses and relationships
 
-- `GET|POST /api/v1/courses`
-- `GET|PATCH|DELETE /api/v1/courses/{id}`
-- `GET|PUT|DELETE /api/v1/courses/{id}/logo`
-- `POST /api/v1/courses/{id}/activations`
-- `POST /api/v1/courses/{id}/deactivations`
-- `GET|POST /api/v1/courses/{id}/supervisors`
-- `DELETE /api/v1/courses/{id}/supervisors/{user_id}`
-- `GET|POST /api/v1/courses/{id}/students`
-- `DELETE /api/v1/courses/{id}/students/{user_id}`
-- `GET|POST /api/v1/courses/{id}/mentors`
-- `DELETE /api/v1/courses/{id}/mentors/{user_id}`
-- `GET|POST /api/v1/courses/{id}/students/{student_id}/mentors`
-- `DELETE /api/v1/courses/{id}/students/{student_id}/mentors/{mentor_id}`
+Implemented course operations and their schemas are listed in OpenAPI. Mentor
+assignment operations remain planned behavior until their route family is
+implemented and added to that contract.
 
 `POST /courses` requires one or more initial supervisor relationships. Every
 referenced user must already hold the supervisor role. MIA validates the complete
 request and creates the inactive course and all initial assignments in one
 transaction; any invalid relationship or failed write rolls back the operation.
-The supervisors collection adds only later assignments.
+The supervisors collection adds only later assignments. Listing course
+supervisors uses the standard `page[limit]` and `page[offset]` pagination.
 
-Course resources expose `name`, nullable `description`, nullable `curriculum`,
-nullable `learning_goals`, nullable `ai_tutor_instructions`, nullable `language`,
-`state`, lifecycle instants, and `logo_url`. Creation carries initial supervisors
-as a JSON:API `supervisors` relationship containing `users` identifiers. Assigned
-supervisors can PATCH descriptive attributes. Names are trimmed, NFC-normalized,
+Creation carries initial supervisors and validates the complete relationship set
+atomically. Assigned supervisors can edit descriptive course information. Names
+are trimmed, NFC-normalized,
 limited to 200 Unicode code points and 800 bytes, and globally unique by the
 shared folded key. Only administrators may rename a course; assigned supervisors
 manage its descriptive and tutoring fields. Description is limited to 4,000 code points and 16 KiB;
@@ -489,14 +400,10 @@ Adding a student accepts either an existing student relationship or the fields
 needed for supervisor provisioning. It requires an active course and is not a
 public registration workflow.
 
-The request explicitly selects new-account or existing-account mode.
-The JSON:API resource type is `course-students`. Its `mode` attribute is either
-`provision` or `existing`, and `username` is required in both modes.
-Provisioning additionally requires `temporary_password`, `preferred_language`,
-`country`, and `time_zone`; no default identity fields are inferred. The
-temporary password is accepted only in the request and is never returned.
-Existing-account mode accepts only the complete username, performs no search,
-requires an existing student role, and rejects profile or password fields.
+The operation explicitly selects new-account or existing-account mode. No
+identity defaults are inferred. Temporary credentials are accepted only for
+provisioning and are never returned. Existing-account mode accepts a complete
+username, performs no search, and requires an existing student role.
 Unknown and non-student usernames return the same safe not-found response. An
 existing membership returns that membership idempotently. A clean rejoin creates
 a new membership and restores no deleted course data.
@@ -507,10 +414,8 @@ carry their own `cst_` ID, username and join instant, plus course and student
 relationships. Removal addresses the student user ID in the route and returns
 204 on success.
 
-Temporary-password requests use a `temporary-passwords` resource with one
-`password` attribute. Ban creation and deletion have no request body and are
-idempotent. All three operations return 204 and treat missing, staff, and
-out-of-scope targets as the same `course_student_not_found` response.
+Temporary-password and ban operations treat missing, staff, and out-of-scope
+targets uniformly. Ban creation and deletion are idempotent.
 
 Only an administrator removes a course supervisor, and the last supervisor
 cannot be removed. An assigned supervisor may remove a student only when that
@@ -539,15 +444,8 @@ to the course.
 
 ## Materials and files
 
-- `GET|POST /api/v1/courses/{course_id}/materials`
-- `GET|PATCH|DELETE /api/v1/materials/{id}`
-- `POST /api/v1/materials/{id}/finalizations`
-- `POST /api/v1/materials/{id}/approvals`
-- `DELETE /api/v1/materials/{id}/approvals`
-- `GET|POST /api/v1/materials/{id}/files`
-- `GET|DELETE /api/v1/material-files/{id}`
-- `GET /api/v1/material-files/{id}/download`
-- `GET /api/v1/material-files/{id}/content`
+OpenAPI defines the implemented material, file, finalization, approval, download,
+and normalized-content operations.
 
 File upload uses bounded `multipart/form-data`. MIA validates signatures and
 detected media types into a temporary file, atomically renames the validated file
@@ -557,26 +455,23 @@ rows. A successful response means publication and row commit both succeeded.
 Download responses use the safe media type derived from the material format,
 safe content disposition, and `X-Content-Type-Options: nosniff`.
 
-Creating a material accepts a `materials` resource with required `name`, `scope`,
-`kind`, and `format`. `scope` is `course-wide` or `student-private`; `kind` is
-`text-book`, `exam`, `worksheet`, `website`, or `youtube`; and `format` is `pdf`,
-`jpeg`, `png`, `text`, `markdown`, `docx`, or `link`. Link format additionally
-requires `external_url` and a complete `brief`. For source-backed material,
-`brief` is absent and generated after extraction. The server infers private
-ownership from the authenticated student and never accepts an owner field.
+Link material requires a complete supervisor-authored brief at creation. For
+source-backed material, the brief is generated after extraction. The server
+infers private ownership from the authenticated student and never accepts an
+owner field. Brief correction replaces the complete validated brief for eligible
+ready course-wide material. File upload accepts one bounded multipart file and
+never trusts its declared media type or filename.
 
-`PATCH /materials/{id}` accepts only a complete replacement `brief` for ready
-course-wide material. Material resources return their immutable identity fields,
-state, nullable link and brief fields, brief source, approval state, sanitized
-failure code, and lifecycle instants. File resources return display filename,
-safe media type, byte and page counts, processing state, and authorized download
-and content URLs. Upload accepts exactly one multipart part named `file`.
+The material files collection is exempt from offset pagination: the
+per-material file-count hard cap, operator-configurable within fixed MIA hard
+caps, keeps the collection small and bounded. It rejects every query parameter,
+including pagination parameters, rather than silently ignoring input.
 
 `content` streams authorized normalized `content.jsonl` as
-`application/x-ndjson`; it does not construct a large JSON:API document. Every
-line contains `version: 1`, positive contiguous `sequence`, nullable
-`chapter_label`, nullable `section_label`, and `text`. It never returns an
-internal path or raw OCR provider response.
+`application/x-ndjson`; it does not construct a large JSON:API document and never
+returns an internal path or raw OCR provider response. The normalized-content
+record contract belongs to the material content specification rather than this
+cross-route narrative.
 
 Course-wide approval is separate from upload and processing. Student-private
 material cannot be approved or converted to course-wide material. Changing the
@@ -806,11 +701,9 @@ Administrators can inspect platform jobs. Supervisors receive only the safe
 processing status needed for resources in their assigned courses; they do not
 receive unrestricted provider diagnostics.
 
-The administrator collection and detail resources return job type, subject type
-and ID, course relationship, state, attempts, scheduling/lifecycle instants,
-sanitized latest failure code, and cumulative provider input/output units. The
-material-scoped collection is assigned-supervisor-only and omits failure details
-and provider usage. All job collections use standard bounded offset pagination.
+The material-scoped job view is assigned-supervisor-only and omits failure
+details and provider usage. OpenAPI defines the administrator and subject-scoped
+resource fields and pagination contract.
 
 Audit access is administrator-only. Filters and output fields are allowlisted,
 and audit resources never expose secret or content-bearing values.
@@ -820,25 +713,10 @@ automatic retries.
 
 ## Open decisions
 
-Authentication and session routes will be the first complete vertical slice:
-anonymous session and CSRF, login, logout, password change, recovery, MFA
-challenges, and MFA-management proof.
-
-Each route family still needs exact attributes, writable fields, relationships,
-includes, filters, ordering, status codes, stable errors, authorization,
-redaction, idempotent replay behavior, and field-level text and collection bounds
-before implementation:
-
-- authentication, session, recovery, and MFA;
-- invitations and invitation acceptance;
-- user administration, roles, bans, and deletion;
-- courses, logos, supervisors, students, course mentors, and student mentor
-  assignments;
-- tutoring sessions, messages, responses, SSE, retrievals, and summaries;
-- generated speech;
-- mentoring requests, triage, responses, scheduling, and closure;
-- audit events.
-
-Resolve each item in this document or a more specific current architecture
-document before implementing the affected routes. Superseded proposals should be
-removed rather than retained as history.
+Authentication, invitation, current-user, course, material, and job transport
+contracts are concrete in OpenAPI. Unimplemented tutoring, generated-speech,
+mentoring, and audit route families still require concrete transport and
+authorization decisions before implementation. Add those decisions to OpenAPI
+when the implementation exists; do not duplicate their field-level contracts in
+this narrative. Superseded proposals should be removed rather than retained as
+history.

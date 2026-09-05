@@ -1,0 +1,8 @@
+vulnerabilities:
+  - id: GO-2026-5932
+    purls:
+      - pkg:golang/golang.org/x/crypto@v0.56.0
+    expired_at: 2027-03-05
+    statement: |
+      MIA imports only x/crypto/argon2; `govulncheck ./...` confirms x/crypto/openpgp is unreachable;
+      no upstream fixed version exists; it must be reviewed when x/crypto remediates it or the dependency graph changes.

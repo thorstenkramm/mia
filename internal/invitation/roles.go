@@ -1,15 +1,10 @@
 package invitation
 
 import (
-	"bytes"
 	"database/sql"
-	"encoding/json"
 	"errors"
-	"io"
 	"log/slog"
-	"mime"
 	"net/http"
-	"unicode/utf8"
 
 	"github.com/labstack/echo/v5"
 	"github.com/thorstenkramm/mia/internal/audit"
@@ -33,6 +28,7 @@ func RegisterRoleRoutes(server *httpserver.Server, database *sql.DB, logger *slo
 type grantRoleRequest struct {
 	Data struct {
 		Type       string `json:"type"`
+		ID         string `json:"id"`
 		Attributes struct {
 			Role string `json:"role"`
 		} `json:"attributes"`
@@ -47,10 +43,10 @@ func grantRoleHandler(database *sql.DB) echo.HandlerFunc {
 		}
 		targetID := c.Param("id")
 		var request grantRoleRequest
-		if err := decodeRole(c, &request); err != nil {
-			return decodeRoleErrorCode(err)
+		if err := httpserver.DecodeJSONAPI(c, &request); err != nil {
+			return err
 		}
-		if request.Data.Type != "user-roles" {
+		if request.Data.Type != "user-roles" || request.Data.ID != "" {
 			return httpserver.NewError(httpserver.CodeInvalidRequest)
 		}
 		role := user.Role(request.Data.Attributes.Role)
@@ -99,50 +95,4 @@ func isNotFoundError(err error) bool {
 
 func isUnauthorizedError(err error) bool {
 	return errors.Is(err, user.ErrRoleActorUnauthorized) || errors.Is(err, user.ErrRoleInvalid)
-}
-
-func decodeRole(c *echo.Context, destination any) error {
-	const maximumRequestBody = 1 << 20
-	mediaType, parameters, err := mime.ParseMediaType(c.Request().Header.Get(echo.HeaderContentType))
-	if err != nil || mediaType != "application/vnd.api+json" || len(parameters) != 0 {
-		return errUnsupportedMediaType
-	}
-	if c.Request().ContentLength > maximumRequestBody {
-		return errRequestTooLarge
-	}
-	c.Request().Body = http.MaxBytesReader(c.Response(), c.Request().Body, maximumRequestBody)
-	body, err := io.ReadAll(c.Request().Body)
-	if err != nil {
-		var tooLarge *http.MaxBytesError
-		if errors.As(err, &tooLarge) {
-			return errRequestTooLarge
-		}
-		return err
-	}
-	if !utf8.Valid(body) {
-		return errors.New("invalid request body")
-	}
-	decoder := json.NewDecoder(bytes.NewReader(body))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(destination); err != nil {
-		var tooLarge *http.MaxBytesError
-		if errors.As(err, &tooLarge) {
-			return errRequestTooLarge
-		}
-		return err
-	}
-	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-		return errors.New("trailing JSON input")
-	}
-	return nil
-}
-
-func decodeRoleErrorCode(err error) error {
-	if errors.Is(err, errRequestTooLarge) {
-		return httpserver.NewError(httpserver.CodeRequestTooLarge)
-	}
-	if errors.Is(err, errUnsupportedMediaType) {
-		return httpserver.NewError(httpserver.CodeUnsupportedMediaType)
-	}
-	return httpserver.NewError(httpserver.CodeInvalidRequest)
 }

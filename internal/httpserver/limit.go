@@ -4,6 +4,7 @@ import (
 	"container/list"
 	"crypto/sha256"
 	"fmt"
+	"net/http"
 	"strconv"
 	"sync"
 	"time"
@@ -242,24 +243,30 @@ func AccountKey(value string) (string, error) {
 	return "account:" + value, nil
 }
 
-func rateLimitMiddleware(limiter *Limiter, resolver *ClientIPResolver) echo.MiddlewareFunc {
-	return func(next echo.HandlerFunc) echo.HandlerFunc {
-		return func(c *echo.Context) error {
-			if !isAPIPath(c.Request().URL.Path) {
-				return next(c)
-			}
-			// Recovery requests have a dedicated limiter whose denial must remain
-			// indistinguishable from accepted delivery.
-			if c.Request().URL.Path == "/api/v1/auth/password-recovery-requests" {
-				return next(c)
-			}
-			result := limiter.Check(LimitUnauthenticatedAPI, resolver.Resolve(c.Request()), time.Now())
-			if !result.Allowed {
-				seconds := max(1, int(result.RetryAfter.Seconds()+0.999))
-				c.Response().Header().Set("Retry-After", strconv.Itoa(seconds))
-				return NewError(CodeRateLimited)
-			}
+// rateLimitMiddleware applies the global unauthenticated API limit to public
+// and authentication-sensitive API routes. Routes registered as authenticated
+// and unknown non-API paths do not consume it; unregistered API paths are
+// treated as public.
+func (server *Server) rateLimitMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
+	return func(c *echo.Context) error {
+		if !isAPIPath(c.Request().URL.Path) {
 			return next(c)
 		}
+		if registration, ok := server.matchedRoute(c); ok && registration.class == routeAuthenticated {
+			return next(c)
+		}
+		// Recovery requests have a dedicated limiter whose denial must remain
+		// indistinguishable from accepted delivery.
+		if c.Request().Method == http.MethodPost &&
+			c.Request().URL.Path == "/api/v1/auth/password-recovery-requests" {
+			return next(c)
+		}
+		result := server.limiter.Check(LimitUnauthenticatedAPI, server.resolver.Resolve(c.Request()), time.Now())
+		if !result.Allowed {
+			seconds := max(1, int(result.RetryAfter.Seconds()+0.999))
+			c.Response().Header().Set("Retry-After", strconv.Itoa(seconds))
+			return NewError(CodeRateLimited)
+		}
+		return next(c)
 	}
 }

@@ -12,11 +12,13 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/labstack/echo/v5"
 	"github.com/thorstenkramm/mia/internal/httpserver"
+	"github.com/thorstenkramm/mia/internal/httpserver/conformance"
 	"github.com/thorstenkramm/mia/internal/identity"
 	"github.com/thorstenkramm/mia/internal/provider/sms"
 	miSQLite "github.com/thorstenkramm/mia/internal/sqlite"
@@ -26,16 +28,18 @@ func TestProfileHandlersRejectProtectedFieldsAndStudentSelfEdit(t *testing.T) {
 	server, database, staff, student, _ := profileServer(t)
 	staffSession, csrf := issueSession(t, server, staff)
 	valid := profileRequest(t, server, http.MethodPatch, "/api/v1/users/me", staffSession, csrf,
-		"application/vnd.api+json", `{"data":{"type":"users","attributes":{"name":"  New Name  ","country":"us"}}}`)
+		"application/vnd.api+json", `{"data":{"type":"users","id":"`+staff+`","attributes":{"name":"  New Name  ","country":"us"}}}`)
 	if valid.Code != http.StatusOK {
 		t.Fatalf("valid PATCH status/body = %d %s", valid.Code, valid.Body.String())
 	}
+	// Protected fields are not decodable attributes; the shared decoder rejects
+	// the unexpected document member as a malformed request.
 	protected := profileRequest(t, server, http.MethodPatch, "/api/v1/users/me", staffSession, csrf,
-		"application/vnd.api+json", `{"data":{"type":"users","attributes":{"email":"other@example.test"}}}`)
-	assertUserCode(t, protected, http.StatusUnprocessableEntity, "user_profile_invalid")
+		"application/vnd.api+json", `{"data":{"type":"users","id":"`+staff+`","attributes":{"email":"other@example.test"}}}`)
+	assertUserCode(t, protected, http.StatusBadRequest, "malformed_request")
 	studentSession, studentCSRF := issueSession(t, server, student)
 	denied := profileRequest(t, server, http.MethodPatch, "/api/v1/users/me", studentSession, studentCSRF,
-		"application/vnd.api+json", `{"data":{"type":"users","attributes":{"name":"No"}}}`)
+		"application/vnd.api+json", `{"data":{"type":"users","id":"`+student+`","attributes":{"name":"No"}}}`)
 	assertUserCode(t, denied, http.StatusForbidden, "user_profile_unauthorized")
 	var name string
 	if err := database.QueryRow("SELECT name FROM users WHERE id = ?", staff).Scan(&name); err != nil {
@@ -44,6 +48,44 @@ func TestProfileHandlersRejectProtectedFieldsAndStudentSelfEdit(t *testing.T) {
 	if name != "New Name" {
 		t.Fatalf("stored profile name = %q", name)
 	}
+}
+
+func TestPatchProfileRequiresMatchingResourceIdentity(t *testing.T) {
+	server, _, staff, _, _ := profileServer(t)
+	session, csrf := issueSession(t, server, staff)
+	for name, body := range map[string]string{
+		"missing_id":    `{"data":{"type":"users","attributes":{"name":"New"}}}`,
+		"empty_id":      `{"data":{"type":"users","id":"","attributes":{"name":"New"}}}`,
+		"mismatched_id": `{"data":{"type":"users","id":"u_someone-else","attributes":{"name":"New"}}}`,
+		"wrong_type":    `{"data":{"type":"accounts","id":"` + staff + `","attributes":{"name":"New"}}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			response := profileRequest(t, server, http.MethodPatch, "/api/v1/users/me", session, csrf,
+				"application/vnd.api+json", body)
+			conformance.Error(t, response, http.StatusUnprocessableEntity, "user_profile_invalid")
+		})
+	}
+	valid := profileRequest(t, server, http.MethodPatch, "/api/v1/users/me", session, csrf,
+		"application/vnd.api+json", `{"data":{"type":"users","id":"`+staff+`","attributes":{"name":"Matched"}}}`)
+	if valid.Code != http.StatusOK {
+		t.Fatalf("matching PATCH status/body = %d %s", valid.Code, valid.Body.String())
+	}
+	document := conformance.Document(t, valid)
+	conformance.Resource(t, document["data"], "users")
+}
+
+func TestProfileRoutesClassifyProtocolErrors(t *testing.T) {
+	server, _, staff, _, _ := profileServer(t)
+	session, csrf := issueSession(t, server, staff)
+	unsupported := profileRequest(t, server, http.MethodPatch, "/api/v1/users/me", session, csrf,
+		"application/json", `{"data":{"type":"users","id":"`+staff+`","attributes":{}}}`)
+	conformance.Error(t, unsupported, http.StatusUnsupportedMediaType, "unsupported_media_type")
+	oversized := profileRequest(t, server, http.MethodPatch, "/api/v1/users/me", session, csrf,
+		"application/vnd.api+json", strings.Repeat("x", 1<<20+1))
+	conformance.Error(t, oversized, http.StatusRequestEntityTooLarge, "request_too_large")
+	malformed := profileRequest(t, server, http.MethodPatch, "/api/v1/users/me", session, csrf,
+		"application/vnd.api+json", `{"data":`)
+	conformance.Error(t, malformed, http.StatusBadRequest, "malformed_request")
 }
 
 func TestAvatarHandlersNormalizeServeSafelyAndDeleteIdempotently(t *testing.T) {
@@ -105,6 +147,42 @@ func TestAvatarUploadRejectsDeclaredTypeMismatch(t *testing.T) {
 	response := profileRequestBytes(t, server, http.MethodPut, "/api/v1/users/me/avatar", session, csrf,
 		"image/png", []byte("not a PNG"))
 	assertUserCode(t, response, http.StatusUnprocessableEntity, "user_avatar_invalid")
+}
+
+func TestAvatarRoutesAreExemptFromJSONAPIAcceptNegotiation(t *testing.T) {
+	server, _, staff, _, _ := profileServer(t)
+	session, csrf := issueSession(t, server, staff)
+	for _, testCase := range []struct {
+		method, contentType string
+		status              int
+	}{
+		{method: http.MethodGet, status: http.StatusNotFound},
+		{method: http.MethodPut, contentType: "image/png", status: http.StatusUnprocessableEntity},
+	} {
+		request := httptest.NewRequest(testCase.method, "http://mia.test/api/v1/users/me/avatar",
+			strings.NewReader("not an image"))
+		request.Header.Set("Accept", `application/vnd.api+json;profile="a,b"`)
+		request.AddCookie(session)
+		if testCase.method == http.MethodPut {
+			request.Header.Set("Content-Type", testCase.contentType)
+			request.AddCookie(&http.Cookie{Name: "__Host-mia_csrf", Value: csrf})
+			request.Header.Set("X-CSRF-Token", csrf)
+		}
+		response := httptest.NewRecorder()
+		server.Echo.ServeHTTP(response, request)
+		if response.Code != testCase.status {
+			t.Fatalf("%s status = %d %s", testCase.method, response.Code, response.Body.String())
+		}
+	}
+}
+
+func TestUserCreateResourcesRejectClientGeneratedIDs(t *testing.T) {
+	server, _, staff, _, _ := profileServer(t)
+	session, csrf := issueSession(t, server, staff)
+	response := profileRequest(t, server, http.MethodPost, "/api/v1/users/me/mobile-change-challenges", session, csrf,
+		"application/vnd.api+json",
+		`{"data":{"type":"mobile-change-challenges","id":"client-id","attributes":{"mobile":"+49123456789"}}}`)
+	conformance.Error(t, response, http.StatusUnprocessableEntity, "user_profile_invalid")
 }
 
 type handlerSMS struct{ code string }
