@@ -804,3 +804,115 @@ StudentMessageContent:
   maxLength: 8000
   x-max-utf8-bytes: 32768
   description: Between 1 and 8,000 Unicode code points and at most 32 KiB when UTF-8 encoded.
+
+StudentMentoringPermissionRequestDocument:
+  type: object
+  required: [data]
+  additionalProperties: false
+  properties:
+    data:
+      type: object
+      required: [type, id, attributes]
+      additionalProperties: false
+      properties:
+        type: { const: users }
+        id: { type: string, minLength: 1 }
+        attributes:
+          type: object
+          required: [mentoring_requests_allowed]
+          additionalProperties: false
+          properties:
+            mentoring_requests_allowed: { type: boolean }
+
+CourseMentorAssignmentRequestDocument:
+  type: object
+  required: [data]
+  additionalProperties: false
+  properties:
+    data:
+      type: object
+      required: [type, relationships]
+      additionalProperties: false
+      properties:
+        type: { const: course-mentor-assignments }
+        id: false
+        relationships: { $ref: '#/MentorAssignmentRelationships' }
+
+StudentMentorAssignmentRequestDocument:
+  type: object
+  required: [data]
+  additionalProperties: false
+  properties:
+    data:
+      type: object
+      required: [type, relationships]
+      additionalProperties: false
+      properties:
+        type: { const: student-mentor-assignments }
+        id: false
+        relationships: { $ref: '#/MentorAssignmentRelationships' }
+
+MentorAssignmentRelationships:
+  type: object
+  required: [mentor]
+  additionalProperties: false
+  properties:
+    mentor:
+      type: object
+      required: [data]
+      additionalProperties: false
+      properties:
+        data: { $ref: '#/UserIdentifier' }
+
+MentoringSessionCreateRequestDocument:
+  type: object
+  required: [data]
+  additionalProperties: false
+  properties:
+    data:
+      type: object
+      required: [type, attributes]
+      additionalProperties: false
+      properties:
+        type: { const: mentoring-sessions }
+        id: false
+        attributes:
+          type: object
+          required: [topic]
+          additionalProperties: false
+          properties:
+            topic: { type: string, minLength: 1, maxLength: 4000, x-max-utf8-bytes: 16384 }
+            proposed_for: { type: [string, 'null'], format: date-time }
+
+MentoringSessionUpdateRequestDocument:
+  type: object
+  required: [data]
+  additionalProperties: false
+  properties:
+    data:
+      type: object
+      required: [type, id]
+      additionalProperties: false
+      properties:
+        type: { const: mentoring-sessions }
+        id: { type: string, minLength: 1 }
+        attributes:
+          type: object
+          minProperties: 1
+          additionalProperties: false
+          properties:
+            response: { type: string, minLength: 1, maxLength: 8000, x-max-utf8-bytes: 32768 }
+            scheduled_for: { type: string, format: date-time }
+            meeting_instructions: { type: [string, 'null'], maxLength: 4000, x-max-utf8-bytes: 16384 }
+            meeting_url: { type: [string, 'null'], format: uri, pattern: '^https://', maxLength: 2048 }
+            closure_reason: { type: string, enum: [cancelled, completed] }
+        relationships:
+          type: object
+          additionalProperties: false
+          properties:
+            mentor:
+              type: object
+              required: [data]
+              additionalProperties: false
+              properties:
+                data: { $ref: '#/UserIdentifier' }

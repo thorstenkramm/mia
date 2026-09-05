@@ -54,6 +54,25 @@ type Profile struct {
 	Staff                                              bool
 }
 
+// MinimalProfile is the assignment-scoped identity visible to a mentor.
+type MinimalProfile struct {
+	ID, Username   string
+	Name, Nickname *string
+}
+
+// LoadMinimalProfile returns only the identity fields permitted in a mentor projection.
+func LoadMinimalProfile(ctx context.Context, query miSQLite.Querier, accountID string) (MinimalProfile, error) {
+	var profile MinimalProfile
+	var name, nickname sql.NullString
+	err := query.QueryRowContext(ctx, `SELECT id, username, name, nickname FROM users WHERE id = ?`, accountID).
+		Scan(&profile.ID, &profile.Username, &name, &nickname)
+	if err != nil {
+		return MinimalProfile{}, fmt.Errorf("load minimal profile: %w", err)
+	}
+	profile.Name, profile.Nickname = nullString(name), nullString(nickname)
+	return profile, nil
+}
+
 type OptionalString struct {
 	Set   bool
 	Value *string
@@ -373,6 +392,9 @@ func (service *Service) avatarExists(accountID string) bool {
 	info, err := os.Stat(path)
 	return err == nil && info.Mode().IsRegular()
 }
+
+// HasAvatar reports whether the account currently has a normalized avatar file.
+func (service *Service) HasAvatar(accountID string) bool { return service.avatarExists(accountID) }
 
 func (service *Service) PutAvatar(ctx context.Context, accountID string, pngData []byte) error {
 	service.avatarMu.Lock()

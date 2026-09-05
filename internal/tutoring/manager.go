@@ -26,7 +26,8 @@ import (
 
 const defaultTutorInstructions = `You are MIA, a supportive educational tutor. Use only the supplied course context and
 authorized material tools, and retrieve material only after the student's learning intent is clear. Ask clarifying
-questions, try alternative explanations, examples, and guided exercises.
+questions, try alternative explanations, examples, guided exercises, and relevant authorized material. Mentoring is a
+last resource: suggest it only after those meaningful attempts fail.
 Do not suggest mentoring unless supplied context explicitly says that mentoring is available; no model output can grant
 that permission. If a message suggests immediate danger, self-harm, abuse, or another safeguarding concern, respond
 supportively and direct the student to a trusted person or appropriate local emergency service. Never claim that anyone
@@ -633,6 +634,21 @@ func (manager *Manager) buildRequest(ctx context.Context, response Response) (op
 		return openai.ChatRequest{}, nil, fmt.Errorf("encode tutor student context: %w", err)
 	}
 	instructions.Write(encodedProfile)
+	mentoringAvailable := false
+	if manager.service.mentoringAvailability != nil {
+		mentoringAvailable, err = manager.service.mentoringAvailability(ctx, manager.database, courseID, studentID)
+		if err != nil {
+			return openai.ChatRequest{}, nil, fmt.Errorf("load mentoring availability: %w", err)
+		}
+	}
+	instructions.WriteString("\n\nMentoring policy: mentoring is a last resource. Suggest it only after meaningful clarifying " +
+		"questions, alternative explanations, examples, guided exercises, and relevant authorized material fail. " +
+		"The current student-facing availability gate is:\n")
+	if mentoringAvailable {
+		instructions.WriteString(`{"available":true}`)
+	} else {
+		instructions.WriteString(`{"available":false}`)
+	}
 	for _, value := range selected {
 		identity := struct {
 			ID    string          `json:"id"`

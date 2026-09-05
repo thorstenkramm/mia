@@ -440,12 +440,15 @@ an inactive course with no active tutoring sessions. Once allowed, deletion does
 not wait for running workers or provider calls; late results follow the shared
 zero-row stale-result rule.
 
-`POST /courses/{id}/mentors` assigns an existing registered mentor to the course.
+`GET|POST /courses/{id}/mentors` lists or assigns existing registered mentors.
+DELETE on `/courses/{id}/mentors/{user_id}` removes one. Lists contain user
+identifiers and use standard pagination.
 An assigned supervisor performs the operation, and it takes effect immediately
 without mentor acceptance. A mentor cannot reject or remove the course
-assignment. Student mentor routes similarly create and remove immediate
-supervisor-controlled assignments, and the selected mentor must already belong
-to the course.
+assignment. The
+`GET|POST|DELETE /courses/{id}/students/{student_id}/mentors[/{user_id}]`
+routes similarly list, create, and remove immediate supervisor-controlled
+assignments. The selected mentor must already belong to the course.
 
 ## Materials and files
 
@@ -680,6 +683,8 @@ closure:
 
 - `GET|POST /api/v1/courses/{course_id}/mentoring-sessions`
 - `GET|PATCH /api/v1/mentoring-sessions/{id}`
+- `GET /api/v1/courses/{course_id}/mentor-students/{student_id}`
+- `GET /api/v1/courses/{course_id}/mentor-students/{student_id}/avatar`
 
 Creation is unassigned and may include `proposed_for`. An assigned course
 supervisor selects one of the student's assigned mentors through `PATCH`. The
@@ -687,6 +692,19 @@ assigned mentor may then respond and set `scheduled_for`. The student or
 supervisor may cancel an unscheduled request; the student or assigned mentor may
 cancel a future schedule; only the assigned mentor may complete it after the
 scheduled time.
+
+The mentor-student routes expose only username, name, nickname, and an optional
+avatar URL. Both routes require the current mentor's explicit assignment to that
+student in that course. Removing either assignment immediately revokes this
+identity and avatar access with the same existence-hiding not-found response.
+
+The supervisor-managed `PATCH /users/{id}` operation currently accepts only
+`mentoring_requests_allowed`. It applies globally to the student-only account after shared-course authorization and does
+not change or close existing mentoring records.
+
+Topics are limited to 4,000 Unicode code points and 16 KiB, mentor responses to 8,000 code points and 32 KiB, meeting
+instructions to 4,000 code points and 16 KiB, and HTTPS meeting URLs to 2,048 bytes. Text follows the ordinary normalized
+multiline-text rules. Proposed and scheduled times use strict API UTC instants.
 
 An assigned supervisor may directly replace the current mentor on an open row.
 The update preserves proposed and scheduled times, meeting details, prior
@@ -728,10 +746,10 @@ automatic retries.
 
 ## Open decisions
 
-Authentication, invitation, current-user, course, material, job, and tutoring
-transport contracts are concrete in OpenAPI. Unimplemented generated-speech,
-mentoring, and audit route families still require concrete transport and
+Authentication, invitation, current-user, course, material, job, tutoring, and
+mentoring transport contracts are concrete in OpenAPI. Unimplemented
+generated-speech and audit route families still require concrete transport and
 authorization decisions before implementation. Add those decisions to OpenAPI
-when the implementation exists; do not duplicate their field-level contracts in
-this narrative. Superseded proposals should be removed rather than retained as
-history.
+when the implementation exists; do not duplicate their field-level contracts
+in this narrative. Superseded proposals should be removed rather than retained
+as history.

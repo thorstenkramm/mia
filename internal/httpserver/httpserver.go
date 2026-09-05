@@ -172,6 +172,20 @@ func RotateCSRF(c *echo.Context) {
 	http.SetCookie(c.Response(), &http.Cookie{Name: "__Host-mia_csrf", Value: randomToken(32), Path: "/", Secure: true, SameSite: http.SameSiteLaxMode})
 }
 
+// PrivateAvatarPNG writes a normalized private avatar with shared cache and download-safety headers.
+func PrivateAvatarPNG(c *echo.Context, data []byte, etag string) error {
+	header := c.Response().Header()
+	header.Set(echo.HeaderContentType, "image/png")
+	header.Set("Cache-Control", "private, no-cache")
+	header.Set("Content-Disposition", `inline; filename="avatar.png"`)
+	header.Set("ETag", etag)
+	header.Set("X-Content-Type-Options", "nosniff")
+	if c.Request().Header.Get("If-None-Match") == etag {
+		return c.NoContent(http.StatusNotModified)
+	}
+	return c.Blob(http.StatusOK, "image/png", data)
+}
+
 // SetIdentityLoader configures the sole identity reload path for authenticated routes.
 func (server *Server) SetIdentityLoader(loader IdentityLoader) { server.identityLoader = loader }
 

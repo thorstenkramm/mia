@@ -25,10 +25,11 @@ const storedInstant = "2006-01-02T15:04:05.000000Z"
 
 // Service is safe for concurrent use after construction.
 type Service struct {
-	database  *sql.DB
-	materials *material.Service
-	logger    *slog.Logger
-	manager   *Manager
+	database              *sql.DB
+	materials             *material.Service
+	logger                *slog.Logger
+	manager               *Manager
+	mentoringAvailability func(context.Context, miSQLite.Querier, string, string) (bool, error)
 }
 
 func NewService(database *sql.DB, materials *material.Service, logger *slog.Logger) *Service {
@@ -39,6 +40,13 @@ func NewService(database *sql.DB, materials *material.Service, logger *slog.Logg
 }
 
 func (service *Service) SetManager(manager *Manager) { service.manager = manager }
+
+// SetMentoringAvailability injects the mentoring owner's last-resource gate without reversing package ownership.
+func (service *Service) SetMentoringAvailability(
+	availability func(context.Context, miSQLite.Querier, string, string) (bool, error),
+) {
+	service.mentoringAvailability = availability
+}
 
 func (service *Service) Start(ctx context.Context, input StartInput) (Session, bool, error) {
 	requestID, ok := canonicalUUID(input.RequestID)

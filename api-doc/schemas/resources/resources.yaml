@@ -914,6 +914,90 @@ TutoringMaterialCollectionDocument:
     meta: { $ref: ../json-api/documents.yaml#/PageMeta }
     links: { $ref: ../json-api/documents.yaml#/PageLinks }
 
+MentoringSession:
+  type: object
+  required: [type, id, attributes, relationships]
+  properties:
+    type: { const: mentoring-sessions }
+    id: { type: string }
+    attributes:
+      type: object
+      required: [topic, response, responded_at, responded_by, proposed_for, scheduled_for, meeting_instructions,
+        meeting_url, state, created_at, closed_at, closed_by, closure_reason]
+      properties:
+        topic: { type: string, maxLength: 4000 }
+        response: { type: [string, 'null'], maxLength: 8000 }
+        responded_at: { type: [string, 'null'], format: date-time }
+        responded_by: { type: [string, 'null'] }
+        proposed_for: { type: [string, 'null'], format: date-time }
+        scheduled_for: { type: [string, 'null'], format: date-time }
+        meeting_instructions: { type: [string, 'null'], maxLength: 4000 }
+        meeting_url: { type: [string, 'null'], format: uri }
+        state: { type: string, enum: [requested, scheduled, cancelled, completed] }
+        created_at: { type: string, format: date-time }
+        closed_at: { type: [string, 'null'], format: date-time }
+        closed_by: { type: [string, 'null'] }
+        closure_reason: { type: [string, 'null'], enum: [cancelled, completed, null] }
+    relationships:
+      type: object
+      required: [course, student, mentor]
+      properties:
+        course: { $ref: '#/ToOneCourse' }
+        student: { $ref: '#/ToOneUser' }
+        mentor:
+          type: object
+          required: [data]
+          properties:
+            data:
+              oneOf:
+                - $ref: '#/UserIdentifier'
+                - type: 'null'
+MentoringSessionDocument:
+  type: object
+  required: [data]
+  properties:
+    data: { $ref: '#/MentoringSession' }
+MentoringSessionCollectionDocument:
+  type: object
+  required: [data, meta]
+  properties:
+    data:
+      type: array
+      items: { $ref: '#/MentoringSession' }
+    meta: { $ref: ../json-api/documents.yaml#/PageMeta }
+    links: { $ref: ../json-api/documents.yaml#/PageLinks }
+MentorIdentifierCollectionDocument:
+  type: object
+  required: [data, meta]
+  properties:
+    data:
+      type: array
+      items: { $ref: '#/UserIdentifier' }
+    meta: { $ref: ../json-api/documents.yaml#/PageMeta }
+    links: { $ref: ../json-api/documents.yaml#/PageLinks }
+MentorStudentProfile:
+  type: object
+  required: [type, id, attributes]
+  additionalProperties: false
+  properties:
+    type: { const: users }
+    id: { type: string }
+    attributes:
+      type: object
+      required: [username, name, nickname, avatar_url]
+      additionalProperties: false
+      properties:
+        username: { type: string }
+        name: { type: [string, 'null'], maxLength: 100 }
+        nickname: { type: [string, 'null'], maxLength: 24 }
+        avatar_url: { type: [string, 'null'], format: uri-reference }
+MentorStudentProfileDocument:
+  type: object
+  required: [data]
+  additionalProperties: false
+  properties:
+    data: { $ref: '#/MentorStudentProfile' }
+
 AuthSessionDocument:
   type: object
   required: [data]

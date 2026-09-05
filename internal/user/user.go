@@ -66,6 +66,32 @@ type TutorProfile struct {
 	YearOfBirth  *int   `json:"year_of_birth"`
 }
 
+// MentoringRequestsAllowed returns the user-owned gate for new mentoring work.
+func MentoringRequestsAllowed(ctx context.Context, query miSQLite.Querier, id string) (bool, error) {
+	var allowed int
+	if err := query.QueryRowContext(ctx, "SELECT mentoring_requests_allowed FROM users WHERE id = ?", id).
+		Scan(&allowed); err != nil {
+		return false, fmt.Errorf("load mentoring request permission: %w", err)
+	}
+	return allowed != 0, nil
+}
+
+// SetMentoringRequestsAllowed updates the user-owned gate in the caller's transaction.
+func SetMentoringRequestsAllowed(ctx context.Context, query miSQLite.Querier, id string, allowed bool) error {
+	result, err := query.ExecContext(ctx, "UPDATE users SET mentoring_requests_allowed = ? WHERE id = ?", allowed, id)
+	if err != nil {
+		return fmt.Errorf("update mentoring request permission: %w", err)
+	}
+	count, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("count mentoring request permission update: %w", err)
+	}
+	if count != 1 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
 // LoadTutorProfile returns the bounded profile fields used by the tutor.
 func LoadTutorProfile(ctx context.Context, query miSQLite.Querier, id string) (TutorProfile, error) {
 	var profile TutorProfile

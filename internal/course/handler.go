@@ -34,6 +34,7 @@ func Register(server *httpserver.Server, service *Service) {
 	server.AuthenticatedPOST("/api/v1/users/:id/temporary-passwords", temporaryPasswordHandler(service))
 	server.AuthenticatedPOST("/api/v1/users/:id/bans", banStudentHandler(service))
 	server.AuthenticatedDELETE("/api/v1/users/:id/bans", unbanStudentHandler(service))
+	server.AuthenticatedPATCH("/api/v1/users/:id", updateStudentHandler(service))
 }
 
 type attributesRequest struct {
@@ -89,6 +90,16 @@ type temporaryPasswordRequest struct {
 		ID         string `json:"id"`
 		Attributes struct {
 			Password string `json:"password"`
+		} `json:"attributes"`
+	} `json:"data"`
+}
+
+type studentUpdateRequest struct {
+	Data struct {
+		Type       string `json:"type"`
+		ID         string `json:"id"`
+		Attributes struct {
+			MentoringRequestsAllowed *bool `json:"mentoring_requests_allowed"`
 		} `json:"attributes"`
 	} `json:"data"`
 }
@@ -423,6 +434,28 @@ func banStudentHandler(service *Service) echo.HandlerFunc {
 
 func unbanStudentHandler(service *Service) echo.HandlerFunc {
 	return studentBanHandler(service, false)
+}
+
+func updateStudentHandler(service *Service) echo.HandlerFunc {
+	return func(c *echo.Context) error {
+		actorID, err := actor(c)
+		if err != nil {
+			return err
+		}
+		var request studentUpdateRequest
+		if err := httpserver.DecodeJSONAPI(c, &request); err != nil {
+			return err
+		}
+		if request.Data.Type != "users" || request.Data.ID != c.Param("id") ||
+			request.Data.Attributes.MentoringRequestsAllowed == nil {
+			return denyMutation(c, service, actorID, "course_student_invalid", httpserver.CodeCourseStudentInvalid)
+		}
+		if err := service.SetMentoringRequestsAllowed(c.Request().Context(), c.Param("id"), actorID,
+			*request.Data.Attributes.MentoringRequestsAllowed); err != nil {
+			return mutationError(c, service, actorID, err)
+		}
+		return c.NoContent(http.StatusNoContent)
+	}
 }
 
 func studentBanHandler(service *Service, banned bool) echo.HandlerFunc {

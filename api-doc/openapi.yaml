@@ -27,6 +27,8 @@ tags:
     description: Administrator and subject-scoped background-job oversight.
   - name: Tutoring
     description: Tutoring sessions, immutable chat, streaming responses, and completed-session review.
+  - name: Mentoring
+    description: Mentor assignments, supervisor triage, responses, external scheduling, and closure.
 security:
   - sessionCookie: []
 paths:
@@ -84,6 +86,8 @@ paths:
     $ref: paths/courses.yaml#/temporaryPasswords
   /api/v1/users/{id}/bans:
     $ref: paths/courses.yaml#/bans
+  /api/v1/users/{id}:
+    $ref: paths/mentoring.yaml#/studentProfile
   /api/v1/courses:
     $ref: paths/courses.yaml#/courses
   /api/v1/courses/{id}:
@@ -142,6 +146,22 @@ paths:
     $ref: paths/tutoring.yaml#/tutorResponseInterruptions
   /api/v1/tutor-responses/{id}/events:
     $ref: paths/tutoring.yaml#/tutorResponseEvents
+  /api/v1/courses/{course_id}/mentors:
+    $ref: paths/mentoring.yaml#/courseMentors
+  /api/v1/courses/{course_id}/mentors/{user_id}:
+    $ref: paths/mentoring.yaml#/courseMentor
+  /api/v1/courses/{course_id}/students/{student_id}/mentors:
+    $ref: paths/mentoring.yaml#/studentMentors
+  /api/v1/courses/{course_id}/students/{student_id}/mentors/{user_id}:
+    $ref: paths/mentoring.yaml#/studentMentor
+  /api/v1/courses/{course_id}/mentor-students/{student_id}:
+    $ref: paths/mentoring.yaml#/mentorStudentProfile
+  /api/v1/courses/{course_id}/mentor-students/{student_id}/avatar:
+    $ref: paths/mentoring.yaml#/mentorStudentAvatar
+  /api/v1/courses/{course_id}/mentoring-sessions:
+    $ref: paths/mentoring.yaml#/courseMentoringSessions
+  /api/v1/mentoring-sessions/{id}:
+    $ref: paths/mentoring.yaml#/mentoringSession
 components:
   securitySchemes:
     sessionCookie:
@@ -167,6 +187,11 @@ components:
       schema: { type: string, minLength: 1 }
     CourseID:
       name: course_id
+      in: path
+      required: true
+      schema: { type: string, minLength: 1 }
+    StudentID:
+      name: student_id
       in: path
       required: true
       schema: { type: string, minLength: 1 }

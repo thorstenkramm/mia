@@ -34,6 +34,7 @@ import (
 	"github.com/thorstenkramm/mia/internal/lock"
 	"github.com/thorstenkramm/mia/internal/logging"
 	"github.com/thorstenkramm/mia/internal/material"
+	"github.com/thorstenkramm/mia/internal/mentoring"
 	"github.com/thorstenkramm/mia/internal/provider/mistral"
 	"github.com/thorstenkramm/mia/internal/provider/openai"
 	"github.com/thorstenkramm/mia/internal/provider/sms"
@@ -539,8 +540,8 @@ func newServeCommand() *cobra.Command {
 			APIKey: configuration.ClickSend.APIKey, SenderID: configuration.ClickSend.SenderID,
 			BaseURL: configuration.ClickSend.BaseURL})
 		auth.Register(server, authRoutes, database, configuration.Main.PublicURL, recoveryDeliveries, smsSender)
-		user.RegisterProfileRoutes(server,
-			user.NewService(database, configuration.Main.DataDir, smsSender, auth.InvalidatePendingSMS))
+		profileService := user.NewService(database, configuration.Main.DataDir, smsSender, auth.InvalidatePendingSMS)
+		user.RegisterProfileRoutes(server, profileService)
 
 		invitationService := invitation.NewService(database, logger.Slog())
 		invitationDeliveries := invitation.NewDeliveryManager(invitationService, database, smtp.New(configuration, logger.Slog()), logger.Slog())
@@ -582,6 +583,11 @@ func newServeCommand() *cobra.Command {
 		lifecycleRegistry.RegisterCourse(tutoringService)
 		lifecycleRegistry.RegisterStudentCourse(tutoringService)
 		lifecycleRegistry.RegisterAccount(tutoringService)
+		mentoringService := mentoring.NewService(database, profileService, logger.Slog())
+		tutoringService.SetMentoringAvailability(mentoringService.Available)
+		lifecycleRegistry.RegisterCourse(mentoringService)
+		lifecycleRegistry.RegisterStudentCourse(mentoringService)
+		lifecycleRegistry.RegisterAccount(mentoringService)
 		oversight := jobs.NewOversight(database, func(ctx context.Context, query miSQLite.Querier, actorID string) (bool, error) {
 			return user.HasRole(ctx, query, actorID, user.Administrator)
 		})
@@ -600,6 +606,7 @@ func newServeCommand() *cobra.Command {
 		jobs.Register(server, oversight)
 		material.Register(server, materialService, oversight)
 		tutoring.Register(server, tutoringService, tutorManager)
+		mentoring.Register(server, mentoringService)
 		course.Register(server, course.NewService(database, configuration.Main.DataDir, lifecycleRegistry,
 			material.MaterialReady, tutoringService.ActiveInCourse,
 			tutoringService.StudentActiveInCourse, auth.InvalidateSecurityArtifacts, logger.Slog()))

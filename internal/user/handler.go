@@ -280,16 +280,7 @@ func getAvatar(service *Service) echo.HandlerFunc {
 		if err != nil {
 			return profileError(err)
 		}
-		header := c.Response().Header()
-		header.Set(echo.HeaderContentType, "image/png")
-		header.Set("Cache-Control", "private, no-cache")
-		header.Set("Content-Disposition", `inline; filename="avatar.png"`)
-		header.Set("ETag", etag)
-		header.Set("X-Content-Type-Options", "nosniff")
-		if c.Request().Header.Get("If-None-Match") == etag {
-			return c.NoContent(http.StatusNotModified)
-		}
-		return c.Blob(http.StatusOK, "image/png", data)
+		return httpserver.PrivateAvatarPNG(c, data, etag)
 	}
 }
 

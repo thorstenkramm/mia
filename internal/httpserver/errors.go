@@ -82,6 +82,10 @@ const (
 	CodeTutoringActiveSession Code = "tutoring_active_session"
 	CodeTutoringBusy          Code = "tutoring_work_busy"
 	CodeTutoringInvalidState  Code = "tutoring_invalid_state"
+	CodeMentoringNotFound     Code = "mentoring_not_found"
+	CodeMentoringInvalid      Code = "mentoring_invalid"
+	CodeMentoringInvalidState Code = "mentoring_invalid_state"
+	CodeMentoringUnavailable  Code = "mentoring_unavailable"
 )
 
 type definition struct {
@@ -155,6 +159,10 @@ var errorRegistry = map[Code]definition{
 	CodeTutoringActiveSession:       {http.StatusConflict, "Active Session Exists", "Finish the active tutoring session first."},
 	CodeTutoringBusy:                {http.StatusConflict, "Tutor Busy", "Wait for a tutoring response slot to become available."},
 	CodeTutoringInvalidState:        {http.StatusConflict, "Invalid Tutoring State", "The request could not be completed."},
+	CodeMentoringNotFound:           {http.StatusNotFound, "Not Found", "The requested resource was not found."},
+	CodeMentoringInvalid:            {http.StatusUnprocessableEntity, "Invalid Mentoring Request", "The request could not be completed."},
+	CodeMentoringInvalidState:       {http.StatusConflict, "Invalid Mentoring State", "The request could not be completed."},
+	CodeMentoringUnavailable:        {http.StatusConflict, "Mentoring Unavailable", "The request could not be completed."},
 }
 
 // Error is a registered domain error translated centrally to a JSON:API response.

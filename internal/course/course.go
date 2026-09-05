@@ -159,6 +159,38 @@ func TutoringScope(ctx context.Context, query miSQLite.Querier, courseID, actorI
 	return student != 0, supervisor != 0, nil
 }
 
+// MentoringScope reports current student membership and supervisor assignment.
+func MentoringScope(ctx context.Context, query miSQLite.Querier, courseID, actorID string) (bool, bool, error) {
+	return TutoringScope(ctx, query, courseID, actorID)
+}
+
+// RequireAssignedSupervisor authorizes a supervisor-scoped feature operation while hiding course existence.
+func RequireAssignedSupervisor(ctx context.Context, query miSQLite.Querier, courseID, actorID string) error {
+	return requireAssignedSupervisor(ctx, query, courseID, actorID, false)
+}
+
+// StudentMembership reports whether the student currently belongs to the course.
+func StudentMembership(ctx context.Context, query miSQLite.Querier, courseID, studentID string) (bool, error) {
+	var exists int
+	err := query.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM course_students
+		WHERE course_id = ? AND student_user_id = ?)`, courseID, studentID).Scan(&exists)
+	if err != nil {
+		return false, fmt.Errorf("check course student membership: %w", err)
+	}
+	return exists != 0, nil
+}
+
+// ActiveStudentMembership reports whether the student belongs to an active course.
+func ActiveStudentMembership(ctx context.Context, query miSQLite.Querier, courseID, studentID string) (bool, error) {
+	var exists int
+	err := query.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM course_students cs JOIN courses c ON c.id = cs.course_id
+		WHERE cs.course_id = ? AND cs.student_user_id = ? AND c.is_active = 1)`, courseID, studentID).Scan(&exists)
+	if err != nil {
+		return false, fmt.Errorf("check active course student membership: %w", err)
+	}
+	return exists != 0, nil
+}
+
 // Service is safe for concurrent use after construction.
 type Service struct {
 	database              *sql.DB
@@ -569,6 +601,19 @@ func (service *Service) SetStudentBanned(ctx context.Context, studentID, actorID
 			action = audit.ActionUserStudentBanned
 		}
 		return audit.Write(ctx, tx, action, actorID, studentID)
+	})
+}
+
+// SetMentoringRequestsAllowed changes the global student request gate through shared-course authorization.
+func (service *Service) SetMentoringRequestsAllowed(ctx context.Context, studentID, actorID string, allowed bool) error {
+	return miSQLite.WithTx(ctx, service.database, func(tx *sql.Tx) error {
+		if err := requireSharedStudent(ctx, tx, studentID, actorID); err != nil {
+			return err
+		}
+		if err := user.SetMentoringRequestsAllowed(ctx, tx, studentID, allowed); err != nil {
+			return err
+		}
+		return audit.Write(ctx, tx, audit.ActionUserMentoringPermissionUpdated, actorID, studentID)
 	})
 }
 

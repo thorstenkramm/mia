@@ -40,6 +40,7 @@ func TestCourseHandlersCreateAndBlockActivationUntilMaterialOwnerIsWired(t *test
 	database := courseDatabaseAt(t, dataDir)
 	admin := createAccount(t, database, "admin", user.Administrator)
 	supervisor := createAccount(t, database, "supervisor", user.Supervisor)
+	unrelated := createAccount(t, database, "unrelated", user.Supervisor)
 	server, _, err := httpserver.New(httpserver.Options{DataDir: dataDir, DocRoot: docRoot})
 	if err != nil {
 		t.Fatal(err)
@@ -74,6 +75,32 @@ func TestCourseHandlersCreateAndBlockActivationUntilMaterialOwnerIsWired(t *test
 		t.Fatalf("course create document = %#v, %v", document, err)
 	}
 	supervisorSession, supervisorCSRF := courseSession(t, server, supervisor)
+	student := createAccount(t, database, "student", user.Student)
+	if _, err := database.Exec(`INSERT INTO course_students (id, course_id, student_user_id, joined_at)
+		VALUES ('cst_permission', ?, ?, ?)`, document.Data.ID, student, instant(time.Now())); err != nil {
+		t.Fatal(err)
+	}
+	permissionBody := []byte(`{"data":{"type":"users","id":"` + student +
+		`","attributes":{"mentoring_requests_allowed":true}}}`)
+	permission := courseHTTP(t, server, http.MethodPatch, "/api/v1/users/"+student,
+		supervisorSession, supervisorCSRF, "application/vnd.api+json", permissionBody)
+	if permission.Code != http.StatusNoContent {
+		t.Fatalf("mentoring permission update = %d %s", permission.Code, permission.Body.String())
+	}
+	allowed, err := user.MentoringRequestsAllowed(context.Background(), database, student)
+	if err != nil || !allowed {
+		t.Fatalf("mentoring permission = %t, %v", allowed, err)
+	}
+	unrelatedSession, unrelatedCSRF := courseSession(t, server, unrelated)
+	deniedPermissionBody := []byte(`{"data":{"type":"users","id":"` + student +
+		`","attributes":{"mentoring_requests_allowed":false}}}`)
+	deniedPermission := courseHTTP(t, server, http.MethodPatch, "/api/v1/users/"+student,
+		unrelatedSession, unrelatedCSRF, "application/vnd.api+json", deniedPermissionBody)
+	assertCourseError(t, deniedPermission, http.StatusNotFound, "course_student_not_found")
+	allowed, err = user.MentoringRequestsAllowed(context.Background(), database, student)
+	if err != nil || !allowed {
+		t.Fatalf("mentoring permission after denied update = %t, %v", allowed, err)
+	}
 	renameBody := []byte(`{"data":{"type":"courses","id":"` + document.Data.ID +
 		`","attributes":{"name":"Renamed"}}}`)
 	deniedRename := courseHTTP(t, server, http.MethodPatch, "/api/v1/courses/"+document.Data.ID,
@@ -111,12 +138,12 @@ func TestCourseHandlersCreateAndBlockActivationUntilMaterialOwnerIsWired(t *test
 		"/api/v1/courses/"+document.Data.ID+"/supervisors/"+supervisor, adminSession, adminCSRF, "", nil)
 	assertCourseError(t, lastSupervisor, http.StatusConflict, "course_last_supervisor")
 	var audits int
-	if err := database.QueryRow(`SELECT COUNT(*) FROM audit_events WHERE action = 'course.mutation.denied'`).Scan(&audits); err != nil || audits != 6 {
+	if err := database.QueryRow(`SELECT COUNT(*) FROM audit_events WHERE action = 'course.mutation.denied'`).Scan(&audits); err != nil || audits != 7 {
 		t.Fatalf("denied mutation audits = %d, %v", audits, err)
 	}
 	for outcome, expected := range map[string]int{
 		"course_unauthorized": 2, "course_activation_unavailable": 1, "course_invalid_state": 2,
-		"course_last_supervisor": 1,
+		"course_last_supervisor": 1, "course_student_not_found": 1,
 	} {
 		if err := database.QueryRow(`SELECT COUNT(*) FROM audit_events WHERE action = 'course.mutation.denied'
 			AND json_extract(metadata, '$.outcome_code') = ?`, outcome).Scan(&audits); err != nil || audits != expected {

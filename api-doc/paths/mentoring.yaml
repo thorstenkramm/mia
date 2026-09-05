@@ -1,0 +1,185 @@
+studentProfile:
+  patch:
+    tags: [Users]
+    operationId: updateStudentMentoringPermission
+    summary: Set a student-only account's mentoring-request permission
+    security: [{ sessionCookie: [], csrfToken: [] }]
+    parameters: [{ $ref: ../openapi.yaml#/components/parameters/ResourceID }]
+    requestBody:
+      required: true
+      content:
+        application/vnd.api+json:
+          schema: { $ref: ../schemas/requests/requests.yaml#/StudentMentoringPermissionRequestDocument }
+    responses:
+      '204': { description: Permission updated. }
+      '400': { $ref: ../responses/errors.yaml#/BadRequest }
+      '401': { $ref: ../responses/errors.yaml#/Unauthorized }
+      '403': { $ref: ../responses/errors.yaml#/Forbidden }
+      '404': { $ref: ../responses/errors.yaml#/NotFound }
+      '406': { $ref: ../responses/errors.yaml#/NotAcceptable }
+      '413': { $ref: ../responses/errors.yaml#/RequestTooLarge }
+      '415': { $ref: ../responses/errors.yaml#/UnsupportedMediaType }
+      '422': { $ref: ../responses/errors.yaml#/Unprocessable }
+
+courseMentors:
+  get:
+    tags: [Mentoring]
+    operationId: listCourseMentors
+    summary: List course mentors as user identifiers
+    security: [{ sessionCookie: [] }]
+    parameters:
+      - { $ref: ../openapi.yaml#/components/parameters/CourseID }
+      - { $ref: ../openapi.yaml#/components/parameters/PageLimit }
+      - { $ref: ../openapi.yaml#/components/parameters/PageOffset }
+    responses: { '200': { $ref: '#/components/responses/MentorList' }, '401': { $ref: ../responses/errors.yaml#/Unauthorized }, '403': { $ref: ../responses/errors.yaml#/Forbidden }, '404': { $ref: ../responses/errors.yaml#/NotFound }, '406': { $ref: ../responses/errors.yaml#/NotAcceptable }, '422': { $ref: ../responses/errors.yaml#/Unprocessable } }
+  post:
+    tags: [Mentoring]
+    operationId: assignCourseMentor
+    summary: Assign a registered mentor to a course
+    security: [{ sessionCookie: [], csrfToken: [] }]
+    parameters: [{ $ref: ../openapi.yaml#/components/parameters/CourseID }]
+    requestBody:
+      required: true
+      content: { application/vnd.api+json: { schema: { $ref: ../schemas/requests/requests.yaml#/CourseMentorAssignmentRequestDocument } } }
+    responses: { '204': { description: Assignment exists. }, '400': { $ref: ../responses/errors.yaml#/BadRequest }, '401': { $ref: ../responses/errors.yaml#/Unauthorized }, '403': { $ref: ../responses/errors.yaml#/Forbidden }, '404': { $ref: ../responses/errors.yaml#/NotFound }, '406': { $ref: ../responses/errors.yaml#/NotAcceptable }, '413': { $ref: ../responses/errors.yaml#/RequestTooLarge }, '415': { $ref: ../responses/errors.yaml#/UnsupportedMediaType }, '422': { $ref: ../responses/errors.yaml#/Unprocessable } }
+
+courseMentor:
+  delete:
+    tags: [Mentoring]
+    operationId: removeCourseMentor
+    summary: Remove a course mentor and return their open work to triage
+    security: [{ sessionCookie: [], csrfToken: [] }]
+    parameters:
+      - { $ref: ../openapi.yaml#/components/parameters/CourseID }
+      - { $ref: ../openapi.yaml#/components/parameters/UserID }
+    responses: { '204': { description: Mentor removed and open work triaged. }, '401': { $ref: ../responses/errors.yaml#/Unauthorized }, '403': { $ref: ../responses/errors.yaml#/Forbidden }, '404': { $ref: ../responses/errors.yaml#/NotFound }, '406': { $ref: ../responses/errors.yaml#/NotAcceptable } }
+
+studentMentors:
+  get:
+    tags: [Mentoring]
+    operationId: listStudentMentors
+    summary: List mentors assigned to a course student
+    security: [{ sessionCookie: [] }]
+    parameters:
+      - { $ref: ../openapi.yaml#/components/parameters/CourseID }
+      - { $ref: ../openapi.yaml#/components/parameters/StudentID }
+      - { $ref: ../openapi.yaml#/components/parameters/PageLimit }
+      - { $ref: ../openapi.yaml#/components/parameters/PageOffset }
+    responses: { '200': { $ref: '#/components/responses/MentorList' }, '401': { $ref: ../responses/errors.yaml#/Unauthorized }, '403': { $ref: ../responses/errors.yaml#/Forbidden }, '404': { $ref: ../responses/errors.yaml#/NotFound }, '406': { $ref: ../responses/errors.yaml#/NotAcceptable }, '422': { $ref: ../responses/errors.yaml#/Unprocessable } }
+  post:
+    tags: [Mentoring]
+    operationId: assignStudentMentor
+    summary: Assign a course mentor to a student
+    security: [{ sessionCookie: [], csrfToken: [] }]
+    parameters:
+      - { $ref: ../openapi.yaml#/components/parameters/CourseID }
+      - { $ref: ../openapi.yaml#/components/parameters/StudentID }
+    requestBody:
+      required: true
+      content: { application/vnd.api+json: { schema: { $ref: ../schemas/requests/requests.yaml#/StudentMentorAssignmentRequestDocument } } }
+    responses: { '204': { description: Assignment exists. }, '400': { $ref: ../responses/errors.yaml#/BadRequest }, '401': { $ref: ../responses/errors.yaml#/Unauthorized }, '403': { $ref: ../responses/errors.yaml#/Forbidden }, '404': { $ref: ../responses/errors.yaml#/NotFound }, '406': { $ref: ../responses/errors.yaml#/NotAcceptable }, '413': { $ref: ../responses/errors.yaml#/RequestTooLarge }, '415': { $ref: ../responses/errors.yaml#/UnsupportedMediaType }, '422': { $ref: ../responses/errors.yaml#/Unprocessable } }
+
+studentMentor:
+  delete:
+    tags: [Mentoring]
+    operationId: removeStudentMentor
+    summary: Remove one student mentor and return affected open work to triage
+    security: [{ sessionCookie: [], csrfToken: [] }]
+    parameters:
+      - { $ref: ../openapi.yaml#/components/parameters/CourseID }
+      - { $ref: ../openapi.yaml#/components/parameters/StudentID }
+      - { $ref: ../openapi.yaml#/components/parameters/UserID }
+    responses: { '204': { description: Assignment removed and open work triaged. }, '401': { $ref: ../responses/errors.yaml#/Unauthorized }, '403': { $ref: ../responses/errors.yaml#/Forbidden }, '404': { $ref: ../responses/errors.yaml#/NotFound }, '406': { $ref: ../responses/errors.yaml#/NotAcceptable } }
+
+mentorStudentProfile:
+  get:
+    tags: [Mentoring]
+    operationId: getMentorStudentProfile
+    summary: Get the minimal identity of a student explicitly assigned to the current mentor
+    security: [{ sessionCookie: [] }]
+    parameters:
+      - { $ref: ../openapi.yaml#/components/parameters/CourseID }
+      - { $ref: ../openapi.yaml#/components/parameters/StudentID }
+    responses:
+      '200':
+        description: Assignment-scoped username, name, nickname, and avatar URL.
+        content:
+          application/vnd.api+json:
+            schema: { $ref: ../schemas/resources/resources.yaml#/MentorStudentProfileDocument }
+      '401': { $ref: ../responses/errors.yaml#/Unauthorized }
+      '403': { $ref: ../responses/errors.yaml#/Forbidden }
+      '404':
+        $ref: ../responses/errors.yaml#/NotFound
+        description: Student, course, or explicit mentor assignment is absent (`mentoring_not_found`).
+      '406': { $ref: ../responses/errors.yaml#/NotAcceptable }
+
+mentorStudentAvatar:
+  get:
+    tags: [Mentoring]
+    operationId: getMentorStudentAvatar
+    summary: Download the avatar of a student explicitly assigned to the current mentor
+    security: [{ sessionCookie: [] }]
+    parameters:
+      - { $ref: ../openapi.yaml#/components/parameters/CourseID }
+      - { $ref: ../openapi.yaml#/components/parameters/StudentID }
+    responses:
+      '200':
+        description: Normalized PNG with ETag and private no-cache headers.
+        content:
+          image/png:
+            schema: { $ref: ../schemas/json-api/documents.yaml#/BinaryPayload }
+      '304': { description: The If-None-Match validator matched. }
+      '401': { $ref: ../responses/errors.yaml#/Unauthorized }
+      '403': { $ref: ../responses/errors.yaml#/Forbidden }
+      '404':
+        $ref: ../responses/errors.yaml#/NotFound
+        description: Avatar or explicit mentor assignment is absent (`mentoring_not_found`).
+
+courseMentoringSessions:
+  get:
+    tags: [Mentoring]
+    operationId: listMentoringSessions
+    summary: List mentoring sessions visible to the current participant or supervisor
+    security: [{ sessionCookie: [] }]
+    parameters:
+      - { $ref: ../openapi.yaml#/components/parameters/CourseID }
+      - { $ref: ../openapi.yaml#/components/parameters/PageLimit }
+      - { $ref: ../openapi.yaml#/components/parameters/PageOffset }
+    responses: { '200': { description: Paginated mentoring-session collection., content: { application/vnd.api+json: { schema: { $ref: ../schemas/resources/resources.yaml#/MentoringSessionCollectionDocument } } } }, '401': { $ref: ../responses/errors.yaml#/Unauthorized }, '403': { $ref: ../responses/errors.yaml#/Forbidden }, '404': { $ref: ../responses/errors.yaml#/NotFound }, '406': { $ref: ../responses/errors.yaml#/NotAcceptable }, '422': { $ref: ../responses/errors.yaml#/Unprocessable } }
+  post:
+    tags: [Mentoring]
+    operationId: createMentoringSession
+    summary: Create an unassigned last-resource mentoring request
+    security: [{ sessionCookie: [], csrfToken: [] }]
+    parameters: [{ $ref: ../openapi.yaml#/components/parameters/CourseID }]
+    requestBody:
+      required: true
+      content: { application/vnd.api+json: { schema: { $ref: ../schemas/requests/requests.yaml#/MentoringSessionCreateRequestDocument } } }
+    responses: { '201': { description: Unassigned mentoring request., content: { application/vnd.api+json: { schema: { $ref: ../schemas/resources/resources.yaml#/MentoringSessionDocument } } } }, '400': { $ref: ../responses/errors.yaml#/BadRequest }, '401': { $ref: ../responses/errors.yaml#/Unauthorized }, '403': { $ref: ../responses/errors.yaml#/Forbidden }, '404': { $ref: ../responses/errors.yaml#/NotFound }, '406': { $ref: ../responses/errors.yaml#/NotAcceptable }, '409': { $ref: ../responses/errors.yaml#/Conflict }, '413': { $ref: ../responses/errors.yaml#/RequestTooLarge }, '415': { $ref: ../responses/errors.yaml#/UnsupportedMediaType }, '422': { $ref: ../responses/errors.yaml#/Unprocessable } }
+
+mentoringSession:
+  get:
+    tags: [Mentoring]
+    operationId: getMentoringSession
+    summary: Get an authorized mentoring session
+    security: [{ sessionCookie: [] }]
+    parameters: [{ $ref: ../openapi.yaml#/components/parameters/ResourceID }]
+    responses: { '200': { description: Current mentoring workflow state., content: { application/vnd.api+json: { schema: { $ref: ../schemas/resources/resources.yaml#/MentoringSessionDocument } } } }, '401': { $ref: ../responses/errors.yaml#/Unauthorized }, '403': { $ref: ../responses/errors.yaml#/Forbidden }, '404': { $ref: ../responses/errors.yaml#/NotFound }, '406': { $ref: ../responses/errors.yaml#/NotAcceptable } }
+  patch:
+    tags: [Mentoring]
+    operationId: updateMentoringSession
+    summary: Triage, respond, schedule, reschedule, cancel, or complete mentoring work
+    security: [{ sessionCookie: [], csrfToken: [] }]
+    parameters: [{ $ref: ../openapi.yaml#/components/parameters/ResourceID }]
+    requestBody:
+      required: true
+      content: { application/vnd.api+json: { schema: { $ref: ../schemas/requests/requests.yaml#/MentoringSessionUpdateRequestDocument } } }
+    responses: { '200': { description: Updated mentoring workflow state., content: { application/vnd.api+json: { schema: { $ref: ../schemas/resources/resources.yaml#/MentoringSessionDocument } } } }, '400': { $ref: ../responses/errors.yaml#/BadRequest }, '401': { $ref: ../responses/errors.yaml#/Unauthorized }, '403': { $ref: ../responses/errors.yaml#/Forbidden }, '404': { $ref: ../responses/errors.yaml#/NotFound }, '406': { $ref: ../responses/errors.yaml#/NotAcceptable }, '409': { $ref: ../responses/errors.yaml#/Conflict }, '413': { $ref: ../responses/errors.yaml#/RequestTooLarge }, '415': { $ref: ../responses/errors.yaml#/UnsupportedMediaType }, '422': { $ref: ../responses/errors.yaml#/Unprocessable } }
+
+components:
+  responses:
+    MentorList:
+      description: Paginated user identifiers for assigned mentors.
+      content:
+        application/vnd.api+json:
+          schema: { $ref: ../schemas/resources/resources.yaml#/MentorIdentifierCollectionDocument }

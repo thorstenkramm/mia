@@ -85,18 +85,33 @@ const (
 	ActionUserStudentBanned        Action = "user.student.banned"
 	ActionUserStudentUnbanned      Action = "user.student.unbanned"
 
-	ActionMaterialCreated          Action = "material.material.created"
-	ActionMaterialFileUploaded     Action = "material.file.uploaded"
-	ActionMaterialFileDeleted      Action = "material.file.deleted"
-	ActionMaterialFinalized        Action = "material.material.finalized"
-	ActionMaterialBriefCorrected   Action = "material.brief.corrected"
-	ActionMaterialApproved         Action = "material.approval.granted"
-	ActionMaterialApprovalRevoked  Action = "material.approval.revoked"
-	ActionMaterialDeleted          Action = "material.material.deleted"
-	ActionMaterialProcessingFailed Action = "material.processing.failed"
-	ActionMaterialMutationDenied   Action = "material.mutation.denied"
-	ActionTutoringSummaryCorrected Action = "tutoring.summary.corrected"
-	ActionTutoringSummaryFailed    Action = "tutoring.summary.failed"
+	ActionMaterialCreated                Action = "material.material.created"
+	ActionMaterialFileUploaded           Action = "material.file.uploaded"
+	ActionMaterialFileDeleted            Action = "material.file.deleted"
+	ActionMaterialFinalized              Action = "material.material.finalized"
+	ActionMaterialBriefCorrected         Action = "material.brief.corrected"
+	ActionMaterialApproved               Action = "material.approval.granted"
+	ActionMaterialApprovalRevoked        Action = "material.approval.revoked"
+	ActionMaterialDeleted                Action = "material.material.deleted"
+	ActionMaterialProcessingFailed       Action = "material.processing.failed"
+	ActionMaterialMutationDenied         Action = "material.mutation.denied"
+	ActionTutoringSummaryCorrected       Action = "tutoring.summary.corrected"
+	ActionTutoringSummaryFailed          Action = "tutoring.summary.failed"
+	ActionMentoringCourseMentorAssigned  Action = "mentoring.course_mentor.assigned"
+	ActionMentoringCourseMentorRemoved   Action = "mentoring.course_mentor.removed"
+	ActionMentoringStudentMentorAssigned Action = "mentoring.student_mentor.assigned"
+	ActionMentoringStudentMentorRemoved  Action = "mentoring.student_mentor.removed"
+	ActionMentoringSessionRequested      Action = "mentoring.session.requested"
+	ActionMentoringSessionAssigned       Action = "mentoring.session.assigned"
+	ActionMentoringSessionTriaged        Action = "mentoring.session.triaged"
+	ActionMentoringSessionResponded      Action = "mentoring.session.responded"
+	ActionMentoringSessionScheduled      Action = "mentoring.session.scheduled"
+	ActionMentoringSessionRescheduled    Action = "mentoring.session.rescheduled"
+	ActionMentoringSessionUpdated        Action = "mentoring.session.updated"
+	ActionMentoringSessionCancelled      Action = "mentoring.session.cancelled"
+	ActionMentoringSessionCompleted      Action = "mentoring.session.completed"
+	ActionMentoringMutationDenied        Action = "mentoring.mutation.denied"
+	ActionUserMentoringPermissionUpdated Action = "user.mentoring_permission.updated"
 )
 
 var actions = map[Action]struct{}{
@@ -178,16 +193,35 @@ var actions = map[Action]struct{}{
 	ActionMaterialMutationDenied:                {},
 	ActionTutoringSummaryCorrected:              {},
 	ActionTutoringSummaryFailed:                 {},
+	ActionMentoringCourseMentorAssigned:         {},
+	ActionMentoringCourseMentorRemoved:          {},
+	ActionMentoringStudentMentorAssigned:        {},
+	ActionMentoringStudentMentorRemoved:         {},
+	ActionMentoringSessionRequested:             {},
+	ActionMentoringSessionAssigned:              {},
+	ActionMentoringSessionTriaged:               {},
+	ActionMentoringSessionResponded:             {},
+	ActionMentoringSessionScheduled:             {},
+	ActionMentoringSessionRescheduled:           {},
+	ActionMentoringSessionUpdated:               {},
+	ActionMentoringSessionCancelled:             {},
+	ActionMentoringSessionCompleted:             {},
+	ActionMentoringMutationDenied:               {},
+	ActionUserMentoringPermissionUpdated:        {},
 }
 
 // Metadata contains typed, content-free audit metadata.
-// Only identifiers and outcome codes are allowed; no tokens, emails, or other sensitive data.
+// Only identifiers, scheduling instants, and outcome codes are allowed; no tokens, emails, or other sensitive data.
 type Metadata struct {
-	InvitationID string `json:"invitation_id,omitempty"`
-	MaterialID   string `json:"material_id,omitempty"`
-	CourseID     string `json:"-"`
-	OutcomeCode  string `json:"outcome_code,omitempty"`
-	Role         string `json:"role,omitempty"`
+	InvitationID        string `json:"invitation_id,omitempty"`
+	MaterialID          string `json:"material_id,omitempty"`
+	CourseID            string `json:"-"`
+	OutcomeCode         string `json:"outcome_code,omitempty"`
+	Role                string `json:"role,omitempty"`
+	MentoringSessionID  string `json:"mentoring_session_id,omitempty"`
+	MentorID            string `json:"mentor_id,omitempty"`
+	PreviousScheduledAt string `json:"previous_scheduled_at,omitempty"`
+	NewScheduledAt      string `json:"new_scheduled_at,omitempty"`
 }
 
 // Write records one registered action in the same transaction as its mutation.

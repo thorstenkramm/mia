@@ -1145,6 +1145,9 @@ Constraints:
 - Rescheduling overwrites `scheduled_for`; the required audit event records the
   actor, previous time, and new time instead of a revision row.
 - External meeting URLs use HTTPS and are never fetched by MIA.
+- Topic is limited to 4,000 Unicode code points and 16 KiB; response is limited to
+  8,000 code points and 32 KiB; meeting instructions are limited to 4,000 code
+  points and 16 KiB; meeting URLs are limited to 2,048 bytes.
 
 ## Jobs and provider operations
 
