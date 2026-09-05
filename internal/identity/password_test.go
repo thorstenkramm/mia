@@ -1,6 +1,7 @@
 package identity
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
@@ -24,5 +25,24 @@ func TestPasswordPolicyAndVerification(t *testing.T) {
 	}
 	if _, err := Password("  twelve chars"); err != nil {
 		t.Fatalf("spaces were altered or rejected: %v", err)
+	}
+}
+
+func TestPasswordPolicyReasons(t *testing.T) {
+	for name, password := range map[string]string{
+		"invalid UTF-8":  string([]byte{0xff}),
+		"too short":      "short",
+		"too many runes": strings.Repeat("a", 129),
+		"too many bytes": strings.Repeat("a", 513),
+		"common":         "passwordpassword",
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := PasswordPolicy(password); err == nil {
+				t.Fatal("PasswordPolicy accepted an invalid password")
+			}
+		})
+	}
+	if !errors.Is(PasswordPolicy("short"), ErrPasswordTooShort) {
+		t.Fatal("short password did not retain its policy reason")
 	}
 }

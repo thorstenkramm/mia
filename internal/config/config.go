@@ -275,6 +275,9 @@ func validate(config *Config, serve bool, optional optionalProviders) error {
 }
 
 func requiredPath(name, value string, private bool) error {
+	if value == "" {
+		return fmt.Errorf("%s must be configured", name)
+	}
 	if !filepath.IsAbs(value) {
 		return fmt.Errorf("%s must be an absolute path", name)
 	}

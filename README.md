@@ -97,8 +97,10 @@ user ID and need no approval from that user. Granting the supervisor role also
 grants the student role. After joining an active assigned course through the
 ordinary student-membership flow, a supervisor can test it as a student.
 With the server stopped, the operator creates the first administrator through a
-one-time interactive local command. The command is disabled after the first
-administrator exists.
+one-time local command. The command supports an interactive terminal dialogue or
+complete noninteractive flags with a one-line password file. It requires an
+existing absolute `main.data_dir`, prints the inserted user's fixed SQLite path
+after commit, and is disabled after the first administrator exists.
 
 **Step 4: make students familiar**: While technically not required, this step is crucial: Make the students familiar
 with the tutoring platform. Integrate it into regular classes. Or conduct the first tutoring sessions under personal

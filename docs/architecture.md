@@ -22,7 +22,7 @@ MIA ships one executable named `mia`. It provides these subcommands:
 
 - `mia serve` starts the HTTP server and background workers.
 - `mia bootstrap-admin` creates the first administrator through the confirmed
-  offline interactive workflow.
+  offline workflow.
 - `mia reset-admin-mfa` performs the confirmed offline sole-administrator MFA
   recovery workflow.
 
@@ -42,9 +42,14 @@ administration binary.
   settings required for database and account-policy work. They do not require a
   document root or provider configuration.
 - The process lock is acquired before opening SQLite or applying migrations.
-- `bootstrap-admin` requires a terminal and prompts for username, email,
-  language, country, time zone, password, and password confirmation. It accepts
-  none of those account values through flags or environment variables.
+- `bootstrap-admin` uses either an interactive terminal dialogue for username,
+  email, language, country, time zone, password, and confirmation, or a complete
+  noninteractive set of account flags plus `--password-file`. The two modes are
+  exclusive. The password file is a readable regular file containing one line
+  with an optional final LF or CRLF; no password bytes are otherwise changed.
+- Interactive password input provides asterisk feedback while preserving entered
+  bytes, retries mismatch and policy failures, and restores terminal state on
+  every exit. The command prints its fixed SQLite path only after commit.
 - `reset-admin-mfa` displays the sole administrator and requires the operator to
   type its exact displayed username before making changes.
 

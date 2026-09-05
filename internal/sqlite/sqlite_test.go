@@ -4,8 +4,16 @@ import (
 	"context"
 	"database/sql"
 	"os"
+	"path/filepath"
 	"testing"
 )
+
+func TestDatabasePathUsesTheFixedDatabaseName(t *testing.T) {
+	directory := t.TempDir()
+	if got, want := DatabasePath(directory), filepath.Join(directory, "mia.sqlite3"); got != want {
+		t.Fatalf("DatabasePath() = %q, want %q", got, want)
+	}
+}
 
 func TestOpenAppliesEmbeddedMigrations(t *testing.T) {
 	directory := t.TempDir()

@@ -56,10 +56,15 @@ func WithTx(ctx context.Context, database *sql.DB, fn func(*sql.Tx) error) (retu
 	return nil
 }
 
+// DatabasePath returns the fixed database path within dataDir.
+func DatabasePath(dataDir string) string {
+	return filepath.Join(dataDir, "mia.sqlite3")
+}
+
 // Open opens the fixed data-directory database, configures every connection,
 // and applies all embedded forward-only migrations.
 func Open(dataDir string) (*sql.DB, error) {
-	path := filepath.Join(dataDir, "mia.sqlite3")
+	path := DatabasePath(dataDir)
 	if err := validateExistingFiles(path); err != nil {
 		return nil, err
 	}

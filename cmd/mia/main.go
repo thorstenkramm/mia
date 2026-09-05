@@ -3,10 +3,12 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"database/sql"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -16,8 +18,10 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	"unicode/utf8"
 
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 	"github.com/thorstenkramm/mia/internal/audit"
 	"github.com/thorstenkramm/mia/internal/auth"
 	"github.com/thorstenkramm/mia/internal/config"
@@ -54,11 +58,8 @@ func newRootCommand() *cobra.Command {
 }
 
 func newBootstrapAdminCommand() *cobra.Command {
-	return &cobra.Command{Use: "bootstrap-admin", Args: cobra.NoArgs, RunE: func(command *cobra.Command, _ []string) (returnErr error) {
-		if !term.IsTerminal(int(os.Stdin.Fd())) || !term.IsTerminal(int(os.Stdout.Fd())) {
-			return errors.New("bootstrap-admin requires an interactive terminal")
-		}
-		input, err := readBootstrapInput()
+	command := &cobra.Command{Use: "bootstrap-admin", Args: cobra.NoArgs, RunE: func(command *cobra.Command, _ []string) (returnErr error) {
+		input, err := readBootstrapInput(command.Flags(), term.IsTerminal(int(os.Stdin.Fd())), term.IsTerminal(int(os.Stdout.Fd())))
 		if err != nil {
 			return err
 		}
@@ -79,8 +80,22 @@ func newBootstrapAdminCommand() *cobra.Command {
 		}
 		defer func() { returnErr = errors.Join(returnErr, database.Close()) }()
 		// jscpd:ignore-end
-		return miSQLite.WithTx(command.Context(), database, func(transaction *sql.Tx) error { return bootstrapAdministrator(command.Context(), transaction, input) })
+		if err := miSQLite.WithTx(command.Context(), database, func(transaction *sql.Tx) error {
+			return bootstrapAdministrator(command.Context(), transaction, input)
+		}); err != nil {
+			return err
+		}
+		_, err = fmt.Fprintf(command.OutOrStdout(), "User %s has been inserted into %s\n", input.username,
+			miSQLite.DatabasePath(configuration.Main.DataDir))
+		return err
 	}}
+	command.Flags().String("username", "", "administrator username for noninteractive bootstrap")
+	command.Flags().String("email", "", "administrator email for noninteractive bootstrap")
+	command.Flags().String("language", "", "administrator language for noninteractive bootstrap")
+	command.Flags().String("country", "", "administrator country for noninteractive bootstrap")
+	command.Flags().String("time-zone", "", "administrator time zone for noninteractive bootstrap")
+	command.Flags().String("password-file", "", "one-line administrator password file for noninteractive bootstrap")
+	return command
 }
 
 func newResetAdminMFACommand() *cobra.Command {
@@ -160,7 +175,16 @@ func bootstrapAdministrator(ctx context.Context, transaction *sql.Tx, input boot
 
 type bootstrapInput struct{ username, email, language, country, timeZone, passwordHash string }
 
-func readBootstrapInput() (bootstrapInput, error) {
+var bootstrapFlags = []string{"username", "email", "language", "country", "time-zone", "password-file"}
+
+func readBootstrapInput(flags *pflag.FlagSet, stdinTerminal, stdoutTerminal bool) (bootstrapInput, error) {
+	interactive, modeErr := bootstrapInteractiveMode(flags, stdinTerminal, stdoutTerminal)
+	if modeErr != nil {
+		return bootstrapInput{}, modeErr
+	}
+	if !interactive {
+		return readBootstrapFlagInput(flags)
+	}
 	reader := bufio.NewReader(os.Stdin)
 	read := func(label string) (string, error) {
 		if _, err := fmt.Fprint(os.Stdout, label+": "); err != nil {
@@ -189,30 +213,282 @@ func readBootstrapInput() (bootstrapInput, error) {
 	if result.timeZone, err = read("Time zone"); err != nil {
 		return result, err
 	}
-	if _, err := fmt.Fprint(os.Stdout, "Password: "); err != nil {
-		return result, fmt.Errorf("write password prompt: %w", err)
+	result.passwordHash, err = readBootstrapPassword(promptMaskedPassword, func(message string) error {
+		_, err := fmt.Fprintln(os.Stdout, message)
+		return err
+	})
+	return result, err
+}
+
+func readBootstrapPassword(read func(string) ([]byte, error), report func(string) error) (string, error) {
+	for {
+		password, err := read("Password: ")
+		if err != nil {
+			if errors.Is(err, identity.ErrPasswordTooLongBytes) {
+				if err := reportBootstrapPasswordPolicyFailure(report, err); err != nil {
+					return "", err
+				}
+				continue
+			}
+			return "", err
+		}
+		confirmation, err := read("Password confirmation: ")
+		if err != nil {
+			if errors.Is(err, identity.ErrPasswordTooLongBytes) {
+				if err := reportBootstrapPasswordPolicyFailure(report, err); err != nil {
+					return "", err
+				}
+				continue
+			}
+			return "", err
+		}
+		if !bytes.Equal(password, confirmation) {
+			if err := report("Password confirmation does not match. Please try again."); err != nil {
+				return "", fmt.Errorf("write password mismatch: %w", err)
+			}
+			continue
+		}
+		hash, err := identity.Password(string(password))
+		if err == nil {
+			return hash, nil
+		}
+		if !errors.Is(err, identity.ErrInvalidPassword) {
+			return "", err
+		}
+		if err := reportBootstrapPasswordPolicyFailure(report, err); err != nil {
+			return "", err
+		}
 	}
-	password, err := term.ReadPassword(int(os.Stdin.Fd()))
+}
+
+func reportBootstrapPasswordPolicyFailure(report func(string) error, policyErr error) error {
+	if err := report("Password rejected: " + passwordPolicyMessage(policyErr) + ". Please try again."); err != nil {
+		return fmt.Errorf("write password policy failure: %w", err)
+	}
+	return nil
+}
+
+func bootstrapInteractiveMode(flags *pflag.FlagSet, stdinTerminal, stdoutTerminal bool) (bool, error) {
+	flagsProvided := false
+	for _, name := range bootstrapFlags {
+		if flags.Changed(name) {
+			flagsProvided = true
+			break
+		}
+	}
+	if flagsProvided {
+		if stdinTerminal || stdoutTerminal {
+			return false, errors.New("bootstrap-admin flags require noninteractive input and output")
+		}
+		for _, name := range bootstrapFlags {
+			value, err := flags.GetString(name)
+			if err != nil {
+				return false, fmt.Errorf("read --%s: %w", name, err)
+			}
+			if !flags.Changed(name) || value == "" {
+				return false, fmt.Errorf("noninteractive bootstrap requires --%s", name)
+			}
+		}
+		return false, nil
+	}
+	if !stdinTerminal || !stdoutTerminal {
+		return false, errors.New("bootstrap-admin requires an interactive terminal or complete noninteractive flags")
+	}
+	return true, nil
+}
+
+func readBootstrapFlagInput(flags *pflag.FlagSet) (bootstrapInput, error) {
+	var input bootstrapInput
+	values := []*string{&input.username, &input.email, &input.language, &input.country, &input.timeZone}
+	for index, name := range bootstrapFlags[:5] {
+		value, err := flags.GetString(name)
+		if err != nil {
+			return input, fmt.Errorf("read --%s: %w", name, err)
+		}
+		*values[index] = value
+	}
+	path, err := flags.GetString("password-file")
 	if err != nil {
-		return result, fmt.Errorf("read password: %w", err)
+		return input, fmt.Errorf("read --password-file: %w", err)
 	}
-	if _, err := fmt.Fprint(os.Stdout, "\nPassword confirmation: "); err != nil {
-		return result, fmt.Errorf("write password confirmation prompt: %w", err)
-	}
-	confirmation, err := term.ReadPassword(int(os.Stdin.Fd()))
+	password, err := readPasswordFile(path)
 	if err != nil {
-		return result, fmt.Errorf("read password confirmation: %w", err)
+		return input, err
 	}
-	if _, err := fmt.Fprintln(os.Stdout); err != nil {
-		return result, fmt.Errorf("write prompt newline: %w", err)
+	input.passwordHash, err = identity.Password(string(password))
+	return input, err
+}
+
+// readPasswordFile accepts exactly one non-empty line and keeps every password byte except its terminal line ending.
+func readPasswordFile(path string) (value []byte, returnErr error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, fmt.Errorf("stat password file: %w", err)
 	}
-	if string(password) != string(confirmation) {
-		return result, errors.New("password confirmation does not match")
+	if !info.Mode().IsRegular() {
+		return nil, errors.New("password file is not regular")
 	}
-	if result.passwordHash, err = identity.Password(string(password)); err != nil {
-		return result, err
+	descriptor, err := syscall.Open(path, syscall.O_RDONLY|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, fmt.Errorf("open password file: %w", err)
 	}
-	return result, nil
+	file := os.NewFile(uintptr(descriptor), path)
+	if file == nil {
+		if err := syscall.Close(descriptor); err != nil {
+			return nil, fmt.Errorf("close password file descriptor: %w", err)
+		}
+		return nil, errors.New("create password file handle")
+	}
+	defer func() {
+		if err := file.Close(); err != nil {
+			returnErr = errors.Join(returnErr, fmt.Errorf("close password file: %w", err))
+		}
+	}()
+	info, err = file.Stat()
+	if err != nil {
+		return nil, fmt.Errorf("stat password file: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return nil, errors.New("password file is not regular")
+	}
+	value, err = io.ReadAll(io.LimitReader(file, 515))
+	if err != nil {
+		return nil, fmt.Errorf("read password file: %w", err)
+	}
+	if len(value) == 515 {
+		return nil, errors.New("password file exceeds the maximum password length")
+	}
+	if bytes.HasSuffix(value, []byte("\r\n")) {
+		value = value[:len(value)-2]
+	} else if bytes.HasSuffix(value, []byte("\n")) {
+		value = value[:len(value)-1]
+	}
+	if len(value) == 0 {
+		return nil, errors.New("password file is empty")
+	}
+	if bytes.ContainsAny(value, "\r\n") {
+		return nil, errors.New("password file must contain exactly one line")
+	}
+	return value, nil
+}
+
+func promptMaskedPassword(label string) ([]byte, error) {
+	if _, err := fmt.Fprint(os.Stdout, label); err != nil {
+		return nil, fmt.Errorf("write password prompt: %w", err)
+	}
+	value, err := readMaskedPassword(int(os.Stdin.Fd()), os.Stdout)
+	if _, newlineErr := fmt.Fprintln(os.Stdout); newlineErr != nil {
+		return nil, fmt.Errorf("write password prompt newline: %w", newlineErr)
+	}
+	return value, err
+}
+
+// readMaskedPassword uses raw terminal input and restores terminal state before returning.
+func readMaskedPassword(fd int, output io.Writer) (value []byte, returnErr error) {
+	terminalState, err := term.MakeRaw(fd)
+	if err != nil {
+		return nil, fmt.Errorf("set password terminal mode: %w", err)
+	}
+	defer func() {
+		if err := term.Restore(fd, terminalState); err != nil {
+			returnErr = errors.Join(returnErr, fmt.Errorf("restore password terminal mode: %w", err))
+		}
+	}()
+	state := maskedPasswordState{}
+	for {
+		var input [1]byte
+		if _, err := os.Stdin.Read(input[:]); err != nil {
+			return nil, fmt.Errorf("read password: %w", err)
+		}
+		feedback, complete, err := state.accept(input[0])
+		if err != nil {
+			return nil, err
+		}
+		if feedback != "" {
+			if _, err := fmt.Fprint(output, feedback); err != nil {
+				return nil, fmt.Errorf("write password feedback: %w", err)
+			}
+		}
+		if complete {
+			if state.overflow > 0 {
+				return state.value, identity.ErrPasswordTooLongBytes
+			}
+			return state.value, nil
+		}
+	}
+}
+
+// maskedPasswordState bounds retained input while tracking terminal feedback
+// separately from the exact password bytes passed to password validation.
+type maskedPasswordState struct {
+	value    []byte
+	masked   int
+	overflow int
+}
+
+func (state *maskedPasswordState) accept(input byte) (feedback string, complete bool, err error) {
+	switch input {
+	case '\r', '\n':
+		return "", true, nil
+	case 3:
+		return "", false, errors.New("password input interrupted")
+	case 4:
+		return "", false, io.EOF
+	case 8, 127:
+		if state.overflow > 0 {
+			state.overflow--
+			return "", false, nil
+		}
+		if len(state.value) == 0 {
+			return "", false, nil
+		}
+		_, size := utf8.DecodeLastRune(state.value)
+		state.value = state.value[:len(state.value)-size]
+		if passwordRuneCount(state.value) < state.masked {
+			state.masked--
+			return "\b \b", false, nil
+		}
+		return "", false, nil
+	default:
+		if len(state.value) >= 513 {
+			state.overflow++
+			return "", false, nil
+		}
+		state.value = append(state.value, input)
+		count := passwordRuneCount(state.value)
+		if count > state.masked {
+			state.masked = count
+			return "*", false, nil
+		}
+		return "", false, nil
+	}
+}
+
+func passwordRuneCount(value []byte) int {
+	count := 0
+	for len(value) > 0 && utf8.FullRune(value) {
+		_, size := utf8.DecodeRune(value)
+		value = value[size:]
+		count++
+	}
+	return count
+}
+
+func passwordPolicyMessage(err error) string {
+	switch {
+	case errors.Is(err, identity.ErrPasswordInvalidUTF8):
+		return "it must be valid UTF-8"
+	case errors.Is(err, identity.ErrPasswordTooLongBytes):
+		return "it must be at most 512 bytes"
+	case errors.Is(err, identity.ErrPasswordTooShort):
+		return "it must contain at least 12 Unicode code points"
+	case errors.Is(err, identity.ErrPasswordTooLong):
+		return "it must contain at most 128 Unicode code points"
+	case errors.Is(err, identity.ErrPasswordCommon):
+		return "it is commonly used"
+	default:
+		return "it does not meet the password policy"
+	}
 }
 
 func newServeCommand() *cobra.Command {

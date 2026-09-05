@@ -22,10 +22,15 @@ import (
 )
 
 var (
-	ErrInvalidUsername = errors.New("invalid username")
-	ErrInvalidEmail    = errors.New("invalid email")
-	ErrInvalidText     = errors.New("invalid text")
-	ErrInvalidPassword = errors.New("invalid password")
+	ErrInvalidUsername      = errors.New("invalid username")
+	ErrInvalidEmail         = errors.New("invalid email")
+	ErrInvalidText          = errors.New("invalid text")
+	ErrInvalidPassword      = errors.New("invalid password")
+	ErrPasswordInvalidUTF8  = errors.New("password is not valid UTF-8")
+	ErrPasswordTooLongBytes = errors.New("password exceeds 512 bytes")
+	ErrPasswordTooShort     = errors.New("password must contain at least 12 Unicode code points")
+	ErrPasswordTooLong      = errors.New("password must contain at most 128 Unicode code points")
+	ErrPasswordCommon       = errors.New("password is commonly used")
 )
 
 // SecLists snapshot: danielmiessler/SecLists, commit
@@ -40,8 +45,8 @@ var commonPasswords = makePasswordSet(commonPasswordsFile)
 
 // Password validates the exact submitted password and returns an Argon2id PHC hash.
 func Password(value string) (string, error) {
-	if !validPassword(value) {
-		return "", ErrInvalidPassword
+	if err := PasswordPolicy(value); err != nil {
+		return "", errors.Join(ErrInvalidPassword, err)
 	}
 	salt := make([]byte, 16)
 	if _, err := rand.Read(salt); err != nil {
@@ -74,9 +79,25 @@ func DummyPasswordWork(value string) {
 	argon2.IDKey([]byte(value), []byte("mia-login-dummy!"), 2, 19456, 1, 32)
 }
 
-func validPassword(value string) bool {
-	return utf8.ValidString(value) && len(value) <= 512 && utf8.RuneCountInString(value) >= 12 &&
-		utf8.RuneCountInString(value) <= 128 && !commonPasswords[value]
+// PasswordPolicy returns a non-secret reason when a password violates policy.
+// It validates the submitted bytes without trimming or normalizing them.
+func PasswordPolicy(value string) error {
+	if !utf8.ValidString(value) {
+		return ErrPasswordInvalidUTF8
+	}
+	if len(value) > 512 {
+		return ErrPasswordTooLongBytes
+	}
+	if utf8.RuneCountInString(value) < 12 {
+		return ErrPasswordTooShort
+	}
+	if utf8.RuneCountInString(value) > 128 {
+		return ErrPasswordTooLong
+	}
+	if commonPasswords[value] {
+		return ErrPasswordCommon
+	}
+	return nil
 }
 
 func makePasswordSet(value string) map[string]bool {

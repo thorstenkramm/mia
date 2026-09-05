@@ -138,10 +138,15 @@ restrictive referrer policy, frame denial, and a strict baseline CSP
 demonstrably requires it.
 
 The first-administrator bootstrap has no HTTP route. With the server stopped, the
-operator runs the interactive `mia bootstrap-admin` command locally. The command
-requires a terminal and prompts for username, email, language, country, time
-zone, password, and password confirmation. It refuses redirected input and never
-accepts account fields through arguments, environment variables, or input files.
+operator runs `mia bootstrap-admin` locally in exactly one of two modes. The
+interactive terminal mode prompts for username, email, language, country, time
+zone, password, and password confirmation with masked password feedback. The
+noninteractive mode requires `--username`, `--email`, `--language`, `--country`,
+`--time-zone`, and `--password-file`, and refuses any terminal input or output.
+The password file must be a readable regular one-line file with an optional final
+LF or CRLF; all other password bytes are preserved. The command requires a
+configured absolute `main.data_dir` and prints the username and fixed SQLite path
+only after its transaction commits.
 
 The command validates the normal account and password rules, verifies that no
 administrator exists inside the bootstrap transaction, creates the user and

@@ -683,9 +683,16 @@ profile operations.
 ### First administrator
 
 - The operator creates the first administrator through a one-time local
-  bootstrap action.
+  bootstrap action. The action uses either an interactive terminal dialogue or a
+  complete noninteractive invocation with username, verified email, language,
+  country, time zone, and a one-line password file.
 - Bootstrap is available only while no administrator exists and is never exposed
   as a public web registration flow.
+- Bootstrap requires a configured absolute data directory. A password file is a
+  readable regular file containing one non-empty password line with an optional
+  final LF or CRLF; all other password bytes remain unchanged.
+- After the transaction commits, bootstrap confirms the username and the fixed
+  SQLite path under the configured data directory. It never prints the password.
 - After the first administrator is created, bootstrap is disabled and further
   administrators follow the authorized account-management workflow.
 

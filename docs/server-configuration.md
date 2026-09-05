@@ -13,6 +13,14 @@ semantically require only `main.data_dir` and database/account-policy settings.
 They still reject malformed input and unknown keys, but they do not require
 frontend or provider settings.
 
+`mia bootstrap-admin` requires an existing absolute `main.data_dir`. It runs
+either interactively in a terminal or noninteractively with complete
+`--username`, `--email`, `--language`, `--country`, `--time-zone`, and
+`--password-file` flags. The modes cannot be mixed. The password file must be a
+readable regular file with exactly one non-empty line and an optional final LF or
+CRLF; MIA preserves every other password byte. Successful bootstrap prints the
+username and `<main.data_dir>/mia.sqlite3` only after commit.
+
 See [`mia.example.toml`](../mia.example.toml) for a complete annotated
 configuration file. Once configuration code exists, an automated check must keep
 its key set mechanically complete with the configuration schema.

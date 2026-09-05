@@ -54,6 +54,15 @@ func TestLoadRejectsUnknownConfigurationKey(t *testing.T) {
 	}
 }
 
+func TestLoadOfflineRequiresConfiguredDataDirectory(t *testing.T) {
+	flags := pflag.NewFlagSet("test", pflag.ContinueOnError)
+	AddFlags(flags)
+	_, err := Load(flags, false)
+	if err == nil || !strings.Contains(err.Error(), "main.data_dir must be configured") {
+		t.Fatalf("Load error = %v", err)
+	}
+}
+
 func TestExampleConfigurationDocumentsEverySchemaKey(t *testing.T) {
 	content, err := os.ReadFile(filepath.Join("..", "..", "mia.example.toml"))
 	if err != nil {
