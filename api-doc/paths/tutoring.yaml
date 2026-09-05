@@ -1,0 +1,288 @@
+courseTutoringSessions:
+  get:
+    tags: [Tutoring]
+    operationId: listTutoringSessions
+    summary: List tutoring sessions visible in a course
+    security: [{ sessionCookie: [] }]
+    parameters:
+      - { $ref: ../openapi.yaml#/components/parameters/CourseID }
+      - { $ref: ../openapi.yaml#/components/parameters/PageLimit }
+      - { $ref: ../openapi.yaml#/components/parameters/PageOffset }
+    responses:
+      '200':
+        description: Paginated owner or assigned-supervisor session collection.
+        content:
+          application/vnd.api+json:
+            schema: { $ref: ../schemas/resources/resources.yaml#/TutoringSessionCollectionDocument }
+      '401': { $ref: ../responses/errors.yaml#/Unauthorized }
+      '403': { $ref: ../responses/errors.yaml#/Forbidden }
+      '404': { $ref: ../responses/errors.yaml#/NotFound }
+      '406': { $ref: ../responses/errors.yaml#/NotAcceptable }
+      '422':
+        $ref: ../responses/errors.yaml#/Unprocessable
+        description: Invalid pagination (`tutoring_invalid`).
+  post:
+    tags: [Tutoring]
+    operationId: createTutoringSession
+    summary: Start or idempotently replay a tutoring session
+    security: [{ sessionCookie: [], csrfToken: [] }]
+    parameters: [{ $ref: ../openapi.yaml#/components/parameters/CourseID }]
+    requestBody:
+      required: true
+      content:
+        application/vnd.api+json:
+          schema: { $ref: ../schemas/requests/requests.yaml#/TutoringSessionCreateRequestDocument }
+    responses:
+      '200':
+        description: Existing active session returned for an identical request replay.
+        content:
+          application/vnd.api+json:
+            schema: { $ref: ../schemas/resources/resources.yaml#/TutoringSessionDocument }
+      '201':
+        description: New active tutoring session.
+        content:
+          application/vnd.api+json:
+            schema: { $ref: ../schemas/resources/resources.yaml#/TutoringSessionDocument }
+      '400': { $ref: ../responses/errors.yaml#/BadRequest }
+      '401': { $ref: ../responses/errors.yaml#/Unauthorized }
+      '403': { $ref: ../responses/errors.yaml#/Forbidden }
+      '404':
+        $ref: ../responses/errors.yaml#/NotFound
+        description: Course or selected material is missing or hidden (`tutoring_not_found`).
+      '406': { $ref: ../responses/errors.yaml#/NotAcceptable }
+      '409':
+        $ref: ../responses/errors.yaml#/Conflict
+        description: >-
+          Active session, request-ID replay, or course readiness conflict (`tutoring_active_session`,
+          `tutoring_request_conflict`, or `tutoring_invalid_state`).
+      '413': { $ref: ../responses/errors.yaml#/RequestTooLarge }
+      '415': { $ref: ../responses/errors.yaml#/UnsupportedMediaType }
+      '422':
+        $ref: ../responses/errors.yaml#/Unprocessable
+        description: Invalid request ID or selection (`tutoring_invalid`).
+
+tutoringSession:
+  get:
+    tags: [Tutoring]
+    operationId: getTutoringSession
+    summary: Get an authorized tutoring session
+    security: [{ sessionCookie: [] }]
+    parameters: [{ $ref: ../openapi.yaml#/components/parameters/ResourceID }]
+    responses:
+      '200':
+        description: Session status or completed-session review.
+        content:
+          application/vnd.api+json:
+            schema: { $ref: ../schemas/resources/resources.yaml#/TutoringSessionDocument }
+      '401': { $ref: ../responses/errors.yaml#/Unauthorized }
+      '403': { $ref: ../responses/errors.yaml#/Forbidden }
+      '404': { $ref: ../responses/errors.yaml#/NotFound }
+      '406': { $ref: ../responses/errors.yaml#/NotAcceptable }
+  patch:
+    tags: [Tutoring]
+    operationId: correctTutoringSessionSummary
+    summary: Correct a completed tutoring-session summary
+    security: [{ sessionCookie: [], csrfToken: [] }]
+    parameters: [{ $ref: ../openapi.yaml#/components/parameters/ResourceID }]
+    requestBody:
+      required: true
+      content:
+        application/vnd.api+json:
+          schema: { $ref: ../schemas/requests/requests.yaml#/TutoringSessionSummaryUpdateRequestDocument }
+    responses:
+      '200':
+        description: Supervisor-attributed corrected summary.
+        content:
+          application/vnd.api+json:
+            schema: { $ref: ../schemas/resources/resources.yaml#/TutoringSessionDocument }
+      '400': { $ref: ../responses/errors.yaml#/BadRequest }
+      '401': { $ref: ../responses/errors.yaml#/Unauthorized }
+      '403': { $ref: ../responses/errors.yaml#/Forbidden }
+      '404': { $ref: ../responses/errors.yaml#/NotFound }
+      '406': { $ref: ../responses/errors.yaml#/NotAcceptable }
+      '409':
+        $ref: ../responses/errors.yaml#/Conflict
+        description: Session is not completed (`tutoring_invalid_state`).
+      '413': { $ref: ../responses/errors.yaml#/RequestTooLarge }
+      '415': { $ref: ../responses/errors.yaml#/UnsupportedMediaType }
+      '422':
+        $ref: ../responses/errors.yaml#/Unprocessable
+        description: Invalid identity, summary, follow-up, or state (`tutoring_invalid`).
+
+tutoringSessionCompletion:
+  post:
+    tags: [Tutoring]
+    operationId: completeTutoringSession
+    summary: Complete an idle tutoring session
+    security: [{ sessionCookie: [], csrfToken: [] }]
+    parameters: [{ $ref: ../openapi.yaml#/components/parameters/ResourceID }]
+    responses:
+      '200':
+        description: Completed session with summary generation queued atomically.
+        content:
+          application/vnd.api+json:
+            schema: { $ref: ../schemas/resources/resources.yaml#/TutoringSessionDocument }
+      '401': { $ref: ../responses/errors.yaml#/Unauthorized }
+      '403': { $ref: ../responses/errors.yaml#/Forbidden }
+      '404': { $ref: ../responses/errors.yaml#/NotFound }
+      '406': { $ref: ../responses/errors.yaml#/NotAcceptable }
+      '409':
+        $ref: ../responses/errors.yaml#/Conflict
+        description: Session is completed or still has work (`tutoring_invalid_state` or `tutoring_busy`).
+
+tutoringSessionSummaryGenerations:
+  post:
+    tags: [Tutoring]
+    operationId: regenerateTutoringSessionSummary
+    summary: Queue summary generation after a terminal summary failure
+    security: [{ sessionCookie: [], csrfToken: [] }]
+    parameters: [{ $ref: ../openapi.yaml#/components/parameters/ResourceID }]
+    responses:
+      '204': { description: Summary generation queued. }
+      '401': { $ref: ../responses/errors.yaml#/Unauthorized }
+      '403': { $ref: ../responses/errors.yaml#/Forbidden }
+      '404': { $ref: ../responses/errors.yaml#/NotFound }
+      '406': { $ref: ../responses/errors.yaml#/NotAcceptable }
+      '409':
+        $ref: ../responses/errors.yaml#/Conflict
+        description: Summary retry preconditions are not met (`tutoring_invalid_state`).
+
+tutoringSessionMessages:
+  get:
+    tags: [Tutoring]
+    operationId: listTutoringSessionMessages
+    summary: List an authorized immutable tutoring transcript
+    security: [{ sessionCookie: [] }]
+    parameters:
+      - { $ref: ../openapi.yaml#/components/parameters/ResourceID }
+      - { $ref: ../openapi.yaml#/components/parameters/PageLimit }
+      - { $ref: ../openapi.yaml#/components/parameters/PageOffset }
+    responses:
+      '200':
+        description: Owner transcript, or assigned-supervisor transcript after completion.
+        content:
+          application/vnd.api+json:
+            schema: { $ref: ../schemas/resources/resources.yaml#/TutoringTurnCollectionDocument }
+      '401': { $ref: ../responses/errors.yaml#/Unauthorized }
+      '403': { $ref: ../responses/errors.yaml#/Forbidden }
+      '404': { $ref: ../responses/errors.yaml#/NotFound }
+      '406': { $ref: ../responses/errors.yaml#/NotAcceptable }
+      '422':
+        $ref: ../responses/errors.yaml#/Unprocessable
+        description: Invalid pagination (`tutoring_invalid`).
+  post:
+    tags: [Tutoring]
+    operationId: createStudentMessage
+    summary: Submit or idempotently replay a student message
+    security: [{ sessionCookie: [], csrfToken: [] }]
+    parameters: [{ $ref: ../openapi.yaml#/components/parameters/ResourceID }]
+    requestBody:
+      required: true
+      content:
+        application/vnd.api+json:
+          schema: { $ref: ../schemas/requests/requests.yaml#/StudentMessageCreateRequestDocument }
+    responses:
+      '200':
+        description: Existing message and initial response returned for an identical replay.
+        content:
+          application/vnd.api+json:
+            schema: { $ref: ../schemas/resources/resources.yaml#/StudentMessageDocument }
+      '201':
+        description: New student message and queued tutor response.
+        content:
+          application/vnd.api+json:
+            schema: { $ref: ../schemas/resources/resources.yaml#/StudentMessageDocument }
+      '400': { $ref: ../responses/errors.yaml#/BadRequest }
+      '401': { $ref: ../responses/errors.yaml#/Unauthorized }
+      '403': { $ref: ../responses/errors.yaml#/Forbidden }
+      '404': { $ref: ../responses/errors.yaml#/NotFound }
+      '406': { $ref: ../responses/errors.yaml#/NotAcceptable }
+      '409':
+        $ref: ../responses/errors.yaml#/Conflict
+        description: >-
+          Request-ID, session-state, or response-slot conflict (`tutoring_request_conflict`,
+          `tutoring_invalid_state`, or `tutoring_work_busy`).
+      '413': { $ref: ../responses/errors.yaml#/RequestTooLarge }
+      '415': { $ref: ../responses/errors.yaml#/UnsupportedMediaType }
+      '422':
+        $ref: ../responses/errors.yaml#/Unprocessable
+        description: Invalid request ID or message content (`tutoring_invalid`).
+
+tutoringSessionMaterials:
+  get:
+    tags: [Tutoring]
+    operationId: listTutoringSessionMaterials
+    summary: List material used by the tutor in a session
+    security: [{ sessionCookie: [] }]
+    parameters:
+      - { $ref: ../openapi.yaml#/components/parameters/ResourceID }
+      - { $ref: ../openapi.yaml#/components/parameters/PageLimit }
+      - { $ref: ../openapi.yaml#/components/parameters/PageOffset }
+    responses:
+      '200':
+        description: Used material visible to the owner, or to an assigned supervisor after completion.
+        content:
+          application/vnd.api+json:
+            schema: { $ref: ../schemas/resources/resources.yaml#/TutoringMaterialCollectionDocument }
+      '401': { $ref: ../responses/errors.yaml#/Unauthorized }
+      '403': { $ref: ../responses/errors.yaml#/Forbidden }
+      '404': { $ref: ../responses/errors.yaml#/NotFound }
+      '406': { $ref: ../responses/errors.yaml#/NotAcceptable }
+      '422':
+        $ref: ../responses/errors.yaml#/Unprocessable
+        description: Invalid pagination (`tutoring_invalid`).
+
+studentMessageResponseRetries:
+  post:
+    tags: [Tutoring]
+    operationId: retryTutorResponse
+    summary: Retry a failed or interrupted tutor response
+    security: [{ sessionCookie: [], csrfToken: [] }]
+    parameters: [{ $ref: ../openapi.yaml#/components/parameters/ResourceID }]
+    responses:
+      '201':
+        description: Linked queued retry response.
+        content:
+          application/vnd.api+json:
+            schema: { $ref: ../schemas/resources/resources.yaml#/TutorResponseDocument }
+      '401': { $ref: ../responses/errors.yaml#/Unauthorized }
+      '403': { $ref: ../responses/errors.yaml#/Forbidden }
+      '404': { $ref: ../responses/errors.yaml#/NotFound }
+      '406': { $ref: ../responses/errors.yaml#/NotAcceptable }
+      '409':
+        $ref: ../responses/errors.yaml#/Conflict
+        description: Session, response, or work state disallows retry (`tutoring_invalid_state` or `tutoring_work_busy`).
+
+tutorResponseInterruptions:
+  post:
+    tags: [Tutoring]
+    operationId: interruptTutorResponse
+    summary: Interrupt an owned queued or generating tutor response
+    security: [{ sessionCookie: [], csrfToken: [] }]
+    parameters: [{ $ref: ../openapi.yaml#/components/parameters/ResourceID }]
+    responses:
+      '204': { description: Response interrupted; retained partial content is unchanged. }
+      '401': { $ref: ../responses/errors.yaml#/Unauthorized }
+      '403': { $ref: ../responses/errors.yaml#/Forbidden }
+      '404': { $ref: ../responses/errors.yaml#/NotFound }
+      '406': { $ref: ../responses/errors.yaml#/NotAcceptable }
+      '409':
+        $ref: ../responses/errors.yaml#/Conflict
+        description: Response cannot be interrupted (`tutoring_invalid_state`).
+
+tutorResponseEvents:
+  get:
+    tags: [Tutoring]
+    operationId: streamTutorResponseEvents
+    summary: Stream sanitized tutor-response events
+    security: [{ sessionCookie: [] }]
+    parameters: [{ $ref: ../openapi.yaml#/components/parameters/ResourceID }]
+    responses:
+      '200':
+        description: SSE snapshot followed by sanitized MIA delta and state events.
+        content:
+          text/event-stream:
+            schema: { $ref: ../schemas/resources/resources.yaml#/TutorResponseEventStream }
+      '401': { $ref: ../responses/errors.yaml#/Unauthorized }
+      '403': { $ref: ../responses/errors.yaml#/Forbidden }
+      '404': { $ref: ../responses/errors.yaml#/NotFound }

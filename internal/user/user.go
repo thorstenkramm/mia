@@ -57,6 +57,39 @@ type MFAProfile struct {
 	VerifiedMobile         string
 }
 
+// TutorProfile contains the user-owned student fields supplied to tutoring context.
+type TutorProfile struct {
+	Nickname     string `json:"nickname"`
+	Language     string `json:"language"`
+	Country      string `json:"country"`
+	Instructions string `json:"instructions"`
+	YearOfBirth  *int   `json:"year_of_birth"`
+}
+
+// LoadTutorProfile returns the bounded profile fields used by the tutor.
+func LoadTutorProfile(ctx context.Context, query miSQLite.Querier, id string) (TutorProfile, error) {
+	var profile TutorProfile
+	var nickname, instructions sql.NullString
+	var year sql.NullInt64
+	err := query.QueryRowContext(ctx, `SELECT nickname, year_of_birth, preferred_language, country,
+		llm_instructions FROM users WHERE id = ?`, id).
+		Scan(&nickname, &year, &profile.Language, &profile.Country, &instructions)
+	if err != nil {
+		return TutorProfile{}, fmt.Errorf("load tutor profile: %w", err)
+	}
+	if nickname.Valid {
+		profile.Nickname = nickname.String
+	}
+	if instructions.Valid {
+		profile.Instructions = instructions.String
+	}
+	if year.Valid {
+		value := int(year.Int64)
+		profile.YearOfBirth = &value
+	}
+	return profile, nil
+}
+
 // LoadMFAProfile returns the account security and verified-mobile state used by MFA.
 func LoadMFAProfile(ctx context.Context, query miSQLite.Querier, id string) (MFAProfile, error) {
 	var profile MFAProfile

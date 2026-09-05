@@ -25,6 +25,8 @@ tags:
     description: Course learning materials, files, briefs, and approval lifecycle.
   - name: Jobs
     description: Administrator and subject-scoped background-job oversight.
+  - name: Tutoring
+    description: Tutoring sessions, immutable chat, streaming responses, and completed-session review.
 security:
   - sessionCookie: []
 paths:
@@ -122,6 +124,24 @@ paths:
     $ref: paths/jobs.yaml#/jobs
   /api/v1/jobs/{id}:
     $ref: paths/jobs.yaml#/job
+  /api/v1/courses/{course_id}/tutoring-sessions:
+    $ref: paths/tutoring.yaml#/courseTutoringSessions
+  /api/v1/tutoring-sessions/{id}:
+    $ref: paths/tutoring.yaml#/tutoringSession
+  /api/v1/tutoring-sessions/{id}/completion:
+    $ref: paths/tutoring.yaml#/tutoringSessionCompletion
+  /api/v1/tutoring-sessions/{id}/summary-generations:
+    $ref: paths/tutoring.yaml#/tutoringSessionSummaryGenerations
+  /api/v1/tutoring-sessions/{id}/messages:
+    $ref: paths/tutoring.yaml#/tutoringSessionMessages
+  /api/v1/tutoring-sessions/{id}/materials:
+    $ref: paths/tutoring.yaml#/tutoringSessionMaterials
+  /api/v1/student-messages/{id}/response-retries:
+    $ref: paths/tutoring.yaml#/studentMessageResponseRetries
+  /api/v1/tutor-responses/{id}/interruptions:
+    $ref: paths/tutoring.yaml#/tutorResponseInterruptions
+  /api/v1/tutor-responses/{id}/events:
+    $ref: paths/tutoring.yaml#/tutorResponseEvents
 components:
   securitySchemes:
     sessionCookie:

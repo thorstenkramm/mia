@@ -69,13 +69,19 @@ const (
 	CodeCourseStudentNotFound       Code = "course_student_not_found"
 	CodeCourseStudentInvalid        Code = "course_student_invalid"
 
-	CodeMaterialNotFound     Code = "material_not_found"
-	CodeMaterialInvalid      Code = "material_invalid"
-	CodeMaterialNameTaken    Code = "material_name_taken"
-	CodeMaterialInvalidState Code = "material_invalid_state"
-	CodeJobNotFound          Code = "job_not_found"
-	CodeJobUnauthorized      Code = "job_unauthorized"
-	CodeJobInvalid           Code = "job_invalid"
+	CodeMaterialNotFound      Code = "material_not_found"
+	CodeMaterialInvalid       Code = "material_invalid"
+	CodeMaterialNameTaken     Code = "material_name_taken"
+	CodeMaterialInvalidState  Code = "material_invalid_state"
+	CodeJobNotFound           Code = "job_not_found"
+	CodeJobUnauthorized       Code = "job_unauthorized"
+	CodeJobInvalid            Code = "job_invalid"
+	CodeTutoringNotFound      Code = "tutoring_not_found"
+	CodeTutoringInvalid       Code = "tutoring_invalid"
+	CodeTutoringConflict      Code = "tutoring_request_conflict"
+	CodeTutoringActiveSession Code = "tutoring_active_session"
+	CodeTutoringBusy          Code = "tutoring_work_busy"
+	CodeTutoringInvalidState  Code = "tutoring_invalid_state"
 )
 
 type definition struct {
@@ -143,6 +149,12 @@ var errorRegistry = map[Code]definition{
 	CodeJobNotFound:                 {http.StatusNotFound, "Not Found", "The requested resource was not found."},
 	CodeJobUnauthorized:             {http.StatusForbidden, "Unauthorized", "The request could not be completed."},
 	CodeJobInvalid:                  {http.StatusUnprocessableEntity, "Invalid Job Query", "The request could not be completed."},
+	CodeTutoringNotFound:            {http.StatusNotFound, "Not Found", "The requested resource was not found."},
+	CodeTutoringInvalid:             {http.StatusUnprocessableEntity, "Invalid Tutoring Request", "The request could not be completed."},
+	CodeTutoringConflict:            {http.StatusConflict, "Request ID Conflict", "The request could not be completed."},
+	CodeTutoringActiveSession:       {http.StatusConflict, "Active Session Exists", "Finish the active tutoring session first."},
+	CodeTutoringBusy:                {http.StatusConflict, "Tutor Busy", "Wait for a tutoring response slot to become available."},
+	CodeTutoringInvalidState:        {http.StatusConflict, "Invalid Tutoring State", "The request could not be completed."},
 }
 
 // Error is a registered domain error translated centrally to a JSON:API response.

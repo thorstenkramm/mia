@@ -548,6 +548,11 @@ requires an active session. Authorized account, course, or membership deletion
 may cascade the owning session and removes this request-ID history without a
 tombstone.
 
+Transcript listing is paginated by immutable message-response attempt pairs.
+Each `tutoring-turns` resource has the tutor-response ID as its identity and
+includes the corresponding student message and one response attempt. This keeps
+retry history complete without creating an unbounded nested response list.
+
 A session accepts at most one generating response and one queued message. A
 further message returns a conflict. Queued work begins after any terminal result
 from current generation. Completion returns a conflict while work is queued or
@@ -567,6 +572,11 @@ Retrievable content belongs to the session's course and is ready and file-backed
 Course-wide content also requires approval; student-private content requires
 ownership by the session student and no approval. Course deactivation does not
 remove otherwise authorized content from an existing session.
+
+The session-materials collection reports only material whose content reached the
+tutor model; search-only matches and selected identity or brief context are not
+included. The owning student can read it during or after the session. An assigned
+supervisor can read it only after completion, matching completed-chat access.
 
 ### Tutor-response events
 
@@ -718,8 +728,8 @@ automatic retries.
 
 ## Open decisions
 
-Authentication, invitation, current-user, course, material, and job transport
-contracts are concrete in OpenAPI. Unimplemented tutoring, generated-speech,
+Authentication, invitation, current-user, course, material, job, and tutoring
+transport contracts are concrete in OpenAPI. Unimplemented generated-speech,
 mentoring, and audit route families still require concrete transport and
 authorization decisions before implementation. Add those decisions to OpenAPI
 when the implementation exists; do not duplicate their field-level contracts in

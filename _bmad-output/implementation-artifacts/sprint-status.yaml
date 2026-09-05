@@ -45,7 +45,7 @@ development_status:
   1-7-course-lifecycle: done
   1-8-student-provisioning-membership-and-bans: done
   1-9-learning-material-and-processing-pipeline: done
-  1-10-tutoring-sessions-and-streaming-tutor: backlog
+  1-10-tutoring-sessions-and-streaming-tutor: done
   1-11-mentoring: backlog
   1-12-text-to-speech: backlog
   1-13-account-deletion-and-audit-log-api: backlog

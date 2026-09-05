@@ -114,6 +114,51 @@ type Course struct {
 	SupervisorIDs                          []string
 }
 
+// TutorContext is the course-owned context visible to a joined student tutor session.
+type TutorContext struct {
+	ID            string `json:"id"`
+	Name          string `json:"name"`
+	Description   string `json:"description"`
+	Curriculum    string `json:"curriculum"`
+	LearningGoals string `json:"learning_goals"`
+	Instructions  string `json:"instructions"`
+	Language      string `json:"language"`
+	Active        bool   `json:"active"`
+}
+
+// LoadTutorContext authorizes a joined student and returns course tutor fields.
+func LoadTutorContext(ctx context.Context, query miSQLite.Querier, courseID, studentID string) (TutorContext, error) {
+	var value TutorContext
+	var active int
+	err := query.QueryRowContext(ctx, `SELECT c.id, c.name, COALESCE(c.description, ''), COALESCE(c.curriculum, ''),
+		COALESCE(c.learning_goals, ''), COALESCE(c.llm_instructions, ''), COALESCE(c.language, ''), c.is_active
+		FROM courses c JOIN course_students cs ON cs.course_id = c.id
+		WHERE c.id = ? AND cs.student_user_id = ?`, courseID, studentID).
+		Scan(&value.ID, &value.Name, &value.Description, &value.Curriculum, &value.LearningGoals,
+			&value.Instructions, &value.Language, &active)
+	if errors.Is(err, sql.ErrNoRows) {
+		return TutorContext{}, ErrNotFound
+	}
+	if err != nil {
+		return TutorContext{}, fmt.Errorf("load tutor course context: %w", err)
+	}
+	value.Active = active != 0
+	return value, nil
+}
+
+// TutoringScope returns whether an actor is a joined student and/or assigned supervisor.
+func TutoringScope(ctx context.Context, query miSQLite.Querier, courseID, actorID string) (bool, bool, error) {
+	var student, supervisor int
+	err := query.QueryRowContext(ctx, `SELECT
+		EXISTS(SELECT 1 FROM course_students WHERE course_id = ? AND student_user_id = ?),
+		EXISTS(SELECT 1 FROM course_supervisors WHERE course_id = ? AND supervisor_user_id = ?)`,
+		courseID, actorID, courseID, actorID).Scan(&student, &supervisor)
+	if err != nil {
+		return false, false, fmt.Errorf("load tutoring scope: %w", err)
+	}
+	return student != 0, supervisor != 0, nil
+}
+
 // Service is safe for concurrent use after construction.
 type Service struct {
 	database              *sql.DB

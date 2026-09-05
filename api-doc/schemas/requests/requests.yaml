@@ -720,3 +720,87 @@ BriefRequest:
       minLength: 1
       maxLength: 100
       description: At most 400 UTF-8 bytes before normalization.
+TutoringSessionCreateRequestDocument:
+  type: object
+  required: [data]
+  additionalProperties: false
+  properties:
+    data:
+      type: object
+      required: [type, attributes]
+      additionalProperties: false
+      properties:
+        type: { const: tutoring-sessions }
+        id: false
+        attributes:
+          type: object
+          required: [client_request_id]
+          additionalProperties: false
+          properties:
+            client_request_id: { $ref: '#/CanonicalUUIDv4' }
+        relationships:
+          type: object
+          additionalProperties: false
+          properties:
+            materials:
+              type: object
+              required: [data]
+              additionalProperties: false
+              properties:
+                data:
+                  type: array
+                  uniqueItems: true
+                  items:
+                    type: object
+                    required: [type, id]
+                    additionalProperties: false
+                    properties:
+                      type: { const: materials }
+                      id: { type: string, minLength: 1 }
+
+TutoringSessionSummaryUpdateRequestDocument:
+  type: object
+  required: [data]
+  additionalProperties: false
+  properties:
+    data:
+      type: object
+      required: [type, id, attributes]
+      additionalProperties: false
+      properties:
+        type: { const: tutoring-sessions }
+        id: { type: string, minLength: 1 }
+        attributes:
+          type: object
+          required: [summary, follow_up]
+          additionalProperties: false
+          properties:
+            summary: { type: string, minLength: 1, maxLength: 16000 }
+            follow_up: { type: string, maxLength: 16000 }
+
+StudentMessageCreateRequestDocument:
+  type: object
+  required: [data]
+  additionalProperties: false
+  properties:
+    data:
+      type: object
+      required: [type, attributes]
+      additionalProperties: false
+      properties:
+        type: { const: student-messages }
+        id: false
+        attributes:
+          type: object
+          required: [client_request_id, content]
+          additionalProperties: false
+          properties:
+            client_request_id: { $ref: '#/CanonicalUUIDv4' }
+            content: { $ref: '#/StudentMessageContent' }
+
+StudentMessageContent:
+  type: string
+  minLength: 1
+  maxLength: 8000
+  x-max-utf8-bytes: 32768
+  description: Between 1 and 8,000 Unicode code points and at most 32 KiB when UTF-8 encoded.

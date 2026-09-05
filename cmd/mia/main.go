@@ -39,6 +39,7 @@ import (
 	"github.com/thorstenkramm/mia/internal/provider/sms"
 	"github.com/thorstenkramm/mia/internal/provider/smtp"
 	miSQLite "github.com/thorstenkramm/mia/internal/sqlite"
+	"github.com/thorstenkramm/mia/internal/tutoring"
 	"github.com/thorstenkramm/mia/internal/user"
 	"golang.org/x/term"
 )
@@ -550,6 +551,10 @@ func newServeCommand() *cobra.Command {
 		if err := material.EnsureInstructions(configuration.Main.DataDir); err != nil {
 			return err
 		}
+		if err := tutoring.EnsureInstructions(configuration.Main.DataDir); err != nil {
+			return err
+		}
+		var tutoringService *tutoring.Service
 		materialService := material.NewService(database, configuration.Main.DataDir, material.Limits{
 			MaxFileBytes:     int64(configuration.Uploads.MaxFileSizeMiB) << 20,
 			MaxMaterialBytes: int64(configuration.Uploads.MaxMaterialSizeMiB) << 20,
@@ -557,35 +562,55 @@ func newServeCommand() *cobra.Command {
 			MaxImageMegapixels: configuration.Uploads.MaxImageMegapixels,
 		}, mistral.New(mistral.Options{APIKey: configuration.Mistral.APIKey}), openai.New(openai.Options{
 			APIKey: configuration.OpenAI.APIKey, Model: configuration.OpenAI.JobModel,
-		}), nil, logger.Slog())
+		}), func(ctx context.Context, query miSQLite.Querier, materialID string) (bool, error) {
+			if tutoringService == nil {
+				return false, nil
+			}
+			return tutoringService.MaterialSelectedByActive(ctx, query, materialID)
+		}, logger.Slog())
 		if err := materialService.Reconcile(command.Context()); err != nil {
 			return err
 		}
+		tutoringService = tutoring.NewService(database, materialService, logger.Slog())
+		chatClient := openai.New(openai.Options{APIKey: configuration.OpenAI.APIKey,
+			Model: configuration.OpenAI.ChatModel, ResponseHeaderTimeout: 30 * time.Second})
+		tutorManager := tutoring.NewManager(database, tutoringService, chatClient, configuration.Main.DataDir, logger.Slog())
+		tutoringService.SetManager(tutorManager)
 		lifecycleRegistry.RegisterCourse(materialService)
 		lifecycleRegistry.RegisterStudentCourse(materialService)
 		lifecycleRegistry.RegisterAccount(materialService)
+		lifecycleRegistry.RegisterCourse(tutoringService)
+		lifecycleRegistry.RegisterStudentCourse(tutoringService)
+		lifecycleRegistry.RegisterAccount(tutoringService)
 		oversight := jobs.NewOversight(database, func(ctx context.Context, query miSQLite.Querier, actorID string) (bool, error) {
 			return user.HasRole(ctx, query, actorID, user.Administrator)
 		})
 		worker := jobs.New(database, logger.Slog())
 		worker.Register("material-extraction", material.NewExtractionHandler(materialService))
 		worker.Register("material-summary", material.NewSummaryHandler(materialService))
+		worker.Register("tutoring-session-summary", tutoring.NewSessionSummaryHandler(tutoringService,
+			openai.New(openai.Options{APIKey: configuration.OpenAI.APIKey, Model: configuration.OpenAI.JobModel}),
+			configuration.Main.DataDir))
 		if err := worker.Recover(command.Context()); err != nil {
+			return err
+		}
+		if err := tutorManager.Recover(command.Context()); err != nil {
 			return err
 		}
 		jobs.Register(server, oversight)
 		material.Register(server, materialService, oversight)
+		tutoring.Register(server, tutoringService, tutorManager)
 		course.Register(server, course.NewService(database, configuration.Main.DataDir, lifecycleRegistry,
-			material.MaterialReady, nil,
-			nil, auth.InvalidateSecurityArtifacts, logger.Slog()))
+			material.MaterialReady, tutoringService.ActiveInCourse,
+			tutoringService.StudentActiveInCourse, auth.InvalidateSecurityArtifacts, logger.Slog()))
 		worker.Start(command.Context())
 		defer func() {
 			shutdown, cancel := contextWithTimeout(command.Context(), 30*time.Second)
 			defer cancel()
-			returnErr = errors.Join(returnErr, worker.Stop(shutdown))
+			returnErr = errors.Join(returnErr, tutorManager.Stop(shutdown), worker.Stop(shutdown))
 		}()
 		return serve(command.Context(), configuration.HTTP.Listen, configuration.HTTP.SocketGroup, server.Echo,
-			worker.BeginShutdown, logger)
+			func() { tutorManager.BeginShutdown(); worker.BeginShutdown() }, logger)
 	}}
 }
 

@@ -859,9 +859,12 @@ Columns:
 
 - `id`, prefix `ts_`, primary key
 - `student_user_id`, student user ID, not null
+- `state`, enum `active` or `completed`, not null
 - `client_request_id`, canonical UUID v4, not null
+- `request_digest`, canonical creation-body SHA-256 digest, not null
 - `course_id`, course ID, not null
 - `started_at`, not null
+- `last_activity_at`, not null
 - `completed_at`, nullable
 - `completed_by`, nullable student user ID
 - `summary`, nullable
@@ -908,6 +911,7 @@ Columns:
 - `id`, prefix `msg_`, primary key
 - `tutoring_session_id`, session ID, not null, cascade on session deletion
 - `client_request_id`, canonical lowercase UUID v4, not null
+- `request_digest`, SHA-256 digest of the immutable message content, not null
 - `content`, not null, maximum 8,000 Unicode code points and 32 KiB
 - `sequence`, positive integer, not null
 - `created_at`, not null
@@ -931,6 +935,7 @@ Columns:
 
 - `id`, prefix `rsp_`, primary key
 - `student_message_id`, student message ID, not null, cascade on message deletion
+- `session_id`, denormalized owning session ID used by partial queue and generation indexes, not null
 - `retry_of_response_id`, nullable response ID
 - `attempt`, positive integer, not null
 - `state`, enum `queued`, `generating`, `completed`, `interrupted`, or `failed`,
@@ -942,8 +947,9 @@ Columns:
 - `failure_code`, nullable sanitized code
 - `provider`, nullable while queued
 - `model`, nullable while queued
-- `input_units`, nullable non-negative provider usage
-- `output_units`, nullable non-negative provider usage
+- `input_units`, non-negative cumulative provider usage, not null, default zero
+- `output_units`, non-negative cumulative provider usage, not null, default zero
+- `created_at`, not null
 
 Constraints:
 

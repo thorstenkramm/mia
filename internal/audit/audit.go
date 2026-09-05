@@ -95,6 +95,8 @@ const (
 	ActionMaterialDeleted          Action = "material.material.deleted"
 	ActionMaterialProcessingFailed Action = "material.processing.failed"
 	ActionMaterialMutationDenied   Action = "material.mutation.denied"
+	ActionTutoringSummaryCorrected Action = "tutoring.summary.corrected"
+	ActionTutoringSummaryFailed    Action = "tutoring.summary.failed"
 )
 
 var actions = map[Action]struct{}{
@@ -174,6 +176,8 @@ var actions = map[Action]struct{}{
 	ActionMaterialDeleted:                       {},
 	ActionMaterialProcessingFailed:              {},
 	ActionMaterialMutationDenied:                {},
+	ActionTutoringSummaryCorrected:              {},
+	ActionTutoringSummaryFailed:                 {},
 }
 
 // Metadata contains typed, content-free audit metadata.

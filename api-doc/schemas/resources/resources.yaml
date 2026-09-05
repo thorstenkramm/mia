@@ -647,7 +647,272 @@ Brief:
       type: [string, 'null']
       maxLength: 100
 
+TutoringSession:
+  type: object
+  required: [type, id, attributes]
+  properties:
+    type: { const: tutoring-sessions }
+    id: { type: string }
+    attributes:
+      type: object
+      required:
+        - course_id
+        - student_id
+        - state
+        - summary
+        - follow_up
+        - summary_source
+        - summary_updated_by
+        - started_at
+        - last_activity_at
+        - completed_at
+        - summary_updated_at
+      properties:
+        course_id: { type: string }
+        student_id: { type: string }
+        state: { type: string, enum: [active, completed] }
+        summary: { type: [string, 'null'], maxLength: 16000 }
+        follow_up: { type: [string, 'null'], maxLength: 16000 }
+        summary_source: { type: [string, 'null'], enum: [generated, supervisor, null] }
+        summary_updated_by: { type: [string, 'null'] }
+        started_at: { type: string, format: date-time }
+        last_activity_at: { type: string, format: date-time }
+        completed_at: { type: [string, 'null'], format: date-time }
+        summary_updated_at: { type: [string, 'null'], format: date-time }
+    relationships:
+      type: object
+      properties:
+        materials:
+          type: object
+          required: [data]
+          properties:
+            data:
+              type: array
+              uniqueItems: true
+              items:
+                allOf:
+                  - $ref: '#/ResourceIdentifier'
+                  - properties:
+                      type: { const: materials }
+
+TutorResponse:
+  type: object
+  required: [type, id, attributes]
+  properties:
+    type: { const: tutor-responses }
+    id: { type: string }
+    attributes:
+      type: object
+      required:
+        - session_id
+        - message_id
+        - retry_of_response_id
+        - attempt
+        - state
+        - content
+        - failure_code
+        - created_at
+        - started_at
+        - finished_at
+      properties:
+        session_id: { type: string }
+        message_id: { type: string }
+        retry_of_response_id: { type: [string, 'null'] }
+        attempt: { type: integer, minimum: 1 }
+        state: { type: string, enum: [queued, generating, completed, interrupted, failed] }
+        content: { $ref: '#/TutorResponseContent' }
+        failure_code: { type: [string, 'null'] }
+        created_at: { type: string, format: date-time }
+        started_at: { type: [string, 'null'], format: date-time }
+        finished_at: { type: [string, 'null'], format: date-time }
+
+StudentMessage:
+  type: object
+  required: [type, id, attributes]
+  properties:
+    type: { const: student-messages }
+    id: { type: string }
+    attributes:
+      type: object
+      required: [session_id, sequence, content, created_at, response]
+      properties:
+        session_id: { type: string }
+        sequence: { type: integer, minimum: 1 }
+        content: { $ref: ../requests/requests.yaml#/StudentMessageContent }
+        created_at: { type: string, format: date-time }
+        response: { $ref: '#/TutorResponse' }
+
+TutoringTurn:
+  description: One paginated immutable student-message and tutor-response attempt pair.
+  type: object
+  required: [type, id, attributes]
+  properties:
+    type: { const: tutoring-turns }
+    id:
+      type: string
+      description: The paired tutor-response ID, unique across transcript turns.
+    attributes:
+      type: object
+      required: [student_message_id, sequence, student_content, student_message_created_at, response]
+      properties:
+        student_message_id: { type: string }
+        sequence: { type: integer, minimum: 1 }
+        student_content: { $ref: ../requests/requests.yaml#/StudentMessageContent }
+        student_message_created_at: { type: string, format: date-time }
+        response: { $ref: '#/TutorResponse' }
+
+TutoringMaterial:
+  description: Minimal identity for material whose content reached the tutor model.
+  type: object
+  required: [type, id, attributes]
+  properties:
+    type: { const: materials }
+    id: { type: string }
+    attributes:
+      type: object
+      required: [name, kind, scope]
+      properties:
+        name: { type: string }
+        kind: { type: string }
+        scope: { type: string, enum: [course-wide, student-private] }
+
+TutorResponseContent:
+  type: string
+  maxLength: 65536
+  x-max-utf8-bytes: 65536
+  x-max-model-tokens: 2048
+  description: >-
+    Partial or completed tutor output. One response is limited to 2,048 model-output tokens and 64 KiB of UTF-8.
+
+TutorResponseEventStream:
+  type: string
+  contentMediaType: text/event-stream
+  description: >-
+    UTF-8 Server-Sent Events. Each event uses one `event` line and one JSON `data` line. The stream starts with a
+    snapshot, may emit started and delta events, and ends with completed, interrupted, or failed. A heartbeat comment
+    is sent after 15 seconds without an event. Each stream write has a 30-second deadline. Raw provider events, tool
+    calls, payloads, and errors are excluded.
+  x-sse-events:
+    snapshot: { $ref: '#/TutorResponseSnapshotEventPayload' }
+    started: { $ref: '#/TutorResponseStartedEventPayload' }
+    delta: { $ref: '#/TutorResponseDeltaEventPayload' }
+    completed: { $ref: '#/TutorResponseCompletedEventPayload' }
+    interrupted: { $ref: '#/TutorResponseInterruptedEventPayload' }
+    failed: { $ref: '#/TutorResponseFailedEventPayload' }
+  x-heartbeat-seconds: 15
+  x-write-deadline-seconds: 30
+
+TutorResponseSnapshotEventPayload:
+  oneOf:
+    - type: object
+      required: [state]
+      additionalProperties: false
+      properties:
+        content: { $ref: '#/TutorResponseContent' }
+        state: { type: string, enum: [queued, generating, completed, interrupted] }
+    - type: object
+      required: [state, code]
+      additionalProperties: false
+      properties:
+        content: { $ref: '#/TutorResponseContent' }
+        state: { const: failed }
+        code: { $ref: '#/TutorResponseFailureCode' }
+
+TutorResponseStartedEventPayload:
+  type: object
+  required: [state]
+  additionalProperties: false
+  properties:
+    state: { const: generating }
+
+TutorResponseDeltaEventPayload:
+  type: object
+  required: [text]
+  additionalProperties: false
+  properties:
+    text:
+      allOf:
+        - $ref: '#/TutorResponseContent'
+        - minLength: 1
+      description: >-
+        One sanitized text delta. All deltas together remain within the response's 2,048-token and 64-KiB limits.
+
+TutorResponseCompletedEventPayload:
+  type: object
+  required: [state]
+  additionalProperties: false
+  properties:
+    state: { const: completed }
+
+TutorResponseInterruptedEventPayload:
+  type: object
+  required: [state]
+  additionalProperties: false
+  properties:
+    state: { const: interrupted }
+
+TutorResponseFailedEventPayload:
+  type: object
+  required: [state, code]
+  additionalProperties: false
+  properties:
+    state: { const: failed }
+    code: { $ref: '#/TutorResponseFailureCode' }
+
+TutorResponseFailureCode:
+  type: string
+  enum:
+    - openai_unavailable
+    - provider_failure
+    - server_shutdown
+    - storage_failure
+    - tutor_input_invalid
+    - worker_restarted
+
 # --- JSON:API document wrappers -------------------------------------------
+
+TutoringSessionDocument:
+  type: object
+  required: [data]
+  properties:
+    data: { $ref: '#/TutoringSession' }
+TutoringSessionCollectionDocument:
+  type: object
+  required: [data, meta]
+  properties:
+    data:
+      type: array
+      items: { $ref: '#/TutoringSession' }
+    meta: { $ref: ../json-api/documents.yaml#/PageMeta }
+    links: { $ref: ../json-api/documents.yaml#/PageLinks }
+StudentMessageDocument:
+  type: object
+  required: [data]
+  properties:
+    data: { $ref: '#/StudentMessage' }
+TutoringTurnCollectionDocument:
+  type: object
+  required: [data, meta]
+  properties:
+    data:
+      type: array
+      items: { $ref: '#/TutoringTurn' }
+    meta: { $ref: ../json-api/documents.yaml#/PageMeta }
+    links: { $ref: ../json-api/documents.yaml#/PageLinks }
+TutorResponseDocument:
+  type: object
+  required: [data]
+  properties:
+    data: { $ref: '#/TutorResponse' }
+TutoringMaterialCollectionDocument:
+  type: object
+  required: [data, meta]
+  properties:
+    data:
+      type: array
+      items: { $ref: '#/TutoringMaterial' }
+    meta: { $ref: ../json-api/documents.yaml#/PageMeta }
+    links: { $ref: ../json-api/documents.yaml#/PageLinks }
 
 AuthSessionDocument:
   type: object
