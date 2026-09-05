@@ -139,14 +139,14 @@ demonstrably requires it.
 
 The first-administrator bootstrap has no HTTP route. With the server stopped, the
 operator runs `mia bootstrap-admin` locally in exactly one of two modes. The
-interactive terminal mode prompts for username, email, language, country, time
-zone, password, and password confirmation with masked password feedback. The
-noninteractive mode requires `--username`, `--email`, `--language`, `--country`,
-`--time-zone`, and `--password-file`, and refuses any terminal input or output.
-The password file must be a readable regular one-line file with an optional final
-LF or CRLF; all other password bytes are preserved. The command requires a
-configured absolute `main.data_dir` and prints the username and fixed SQLite path
-only after its transaction commits.
+prompt mode requires terminal input and output and prompts for username, email,
+language, country, time zone, password, and password confirmation with masked
+password feedback. The complete flag-file mode requires `--username`, `--email`,
+`--language`, `--country`, `--time-zone`, and `--password-file`, and works from a
+terminal or without terminal input/output. The password file must be a readable
+regular one-line file with an optional final LF or CRLF; all other password bytes
+are preserved. The command requires a configured absolute `main.data_dir` and
+prints the username and fixed SQLite path only after its transaction commits.
 
 The command validates the normal account and password rules, verifies that no
 administrator exists inside the bootstrap transaction, creates the user and

@@ -13,10 +13,10 @@ semantically require only `main.data_dir` and database/account-policy settings.
 They still reject malformed input and unknown keys, but they do not require
 frontend or provider settings.
 
-`mia bootstrap-admin` requires an existing absolute `main.data_dir`. It runs
-either interactively in a terminal or noninteractively with complete
-`--username`, `--email`, `--language`, `--country`, `--time-zone`, and
-`--password-file` flags. The modes cannot be mixed. The password file must be a
+`mia bootstrap-admin` requires an existing absolute `main.data_dir`. Its prompt
+mode requires a terminal. Its complete flag-file mode works from a terminal or
+without terminal input/output and requires `--username`, `--email`, `--language`,
+`--country`, `--time-zone`, and `--password-file`. The password file must be a
 readable regular file with exactly one non-empty line and an optional final LF or
 CRLF; MIA preserves every other password byte. Successful bootstrap prints the
 username and `<main.data_dir>/mia.sqlite3` only after commit.
@@ -411,6 +411,24 @@ The ClickSend API key. MIA does not call this value a password even though some 
 - Flag: `--clicksend-sender-id`
 
 A ClickSend-supported alpha tag or sending number.
+
+#### `clicksend.base_url`
+
+- Type: string
+- Status: optional
+- Default: `"https://rest.clicksend.com/v3"`
+- Environment: `MIA_CLICKSEND_BASE_URL`
+- Flag: `--clicksend-base-url`
+
+Overrides the ClickSend API base URL used for POST /sms/send. This allows a
+compatible local test double for SMS delivery.
+
+MIA accepts only root origins or `/v3` base paths, each with an optional terminal
+slash. HTTP is allowed only for `localhost` or a loopback IP, such as
+`http://127.0.0.1:3550`. A supplied port must be numeric and between 1 and
+65535. Userinfo, query strings, fragments, other paths, unsupported schemes, and
+non-loopback HTTP bases are rejected locally. MIA always composes only
+`POST /sms/send` and makes no provider request at startup.
 
 ### `[eleven_labs]`
 

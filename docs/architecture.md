@@ -170,6 +170,10 @@ These settings are fixed for the MVP and are not operator-configurable.
   MIA logs a sanitized error, and it does not retry automatically. Email is
   English-only plain-text UTF-8 with sanitized headers and no HTML part.
 - ClickSend uses a five-second connection timeout and a 15-second total deadline.
+- ClickSend's configurable base URL defaults to `https://rest.clicksend.com/v3`.
+  It accepts only root origins or `/v3` base paths, each with an optional terminal
+  slash, and the adapter composes only `POST /sms/send`. HTTP is permitted only
+  for `localhost` or a loopback-IP compatible local test double.
 - ElevenLabs uses a ten-second response-header timeout and a two-minute total
   deadline.
 - Request-path provider operations do not retry automatically after failure.

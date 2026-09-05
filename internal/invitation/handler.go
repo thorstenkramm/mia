@@ -302,8 +302,8 @@ func isIdentityValidationError(err error) bool {
 		return false
 	}
 	msg := err.Error()
-	return strings.Contains(msg, "invalid language") ||
-		strings.Contains(msg, "invalid country") ||
+	return errors.Is(err, identity.ErrInvalidCountry) ||
+		strings.Contains(msg, "invalid language") ||
 		strings.Contains(msg, "invalid time zone")
 }
 

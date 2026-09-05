@@ -277,9 +277,6 @@ func bootstrapInteractiveMode(flags *pflag.FlagSet, stdinTerminal, stdoutTermina
 		}
 	}
 	if flagsProvided {
-		if stdinTerminal || stdoutTerminal {
-			return false, errors.New("bootstrap-admin flags require noninteractive input and output")
-		}
 		for _, name := range bootstrapFlags {
 			value, err := flags.GetString(name)
 			if err != nil {
@@ -538,7 +535,8 @@ func newServeCommand() *cobra.Command {
 		recoveryDeliveries := auth.NewDeliveryManager(database, smtp.New(configuration, logger.Slog()), logger.Slog())
 		defer recoveryDeliveries.Close()
 		smsSender := sms.New(sms.ClientOptions{Username: configuration.ClickSend.Username,
-			APIKey: configuration.ClickSend.APIKey, SenderID: configuration.ClickSend.SenderID})
+			APIKey: configuration.ClickSend.APIKey, SenderID: configuration.ClickSend.SenderID,
+			BaseURL: configuration.ClickSend.BaseURL})
 		auth.Register(server, authRoutes, database, configuration.Main.PublicURL, recoveryDeliveries, smsSender)
 		user.RegisterProfileRoutes(server,
 			user.NewService(database, configuration.Main.DataDir, smsSender, auth.InvalidatePendingSMS))

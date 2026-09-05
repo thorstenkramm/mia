@@ -787,6 +787,24 @@ func TestInvalidAcceptanceProfiles(t *testing.T) {
 	_ = admin
 }
 
+func TestInvitationAcceptanceInvalidCountryUsesValidationResponse(t *testing.T) {
+	server, database := testServer(t)
+	admin := createAdminAccount(t, database, "country-admin")
+	service := NewService(database, nil)
+	_, token, err := service.Create(context.Background(), CreateInput{
+		Email:     "country-validation@example.test",
+		Role:      RoleSupervisor,
+		InviterID: admin.ID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	csrf := csrfToken(t, server)
+	response := serve(t, server, http.MethodPost, "/api/v1/invitation-acceptances", csrf, nil,
+		`{"data":{"type":"invitation-acceptances","attributes":{"token":"`+token+`","username":"countryuser","password":"a very secure password","password_confirmation":"a very secure password","language":"en","country":"INVALID","time_zone":"Europe/Berlin"}}}`)
+	assertCode(t, response, http.StatusUnprocessableEntity, "auth_invalid_request")
+}
+
 func TestPaginationLimitsAndUnknownParams(t *testing.T) {
 	server, database := testServer(t)
 	_ = createAdminAccount(t, database, "admin")

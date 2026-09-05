@@ -24,6 +24,7 @@ import (
 var (
 	ErrInvalidUsername      = errors.New("invalid username")
 	ErrInvalidEmail         = errors.New("invalid email")
+	ErrInvalidCountry       = errors.New("use an uppercase ISO 3166-1 alpha-2 country code, like DE, US, AR")
 	ErrInvalidText          = errors.New("invalid text")
 	ErrInvalidPassword      = errors.New("invalid password")
 	ErrPasswordInvalidUTF8  = errors.New("password is not valid UTF-8")
@@ -154,7 +155,7 @@ func Country(value string) (string, error) {
 	value = strings.ToUpper(value)
 	region, err := language.ParseRegion(value)
 	if len(value) != 2 || !isASCIIAlpha(value[0]) || !isASCIIAlpha(value[1]) || err != nil || !region.IsCountry() {
-		return "", errors.New("invalid country")
+		return "", ErrInvalidCountry
 	}
 	return value, nil
 }

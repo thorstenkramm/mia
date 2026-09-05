@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 
@@ -56,6 +57,7 @@ type Config struct {
 		Username string `mapstructure:"username"`
 		APIKey   string `mapstructure:"api_key"`
 		SenderID string `mapstructure:"sender_id"`
+		BaseURL  string `mapstructure:"base_url"`
 	} `mapstructure:"clicksend"`
 	ElevenLabs struct {
 		APIKey             string `mapstructure:"api_key"`
@@ -193,7 +195,7 @@ func optionalProviderPresence(v *viper.Viper, flags *pflag.FlagSet) optionalProv
 		}
 		return false
 	}
-	return optionalProviders{clickSend: present("clicksend", "username", "api_key", "sender_id"), elevenLabs: present("eleven_labs", "api_key", "cache_retention_days")}
+	return optionalProviders{clickSend: present("clicksend", "username", "api_key", "sender_id", "base_url"), elevenLabs: present("eleven_labs", "api_key", "cache_retention_days")}
 }
 
 func validate(config *Config, serve bool, optional optionalProviders) error {
@@ -202,6 +204,9 @@ func validate(config *Config, serve bool, optional optionalProviders) error {
 	}
 	if !serve {
 		return nil
+	}
+	if err := normalizeClickSendBaseURL(config); err != nil {
+		return err
 	}
 	if err := requiredPath("main.doc_root", config.Main.DocRoot, false); err != nil {
 		return err
@@ -332,6 +337,45 @@ func normalizePublicURL(config *Config) error {
 	return nil
 }
 
+// normalizeClickSendBaseURL validates the only provider endpoint base MIA supports.
+// HTTP is restricted to local test doubles so operator configuration cannot send SMS
+// credentials or message content to an arbitrary unencrypted host.
+func normalizeClickSendBaseURL(config *Config) error {
+	parsed, err := url.Parse(config.ClickSend.BaseURL)
+	if err != nil {
+		return fmt.Errorf("invalid clicksend.base_url: %w", err)
+	}
+	if parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || parsed.RawPath != "" {
+		return errors.New("clicksend.base_url must be an HTTPS origin or a loopback HTTP endpoint")
+	}
+	if strings.HasSuffix(parsed.Host, ":") {
+		return errors.New("clicksend.base_url port must be between 1 and 65535")
+	}
+	if parsed.Port() != "" {
+		port, err := strconv.Atoi(parsed.Port())
+		if err != nil || port < 1 || port > 65535 {
+			return errors.New("clicksend.base_url port must be between 1 and 65535")
+		}
+	}
+	if parsed.Path != "" && parsed.Path != "/" && parsed.Path != "/v3" && parsed.Path != "/v3/" {
+		return errors.New("clicksend.base_url must not contain an unsupported path")
+	}
+	switch parsed.Scheme {
+	case "https":
+	case "http":
+		host := parsed.Hostname()
+		address := net.ParseIP(host)
+		if !strings.EqualFold(host, "localhost") && (address == nil || !address.IsLoopback()) {
+			return errors.New("clicksend.base_url HTTP requires localhost or a loopback IP")
+		}
+	default:
+		return errors.New("clicksend.base_url must use HTTPS or loopback HTTP")
+	}
+	parsed.Path = strings.TrimSuffix(parsed.Path, "/")
+	config.ClickSend.BaseURL = parsed.String()
+	return nil
+}
+
 func listen(value string) error {
 	if strings.HasPrefix(value, "unix:") {
 		if !filepath.IsAbs(strings.TrimPrefix(value, "unix:")) {
@@ -366,6 +410,6 @@ var settings = []setting{
 	{"log.file", "log-file", "", false, valueString}, {"log.level", "log-level", "info", false, valueString}, {"log.format", "log-format", "json", false, valueString},
 	{"openai.api_key", "", "", true, valueString}, {"openai.chat_model", "openai-chat-model", "gpt-5.6-terra", false, valueString}, {"openai.job_model", "openai-job-model", "gpt-5.6-terra", false, valueString}, {"mistral.api_key", "", "", true, valueString},
 	{"smtp.host", "smtp-host", "", false, valueString}, {"smtp.port", "smtp-port", 587, false, valueInt}, {"smtp.transport", "smtp-transport", "starttls", false, valueString}, {"smtp.username", "", "", true, valueString}, {"smtp.password", "", "", true, valueString}, {"smtp.sender_email", "smtp-sender-email", "", false, valueString}, {"smtp.sender_name", "smtp-sender-name", "", false, valueString},
-	{"clicksend.username", "", "", true, valueString}, {"clicksend.api_key", "", "", true, valueString}, {"clicksend.sender_id", "clicksend-sender-id", "", false, valueString}, {"eleven_labs.api_key", "", "", true, valueString}, {"eleven_labs.cache_retention_days", "eleven-labs-cache-retention-days", 30, false, valueInt},
+	{"clicksend.username", "", "", true, valueString}, {"clicksend.api_key", "", "", true, valueString}, {"clicksend.sender_id", "clicksend-sender-id", "", false, valueString}, {"clicksend.base_url", "clicksend-base-url", "https://rest.clicksend.com/v3", false, valueString}, {"eleven_labs.api_key", "", "", true, valueString}, {"eleven_labs.cache_retention_days", "eleven-labs-cache-retention-days", 30, false, valueInt},
 	{"uploads.max_file_size_mib", "uploads-max-file-size-mib", 100, false, valueInt}, {"uploads.max_material_size_mib", "uploads-max-material-size-mib", 200, false, valueInt}, {"uploads.max_material_pages", "uploads-max-material-pages", 1000, false, valueInt}, {"uploads.max_material_files", "uploads-max-material-files", 200, false, valueInt}, {"uploads.max_image_megapixels", "uploads-max-image-megapixels", 40, false, valueInt},
 }

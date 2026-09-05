@@ -27,8 +27,12 @@ func TestCountryUsesISO3166CountryCodes(t *testing.T) {
 	if value, err := Country("de"); err != nil || value != "DE" {
 		t.Fatalf("Country(DE) = %q, %v", value, err)
 	}
-	if _, err := Country("ZZ"); err == nil {
-		t.Fatal("Country accepted unassigned ZZ")
+	for _, value := range []string{"de-DE", "ZZ"} {
+		t.Run(value, func(t *testing.T) {
+			if _, err := Country(value); err == nil || err.Error() != "use an uppercase ISO 3166-1 alpha-2 country code, like DE, US, AR" {
+				t.Fatalf("Country(%q) error = %v", value, err)
+			}
+		})
 	}
 }
 

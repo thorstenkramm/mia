@@ -151,7 +151,7 @@ func TestBootstrapAdminRejectsNonTerminalInput(t *testing.T) {
 	}
 }
 
-func TestBootstrapInteractiveModeRejectsPartialAndMixedFlags(t *testing.T) {
+func TestBootstrapInteractiveModeRejectsPartialFlags(t *testing.T) {
 	flags := pflag.NewFlagSet("test", pflag.ContinueOnError)
 	for _, name := range bootstrapFlags {
 		flags.String(name, "", "")
@@ -162,8 +162,32 @@ func TestBootstrapInteractiveModeRejectsPartialAndMixedFlags(t *testing.T) {
 	if _, err := bootstrapInteractiveMode(flags, false, false); err == nil || !strings.Contains(err.Error(), "--email") {
 		t.Fatalf("partial mode error = %v", err)
 	}
-	if _, err := bootstrapInteractiveMode(flags, true, true); err == nil || !strings.Contains(err.Error(), "noninteractive") {
-		t.Fatalf("mixed mode error = %v", err)
+	if _, err := bootstrapInteractiveMode(flags, true, true); err == nil || !strings.Contains(err.Error(), "--email") {
+		t.Fatalf("partial terminal mode error = %v", err)
+	}
+}
+
+func TestBootstrapInteractiveModeAcceptsCompleteFlagsRegardlessOfTerminal(t *testing.T) {
+	for name, terminals := range map[string]struct{ stdin, stdout bool }{
+		"nonterminal": {stdin: false, stdout: false},
+		"terminal":    {stdin: true, stdout: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			flags := pflag.NewFlagSet("test", pflag.ContinueOnError)
+			for _, flag := range bootstrapFlags {
+				flags.String(flag, "", "")
+				if err := flags.Set(flag, "value"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			interactive, err := bootstrapInteractiveMode(flags, terminals.stdin, terminals.stdout)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if interactive {
+				t.Fatal("complete flags selected interactive mode")
+			}
+		})
 	}
 }
 
@@ -295,7 +319,8 @@ func TestBootstrapAdminCreatesAdministratorNoninteractively(t *testing.T) {
 		t.Fatal(err)
 	}
 	configPath := filepath.Join(directory, "mia.toml")
-	if err := os.WriteFile(configPath, []byte("[main]\ndata_dir = \""+dataDir+"\"\n"), 0o600); err != nil {
+	if err := os.WriteFile(configPath, []byte("[main]\ndata_dir = \""+dataDir+
+		"\"\n[clicksend]\nbase_url = \"https://clicksend.example.test:65536\"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	passwordPath := filepath.Join(directory, "password")

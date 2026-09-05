@@ -36,6 +36,9 @@ func TestLoadAcceptsCompleteServeConfiguration(t *testing.T) {
 	if configuration.HTTP.Listen != "127.0.0.1:9900" {
 		t.Fatalf("listen = %q", configuration.HTTP.Listen)
 	}
+	if configuration.ClickSend.BaseURL != "https://rest.clicksend.com/v3" {
+		t.Fatalf("ClickSend base URL = %q", configuration.ClickSend.BaseURL)
+	}
 }
 
 func TestLoadRejectsUnknownConfigurationKey(t *testing.T) {
@@ -198,6 +201,172 @@ func TestLoadNormalizesTrustedProxyCIDRsFromEnvironmentAndFlags(t *testing.T) {
 			}
 			if strings.Join(configuration.HTTP.TrustedProxyCIDRs, ",") != "10.0.0.0/8,192.168.0.0/16" {
 				t.Fatalf("CIDRs = %v", configuration.HTTP.TrustedProxyCIDRs)
+			}
+		})
+	}
+}
+
+func TestLoadOverridesClickSendBaseURLFromEnvironmentAndFlag(t *testing.T) {
+	for name, configure := range map[string]func(*pflag.FlagSet){
+		"environment": func(_ *pflag.FlagSet) {
+			t.Setenv("MIA_CLICKSEND_BASE_URL", "http://127.0.0.1:3550/")
+		},
+		"flag": func(flags *pflag.FlagSet) {
+			if err := flags.Set("clicksend-base-url", "http://localhost:3550"); err != nil {
+				t.Fatal(err)
+			}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			temporary := t.TempDir()
+			dataDir := filepath.Join(temporary, "data")
+			docRoot := filepath.Join(temporary, "frontend")
+			if err := os.Mkdir(dataDir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Mkdir(docRoot, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			configPath := filepath.Join(temporary, "mia.toml")
+			content := "[main]\ndata_dir = \"" + dataDir + "\"\ndoc_root = \"" + docRoot +
+				"\"\npublic_url = \"https://mia.example.test\"\n[openai]\napi_key = \"key\"\n" +
+				"[mistral]\napi_key = \"key\"\n[smtp]\nhost = \"smtp.example.test\"\n" +
+				"sender_email = \"mia@example.test\"\n[clicksend]\nusername = \"account\"\n" +
+				"api_key = \"key\"\nbase_url = \"https://toml.example.test\"\n"
+			if err := os.WriteFile(configPath, []byte(content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			flags := pflag.NewFlagSet("test", pflag.ContinueOnError)
+			AddFlags(flags)
+			if err := flags.Set("config", configPath); err != nil {
+				t.Fatal(err)
+			}
+			configure(flags)
+			configuration, err := Load(flags, true)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := "http://127.0.0.1:3550"
+			if name == "flag" {
+				want = "http://localhost:3550"
+			}
+			if configuration.ClickSend.BaseURL != want {
+				t.Fatalf("ClickSend base URL = %q, want %q", configuration.ClickSend.BaseURL, want)
+			}
+		})
+	}
+}
+
+func TestLoadRejectsInvalidClickSendBaseURLFromEverySource(t *testing.T) {
+	for name, configure := range map[string]func(*pflag.FlagSet, string){
+		"TOML": func(_ *pflag.FlagSet, configPath string) {
+			content, err := os.ReadFile(configPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			content = append(content, []byte("[clicksend]\nbase_url = \"https://clicksend.example.test:65536\"\n")...)
+			if err := os.WriteFile(configPath, content, 0o600); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"environment": func(_ *pflag.FlagSet, _ string) {
+			t.Setenv("MIA_CLICKSEND_BASE_URL", "https://clicksend.example.test:0")
+		},
+		"flag": func(flags *pflag.FlagSet, _ string) {
+			if err := flags.Set("clicksend-base-url", "https://clicksend.example.test:65536"); err != nil {
+				t.Fatal(err)
+			}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			temporary := t.TempDir()
+			dataDir := filepath.Join(temporary, "data")
+			docRoot := filepath.Join(temporary, "frontend")
+			if err := os.Mkdir(dataDir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Mkdir(docRoot, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			configPath := filepath.Join(temporary, "mia.toml")
+			content := "[main]\ndata_dir = \"" + dataDir + "\"\ndoc_root = \"" + docRoot +
+				"\"\npublic_url = \"https://mia.example.test\"\n[openai]\napi_key = \"key\"\n" +
+				"[mistral]\napi_key = \"key\"\n[smtp]\nhost = \"smtp.example.test\"\n" +
+				"sender_email = \"mia@example.test\"\n"
+			if err := os.WriteFile(configPath, []byte(content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			flags := pflag.NewFlagSet("test", pflag.ContinueOnError)
+			AddFlags(flags)
+			if err := flags.Set("config", configPath); err != nil {
+				t.Fatal(err)
+			}
+			configure(flags, configPath)
+			if _, err := Load(flags, true); err == nil || !strings.Contains(err.Error(), "clicksend.base_url") {
+				t.Fatalf("Load error = %v", err)
+			}
+		})
+	}
+}
+
+func TestLoadOfflineIgnoresInvalidClickSendBaseURL(t *testing.T) {
+	temporary := t.TempDir()
+	dataDir := filepath.Join(temporary, "data")
+	if err := os.Mkdir(dataDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(temporary, "mia.toml")
+	content := "[main]\ndata_dir = \"" + dataDir + "\"\n[clicksend]\nbase_url = \"https://clicksend.example.test:65536\"\n"
+	if err := os.WriteFile(configPath, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	flags := pflag.NewFlagSet("test", pflag.ContinueOnError)
+	AddFlags(flags)
+	if err := flags.Set("config", configPath); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(flags, false); err != nil {
+		t.Fatalf("offline Load error = %v", err)
+	}
+}
+
+func TestNormalizeClickSendBaseURL(t *testing.T) {
+	for name, test := range map[string]struct {
+		value string
+		want  string
+		valid bool
+	}{
+		"default HTTPS":      {"https://rest.clicksend.com/v3", "https://rest.clicksend.com/v3", true},
+		"HTTPS root slash":   {"https://clicksend.example.test/", "https://clicksend.example.test", true},
+		"HTTPS v3 slash":     {"https://clicksend.example.test/v3/", "https://clicksend.example.test/v3", true},
+		"localhost HTTP":     {"http://localhost:3550", "http://localhost:3550", true},
+		"loopback IPv4 HTTP": {"http://127.0.0.1:3550/", "http://127.0.0.1:3550", true},
+		"loopback IPv6 HTTP": {"http://[::1]:3550", "http://[::1]:3550", true},
+		"empty port":         {"https://clicksend.example.test:", "", false},
+		"non-numeric port":   {"https://clicksend.example.test:http", "", false},
+		"zero port":          {"https://clicksend.example.test:0", "", false},
+		"out of range port":  {"https://clicksend.example.test:65536", "", false},
+		"credentials":        {"https://user@clicksend.example.test", "", false},
+		"query":              {"https://clicksend.example.test?next=x", "", false},
+		"fragment":           {"https://clicksend.example.test#fragment", "", false},
+		"other path":         {"https://clicksend.example.test/other", "", false},
+		"non-loopback HTTP":  {"http://clicksend.example.test", "", false},
+		"unsupported scheme": {"ftp://clicksend.example.test", "", false},
+		"encoded path":       {"https://clicksend.example.test/%76%33", "", false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			configuration := Config{}
+			configuration.ClickSend.BaseURL = test.value
+			err := normalizeClickSendBaseURL(&configuration)
+			if test.valid {
+				if err != nil {
+					t.Fatal(err)
+				}
+				if configuration.ClickSend.BaseURL != test.want {
+					t.Fatalf("base URL = %q, want %q", configuration.ClickSend.BaseURL, test.want)
+				}
+			} else if err == nil {
+				t.Fatal("invalid base URL accepted")
 			}
 		})
 	}

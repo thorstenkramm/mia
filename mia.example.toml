@@ -168,6 +168,15 @@
   ## Default: none; ClickSend assigns the sender
   #sender_id = "MIA"
 
+  ## ClickSend API base URL, string, optional
+  ## Can be overridden with --clicksend-base-url or MIA_CLICKSEND_BASE_URL
+  ## Accepts only a root origin or /v3 base path, optionally with a terminal slash
+  ## HTTP is allowed only for localhost or loopback IP test endpoints; ports must be 1 through 65535
+  ## MIA composes only POST /sms/send; this allows a compatible local SMS test double
+  ## Example: "http://127.0.0.1:3550"
+  ## Default: "https://rest.clicksend.com/v3"
+  #base_url = "https://rest.clicksend.com/v3"
+
   ## ElevenLabs is optional. Uncomment the table and API key to enable text-to-speech.
   #[eleven_labs]
   ## ElevenLabs API key, string, mandatory when the table is present, secret

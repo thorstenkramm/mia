@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -16,8 +17,17 @@ import (
 	"github.com/thorstenkramm/mia/internal/user"
 )
 
+type roundTripper func(*http.Request) (*http.Response, error)
+
+func (roundTrip roundTripper) RoundTrip(request *http.Request) (*http.Response, error) {
+	return roundTrip(request)
+}
+
 func TestClickSendClientUsesBoundedAllowlistedRequestAndResponse(t *testing.T) {
 	provider := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.Method != http.MethodPost || request.URL.Path != "/v3/sms/send" {
+			t.Errorf("ClickSend request = %s %s", request.Method, request.URL.Path)
+		}
 		username, key, ok := request.BasicAuth()
 		if !ok || username != "account" || key != "secret" {
 			t.Error("ClickSend basic authentication missing")
@@ -41,7 +51,7 @@ func TestClickSendClientUsesBoundedAllowlistedRequestAndResponse(t *testing.T) {
 	}))
 	defer provider.Close()
 	sender := sms.New(sms.ClientOptions{Username: "account", APIKey: "secret", SenderID: "MIA",
-		Endpoint: provider.URL, HTTPClient: provider.Client()})
+		BaseURL: provider.URL + "/v3/", HTTPClient: provider.Client()})
 	if err := sender.Send(context.Background(), "+49123456789", "123456"); err != nil {
 		t.Fatal(err)
 	}
@@ -59,7 +69,7 @@ func TestClickSendClientRejectsMalformedOrFailedProviderOutcome(t *testing.T) {
 				}
 			}))
 			defer provider.Close()
-			sender := sms.New(sms.ClientOptions{Username: "account", APIKey: "secret", Endpoint: provider.URL,
+			sender := sms.New(sms.ClientOptions{Username: "account", APIKey: "secret", BaseURL: provider.URL,
 				HTTPClient: provider.Client()})
 			if err := sender.Send(context.Background(), "+49123456789", "123456"); err == nil {
 				t.Fatal("provider failure was accepted")
@@ -76,12 +86,44 @@ func TestClickSendClientDoesNotForwardCredentialsThroughRedirects(t *testing.T) 
 		http.Redirect(response, request, target.URL, http.StatusTemporaryRedirect)
 	}))
 	defer redirect.Close()
-	sender := sms.New(sms.ClientOptions{Username: "account", APIKey: "secret", Endpoint: redirect.URL})
+	sender := sms.New(sms.ClientOptions{Username: "account", APIKey: "secret", BaseURL: redirect.URL})
 	if err := sender.Send(context.Background(), "+49123456789", "123456"); err == nil {
 		t.Fatal("ClickSend redirect was accepted")
 	}
 	if targetReached {
 		t.Fatal("ClickSend credentials were forwarded through a redirect")
+	}
+}
+
+func TestClickSendClientJoinsDefaultAndTrailingBaseURLs(t *testing.T) {
+	for name, baseURL := range map[string]string{
+		"default":    "",
+		"root slash": "http://127.0.0.1:3550/",
+		"v3 slash":   "http://127.0.0.1:3550/v3/",
+	} {
+		t.Run(name, func(t *testing.T) {
+			var gotURL string
+			client := &http.Client{Transport: roundTripper(func(request *http.Request) (*http.Response, error) {
+				gotURL = request.URL.String()
+				return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(
+					`{"response_code":"SUCCESS","data":{"messages":[{"status":"SUCCESS"}]}}`)), Header: make(http.Header)}, nil
+			})}
+			sender := sms.New(sms.ClientOptions{Username: "account", APIKey: "secret", BaseURL: baseURL,
+				HTTPClient: client})
+			if err := sender.Send(context.Background(), "+49123456789", "123456"); err != nil {
+				t.Fatal(err)
+			}
+			want := "https://rest.clicksend.com/v3/sms/send"
+			if name == "root slash" {
+				want = "http://127.0.0.1:3550/sms/send"
+			}
+			if name == "v3 slash" {
+				want = "http://127.0.0.1:3550/v3/sms/send"
+			}
+			if gotURL != want {
+				t.Fatalf("ClickSend URL = %q, want %q", gotURL, want)
+			}
+		})
 	}
 }
 

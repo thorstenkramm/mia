@@ -11,6 +11,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -33,11 +34,11 @@ type Client struct {
 	httpClient                           *http.Client
 }
 
-// ClientOptions configures a ClickSend adapter. Endpoint and HTTPClient are
-// injectable only so automated tests never contact production providers.
+// ClientOptions configures a ClickSend adapter. HTTPClient is injectable only so
+// automated tests never contact production providers.
 type ClientOptions struct {
-	Username, APIKey, SenderID, Endpoint string
-	HTTPClient                           *http.Client
+	Username, APIKey, SenderID, BaseURL string
+	HTTPClient                          *http.Client
 }
 
 // New constructs a ClickSend sender, or Unavailable when credentials are absent.
@@ -45,10 +46,11 @@ func New(options ClientOptions) Sender {
 	if options.Username == "" || options.APIKey == "" {
 		return Unavailable{}
 	}
-	endpoint := options.Endpoint
-	if endpoint == "" {
-		endpoint = "https://rest.clicksend.com/v3/sms/send"
+	baseURL := options.BaseURL
+	if baseURL == "" {
+		baseURL = "https://rest.clicksend.com/v3"
 	}
+	endpoint := strings.TrimSuffix(baseURL, "/") + "/sms/send"
 	httpClient := options.HTTPClient
 	if httpClient == nil {
 		httpClient = &http.Client{Transport: &http.Transport{
