@@ -31,6 +31,8 @@ tags:
     description: Mentor assignments, supervisor triage, responses, external scheduling, and closure.
   - name: Speech
     description: Retained ElevenLabs speech for completed tutor responses.
+  - name: Audit
+    description: Administrator-only content-free security and lifecycle history.
 security:
   - sessionCookie: []
 paths:
@@ -89,7 +91,10 @@ paths:
   /api/v1/users/{id}/bans:
     $ref: paths/courses.yaml#/bans
   /api/v1/users/{id}:
-    $ref: paths/mentoring.yaml#/studentProfile
+    patch:
+      $ref: paths/mentoring.yaml#/studentProfile/patch
+    delete:
+      $ref: paths/users.yaml#/account/delete
   /api/v1/courses:
     $ref: paths/courses.yaml#/courses
   /api/v1/courses/{id}:
@@ -166,6 +171,8 @@ paths:
     $ref: paths/mentoring.yaml#/courseMentoringSessions
   /api/v1/mentoring-sessions/{id}:
     $ref: paths/mentoring.yaml#/mentoringSession
+  /api/v1/audit-events:
+    $ref: paths/audit.yaml#/auditEvents
 components:
   securitySchemes:
     sessionCookie:

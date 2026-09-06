@@ -1,0 +1,27 @@
+auditEvents:
+  get:
+    tags: [Audit]
+    operationId: listAuditEvents
+    summary: List content-free audit events
+    description: >-
+      Administrator-only, newest-first audit history. Deleted account references are replaced by random
+      de-identified fingerprints. Only page[limit] and page[offset] query parameters are accepted.
+    security: [{ sessionCookie: [] }]
+    parameters:
+      - { $ref: ../openapi.yaml#/components/parameters/PageLimit }
+      - { $ref: ../openapi.yaml#/components/parameters/PageOffset }
+    responses:
+      '200':
+        description: Paginated audit events.
+        content:
+          application/vnd.api+json:
+            schema: { $ref: ../schemas/resources/resources.yaml#/AuditEventCollectionDocument }
+      '400': { $ref: ../responses/errors.yaml#/BadRequest }
+      '401': { $ref: ../responses/errors.yaml#/Unauthorized }
+      '403':
+        $ref: ../responses/errors.yaml#/Forbidden
+        description: Restricted session or non-administrator (`auth_password_change_required` or `audit_unauthorized`).
+      '406': { $ref: ../responses/errors.yaml#/NotAcceptable }
+      '422':
+        $ref: ../responses/errors.yaml#/Unprocessable
+        description: Invalid or unknown query parameter (`audit_invalid`).

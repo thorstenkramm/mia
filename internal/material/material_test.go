@@ -20,6 +20,7 @@ import (
 	"github.com/labstack/echo/v5"
 	"github.com/thorstenkramm/mia/internal/course"
 	"github.com/thorstenkramm/mia/internal/jobs"
+	"github.com/thorstenkramm/mia/internal/lifecycle"
 	"github.com/thorstenkramm/mia/internal/provider/mistral"
 	"github.com/thorstenkramm/mia/internal/provider/openai"
 	miSQLite "github.com/thorstenkramm/mia/internal/sqlite"
@@ -318,6 +319,51 @@ func TestPostProviderValidationFailuresRetainUsage(t *testing.T) {
 	if !errors.As(err, &summaryFailure) || summaryFailure.Code != "material_brief_invalid" || input != 10 || output != 5 ||
 		summaryFailure.ProviderInputUnits != 10 || summaryFailure.ProviderOutputUnits != 5 {
 		t.Fatalf("summary validation failure usage=%d/%d failure=%#v error=%v", input, output, summaryFailure, err)
+	}
+}
+
+func TestAccountDeletionRemovesOwnedMaterialJobSubjects(t *testing.T) {
+	service, database, dataDir, _, student, courseID := materialFixture(t, nil)
+	created, err := service.Create(context.Background(), CreateInput{CourseID: courseID, ActorID: student,
+		Scope: "student-private", Name: "Deletion source", Kind: "worksheet", Format: "text"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	file, err := service.Upload(context.Background(), created.ID, student, "source.txt", []byte("source"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Finalize(context.Background(), created.ID, student); err != nil {
+		t.Fatal(err)
+	}
+	// Exercise subject-owned cleanup independently of the jobs.owner_user_id FK.
+	if _, err := database.Exec("UPDATE jobs SET owner_user_id = NULL WHERE subject_id = ?", file.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := jobs.Enqueue(context.Background(), database, "material-summary", "material", created.ID,
+		courseID, ""); err != nil {
+		t.Fatal(err)
+	}
+	var administrator string
+	if err := database.QueryRow("SELECT id FROM users WHERE username_key = 'admin'").Scan(&administrator); err != nil {
+		t.Fatal(err)
+	}
+	registry := &lifecycle.Registry{}
+	registry.RegisterAccount(service)
+	deletion := user.NewDeletionService(database, dataDir, registry, nil)
+	if err := deletion.Delete(context.Background(), administrator, student); err != nil {
+		t.Fatal(err)
+	}
+	var materialCount, jobCount int
+	if err := database.QueryRow("SELECT COUNT(*) FROM materials WHERE id = ?", created.ID).Scan(&materialCount); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.QueryRow("SELECT COUNT(*) FROM jobs WHERE subject_id IN (?, ?)", created.ID, file.ID).
+		Scan(&jobCount); err != nil {
+		t.Fatal(err)
+	}
+	if materialCount != 0 || jobCount != 0 {
+		t.Fatalf("account deletion retained material/jobs = %d/%d", materialCount, jobCount)
 	}
 }
 

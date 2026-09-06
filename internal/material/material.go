@@ -608,7 +608,34 @@ func (service *Service) DeleteStudentCourseData(ctx context.Context, query miSQL
 }
 
 func (service *Service) DeleteAccountData(ctx context.Context, query miSQLite.Querier, accountID string) error {
-	_, err := query.ExecContext(ctx, "DELETE FROM materials WHERE owner_user_id = ?", accountID)
+	rows, err := query.QueryContext(ctx, "SELECT id FROM materials WHERE owner_user_id = ?", accountID)
+	if err != nil {
+		return err
+	}
+	var materialIDs []string
+	for rows.Next() {
+		var materialID string
+		if err := rows.Scan(&materialID); err != nil {
+			return closeRows(rows, err)
+		}
+		materialIDs = append(materialIDs, materialID)
+	}
+	if err := rows.Err(); err != nil {
+		return closeRows(rows, err)
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	for _, materialID := range materialIDs {
+		subjects, err := materialSubjectIDs(ctx, query, materialID)
+		if err != nil {
+			return err
+		}
+		if err := jobs.DeleteSubjects(ctx, query, subjects); err != nil {
+			return err
+		}
+	}
+	_, err = query.ExecContext(ctx, "DELETE FROM materials WHERE owner_user_id = ?", accountID)
 	return err
 }
 

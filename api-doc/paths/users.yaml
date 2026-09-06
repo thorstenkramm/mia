@@ -240,3 +240,32 @@ roles:
       '422':
         $ref: ../responses/errors.yaml#/Unprocessable
         description: Invalid resource type or role (`auth_invalid_request`).
+
+account:
+  delete:
+    tags: [Users]
+    operationId: deleteUser
+    summary: Delete an account and its operational data
+    description: >-
+      An administrator may delete a student-only account. Staff accounts require a different administrator.
+      The last administrator and a sole course supervisor cannot be deleted.
+    security: [{ sessionCookie: [], csrfToken: [] }]
+    parameters: [{ $ref: ../openapi.yaml#/components/parameters/ResourceID }]
+    responses:
+      '204': { description: Account and operational data deleted. }
+      '400': { $ref: ../responses/errors.yaml#/BadRequest }
+      '401': { $ref: ../responses/errors.yaml#/Unauthorized }
+      '403':
+        $ref: ../responses/errors.yaml#/Forbidden
+        description: >-
+          CSRF, restricted session, non-administrator, or self-targeted staff deletion (`csrf_invalid`,
+          `auth_password_change_required`, or `user_deletion_unauthorized`).
+      '404':
+        $ref: ../responses/errors.yaml#/NotFound
+        description: Missing target (`user_not_found`).
+      '406': { $ref: ../responses/errors.yaml#/NotAcceptable }
+      '409':
+        $ref: ../responses/errors.yaml#/Conflict
+        description: >-
+          Protected last administrator or sole course supervisor (`user_last_administrator` or
+          `user_sole_supervisor`).

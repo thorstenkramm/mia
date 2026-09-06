@@ -67,6 +67,8 @@ const (
 	ActionUserMobileRemoved                  Action = "user.mobile.removed"
 	ActionUserAvatarUpdated                  Action = "user.avatar.updated"
 	ActionUserAvatarRemoved                  Action = "user.avatar.removed"
+	ActionUserAccountDeleted                 Action = "user.account.deleted"
+	ActionUserAccountDeletionDenied          Action = "user.account.deletion_denied"
 
 	ActionCourseCourseCreated        Action = "course.course.created"
 	ActionCourseCourseUpdated        Action = "course.course.updated"
@@ -168,6 +170,8 @@ var actions = map[Action]struct{}{
 	ActionUserMobileRemoved:                     {},
 	ActionUserAvatarUpdated:                     {},
 	ActionUserAvatarRemoved:                     {},
+	ActionUserAccountDeleted:                    {},
+	ActionUserAccountDeletionDenied:             {},
 	ActionCourseCourseCreated:                   {},
 	ActionCourseCourseUpdated:                   {},
 	ActionCourseCourseActivated:                 {},
@@ -298,6 +302,36 @@ func ReplaceStudentCourseHistoryWithRemoval(
 	}
 	return WriteWithMetadata(ctx, query, ActionCourseStudentRemoved, actorID, studentID,
 		Metadata{CourseID: courseID})
+}
+
+// ReplaceAccountHistoryWithDeletion de-identifies every retained reference to
+// one account and writes the deletion event with the same random fingerprint.
+func ReplaceAccountHistoryWithDeletion(ctx context.Context, query miSQLite.Querier, accountID, actorID string) error {
+	fingerprint, err := NewDeletionFingerprint()
+	if err != nil {
+		return err
+	}
+	if _, err := query.ExecContext(ctx, `UPDATE audit_events SET
+		actor_fingerprint = CASE WHEN actor_user_id = ? THEN ? ELSE actor_fingerprint END,
+		subject_type = CASE WHEN subject_user_id = ? THEN 'account' ELSE subject_type END,
+		subject_fingerprint = CASE WHEN subject_user_id = ? THEN ? ELSE subject_fingerprint END,
+		metadata = CASE WHEN json_extract(metadata, '$.mentor_id') = ?
+			THEN json_set(json_remove(metadata, '$.mentor_id'), '$.mentor_fingerprint', ?) ELSE metadata END`,
+		accountID, fingerprint, accountID, accountID, fingerprint, accountID, fingerprint); err != nil {
+		return fmt.Errorf("de-identify account audit history: %w", err)
+	}
+	eventID, err := id()
+	if err != nil {
+		return err
+	}
+	_, err = query.ExecContext(ctx, `INSERT INTO audit_events
+		(id, action, actor_user_id, subject_user_id, created_at, metadata, subject_type, subject_fingerprint)
+		VALUES (?, ?, ?, NULL, ?, NULL, 'account', ?)`, eventID, string(ActionUserAccountDeleted),
+		nullable(actorID), instant(time.Now()), fingerprint)
+	if err != nil {
+		return fmt.Errorf("write de-identified account deletion audit event: %w", err)
+	}
+	return nil
 }
 
 // NewDeletionFingerprint returns an opaque UUID v4 with no retained mapping to

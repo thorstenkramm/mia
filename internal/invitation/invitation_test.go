@@ -18,6 +18,7 @@ import (
 	"github.com/thorstenkramm/mia/internal/httpserver"
 	"github.com/thorstenkramm/mia/internal/httpserver/conformance"
 	"github.com/thorstenkramm/mia/internal/identity"
+	"github.com/thorstenkramm/mia/internal/lifecycle"
 	"github.com/thorstenkramm/mia/internal/provider/smtp"
 	miSQLite "github.com/thorstenkramm/mia/internal/sqlite"
 	"github.com/thorstenkramm/mia/internal/user"
@@ -42,6 +43,57 @@ func TestCreateInvitationRequiresAdministratorForAdminRole(t *testing.T) {
 
 	_ = admin
 	_ = supervisor
+}
+
+func TestAccountDeletionRemovesInvitationsForEveryRetainedStatus(t *testing.T) {
+	_, database := testServer(t)
+	administrator := createAdminAccount(t, database, "deletion-admin")
+	target := createSupervisorAccount(t, database, "deleted-invitee")
+	now := "2026-09-06T00:00:00.000000Z"
+	statements := []struct {
+		query string
+		args  []any
+	}{
+		{`INSERT INTO invitations
+			(id, email, email_normalized, role, token_digest, status, inviter_id, created_at, updated_at)
+			VALUES ('inv_delete_pending', 'deleted-invitee@example.test', 'deleted-invitee@example.test',
+			'mentor', ?, 'pending', ?, ?, ?)`, []any{make([]byte, 32), administrator.ID, now, now}},
+		{`INSERT INTO invitations
+			(id, email, email_normalized, role, status, inviter_id, created_at, updated_at, accepted_at, accepted_by)
+			VALUES ('inv_delete_accepted', 'deleted-invitee@example.test', 'deleted-invitee@example.test',
+			'supervisor', 'accepted', ?, ?, ?, ?, ?)`, []any{administrator.ID, now, now, now, target.ID}},
+		{`INSERT INTO invitations
+			(id, email, email_normalized, role, status, inviter_id, created_at, updated_at, revoked_at, revoked_by)
+			VALUES ('inv_delete_revoked', 'deleted-invitee@example.test', 'deleted-invitee@example.test',
+			'mentor', 'revoked', ?, ?, ?, ?, ?)`, []any{administrator.ID, now, now, now, administrator.ID}},
+	}
+	for _, statement := range statements {
+		if _, err := database.Exec(statement.query, statement.args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, status := range []string{"pending", "accepted", "revoked"} {
+		var count int
+		if err := database.QueryRow("SELECT COUNT(*) FROM invitations WHERE email_normalized = ? AND status = ?",
+			"deleted-invitee@example.test", status).Scan(&count); err != nil || count != 1 {
+			t.Fatalf("%s invitation setup count/error = %d/%v", status, count, err)
+		}
+	}
+	service := NewService(database, nil)
+	registry := &lifecycle.Registry{}
+	registry.RegisterAccount(service)
+	deletion := user.NewDeletionService(database, t.TempDir(), registry, nil)
+	if err := deletion.Delete(context.Background(), administrator.ID, target.ID); err != nil {
+		t.Fatal(err)
+	}
+	var count int
+	if err := database.QueryRow("SELECT COUNT(*) FROM invitations WHERE email_normalized = ?",
+		"deleted-invitee@example.test").Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("account deletion retained %d addressed invitations", count)
+	}
 }
 
 func TestCreateMentorInvitationRequiresSupervisor(t *testing.T) {

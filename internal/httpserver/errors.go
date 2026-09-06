@@ -54,6 +54,9 @@ const (
 	CodeUserMobileChallengeInvalid Code = "user_mobile_challenge_invalid"
 	CodeUserMobileCodeInvalid      Code = "user_mobile_code_invalid"
 	CodeUserAvatarInvalid          Code = "user_avatar_invalid"
+	CodeUserDeletionUnauthorized   Code = "user_deletion_unauthorized"
+	CodeUserLastAdministrator      Code = "user_last_administrator"
+	CodeUserSoleSupervisor         Code = "user_sole_supervisor"
 
 	CodeInvitationListUnauthorized Code = "invitation_list_unauthorized"
 
@@ -95,6 +98,8 @@ const (
 	CodeSpeechCommitFailed       Code = "speech_commit_failed"
 	CodeSpeechShutdown           Code = "speech_shutdown"
 	CodeSpeechRestartInterrupted Code = "speech_restart_interrupted"
+	CodeAuditUnauthorized        Code = "audit_unauthorized"
+	CodeAuditInvalid             Code = "audit_invalid"
 )
 
 type definition struct {
@@ -142,6 +147,9 @@ var errorRegistry = map[Code]definition{
 	CodeUserMobileChallengeInvalid: {http.StatusUnprocessableEntity, "Invalid Mobile Challenge", "The request could not be completed."},
 	CodeUserMobileCodeInvalid:      {http.StatusUnprocessableEntity, "Invalid Mobile Code", "The request could not be completed."},
 	CodeUserAvatarInvalid:          {http.StatusUnprocessableEntity, "Invalid Avatar", "The request could not be completed."},
+	CodeUserDeletionUnauthorized:   {http.StatusForbidden, "Unauthorized", "The request could not be completed."},
+	CodeUserLastAdministrator:      {http.StatusConflict, "Administrator Required", "The last administrator cannot be deleted."},
+	CodeUserSoleSupervisor:         {http.StatusConflict, "Supervisor Required", "The account is required to supervise a course."},
 
 	CodeInvitationListUnauthorized:  {http.StatusForbidden, "Unauthorized", "The request could not be completed."},
 	CodeCourseNotFound:              {http.StatusNotFound, "Not Found", "The requested resource was not found."},
@@ -181,6 +189,8 @@ var errorRegistry = map[Code]definition{
 	CodeSpeechCommitFailed:          {},
 	CodeSpeechShutdown:              {},
 	CodeSpeechRestartInterrupted:    {},
+	CodeAuditUnauthorized:           {http.StatusForbidden, "Unauthorized", "The request could not be completed."},
+	CodeAuditInvalid:                {http.StatusUnprocessableEntity, "Invalid Audit Query", "The request could not be completed."},
 }
 
 // StableCode returns a centrally registered code for persistence, audit

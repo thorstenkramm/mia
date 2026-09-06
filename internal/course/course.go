@@ -886,6 +886,30 @@ func (service *Service) Delete(ctx context.Context, courseID, actorID string) er
 	return nil
 }
 
+// DeleteAccountData enforces the course supervisor invariant, then removes the
+// deleted account's current course relationships in the caller's transaction.
+func (service *Service) DeleteAccountData(ctx context.Context, query miSQLite.Querier, accountID string) error {
+	var sole int
+	err := query.QueryRowContext(ctx, `SELECT EXISTS(
+		SELECT 1 FROM course_supervisors target WHERE target.supervisor_user_id = ?
+		AND NOT EXISTS(SELECT 1 FROM course_supervisors other
+			WHERE other.course_id = target.course_id AND other.supervisor_user_id <> target.supervisor_user_id)
+	)`, accountID).Scan(&sole)
+	if err != nil {
+		return fmt.Errorf("check sole course supervisor: %w", err)
+	}
+	if sole != 0 {
+		return lifecycle.ErrAccountDeletionBlocked
+	}
+	if _, err := query.ExecContext(ctx, "DELETE FROM course_students WHERE student_user_id = ?", accountID); err != nil {
+		return fmt.Errorf("delete account course memberships: %w", err)
+	}
+	if _, err := query.ExecContext(ctx, "DELETE FROM course_supervisors WHERE supervisor_user_id = ?", accountID); err != nil {
+		return fmt.Errorf("delete account supervisor assignments: %w", err)
+	}
+	return nil
+}
+
 func loadScoped(ctx context.Context, query miSQLite.Querier, courseID, actorID string, supervisorOnly bool) (Course, error) {
 	administrator := false
 	var err error

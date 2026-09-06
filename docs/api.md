@@ -752,8 +752,13 @@ The material-scoped job view is assigned-supervisor-only and omits failure
 details and provider usage. OpenAPI defines the administrator and subject-scoped
 resource fields and pagination contract.
 
-Audit access is administrator-only. Filters and output fields are allowlisted,
-and audit resources never expose secret or content-bearing values.
+Audit access is administrator-only through `GET /api/v1/audit-events`. The
+newest-first collection uses the standard bounded pagination parameters and
+rejects all other query parameters. Audit resources expose only stable action
+names, live actor/subject/course identifiers when retained, random deletion
+fingerprints, typed content-free metadata, and the event instant. Account
+deletion applies one random fingerprint to every retained actor, subject, and
+mentor-metadata reference to that identity; no identity mapping is retained.
 
 The first version has no manual job retry route. MIA performs only its bounded
 automatic retries.
@@ -761,9 +766,6 @@ automatic retries.
 ## Open decisions
 
 Authentication, invitation, current-user, course, material, job, tutoring,
-mentoring, and generated-speech transport contracts are concrete in OpenAPI. The
-unimplemented audit route family still requires concrete transport and
-authorization decisions before implementation. Add those decisions to OpenAPI
-when the implementation exists; do not duplicate field-level contracts in this
-narrative. Superseded proposals should be removed rather than retained as
-history.
+mentoring, generated-speech, account-deletion, and audit transport contracts are
+concrete in OpenAPI. New route families must add their transport decisions there;
+field-level contracts are not duplicated in this narrative.

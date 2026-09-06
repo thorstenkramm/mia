@@ -482,6 +482,65 @@ Job:
       properties:
         course:
           $ref: '#/ToOneCourse'
+AuditEvent:
+  description: Content-free audit record. Fingerprints have no retained identity mapping.
+  type: object
+  required: [type, id, attributes]
+  properties:
+    type:
+      const: audit-events
+    id:
+      type: string
+    attributes:
+      type: object
+      additionalProperties: false
+      required:
+        - action
+        - actor_user_id
+        - actor_fingerprint
+        - subject_user_id
+        - subject_type
+        - subject_fingerprint
+        - course_id
+        - metadata
+        - created_at
+      properties:
+        action:
+          type: string
+          maxLength: 128
+        actor_user_id:
+          type: [string, 'null']
+        actor_fingerprint:
+          type: [string, 'null']
+          format: uuid
+        subject_user_id:
+          type: [string, 'null']
+        subject_type:
+          type: [string, 'null']
+          enum: [account, course, null]
+        subject_fingerprint:
+          type: [string, 'null']
+          format: uuid
+        course_id:
+          type: [string, 'null']
+        metadata:
+          type: [object, 'null']
+          additionalProperties: false
+          properties:
+            invitation_id: { type: string }
+            material_id: { type: string }
+            outcome_code: { type: string }
+            role: { type: string }
+            mentoring_session_id: { type: string }
+            mentor_id: { type: string }
+            mentor_fingerprint: { type: string, format: uuid }
+            previous_scheduled_at: { type: string, format: date-time }
+            new_scheduled_at: { type: string, format: date-time }
+            speech_id: { type: string }
+            tutor_response_id: { type: string }
+        created_at:
+          type: string
+          format: date-time
 SafeJob:
   description: >-
     Subject-scoped job view for supervisors. Diagnostic fields (availability,
@@ -1202,6 +1261,18 @@ JobCollectionDocument:
       type: array
       items:
         $ref: '#/Job'
+    meta:
+      $ref: ../json-api/documents.yaml#/PageMeta
+    links:
+      $ref: ../json-api/documents.yaml#/PageLinks
+AuditEventCollectionDocument:
+  type: object
+  required: [data, meta]
+  properties:
+    data:
+      type: array
+      items:
+        $ref: '#/AuditEvent'
     meta:
       $ref: ../json-api/documents.yaml#/PageMeta
     links:

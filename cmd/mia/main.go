@@ -551,6 +551,7 @@ func newServeCommand() *cobra.Command {
 		invitation.Register(server, invitationService, configuration.Main.PublicURL, invitationDeliveries)
 		invitation.RegisterRoleRoutes(server, database, logger.Slog())
 		lifecycleRegistry := &lifecycle.Registry{}
+		lifecycleRegistry.RegisterAccount(invitationService)
 		if err := material.EnsureInstructions(configuration.Main.DataDir); err != nil {
 			return err
 		}
@@ -611,6 +612,16 @@ func newServeCommand() *cobra.Command {
 		lifecycleRegistry.RegisterCourse(mentoringService)
 		lifecycleRegistry.RegisterStudentCourse(mentoringService)
 		lifecycleRegistry.RegisterAccount(mentoringService)
+		courseService := course.NewService(database, configuration.Main.DataDir, lifecycleRegistry,
+			material.MaterialReady, tutoringService.ActiveInCourse,
+			tutoringService.StudentActiveInCourse, auth.InvalidateSecurityArtifacts, logger.Slog())
+		lifecycleRegistry.RegisterAccount(courseService)
+		user.RegisterDeletionRoutes(server, user.NewDeletionService(database, configuration.Main.DataDir,
+			lifecycleRegistry, logger.Slog()))
+		audit.Register(server, audit.NewOversight(database,
+			func(ctx context.Context, query miSQLite.Querier, actorID string) (bool, error) {
+				return user.HasRole(ctx, query, actorID, user.Administrator)
+			}))
 		oversight := jobs.NewOversight(database, func(ctx context.Context, query miSQLite.Querier, actorID string) (bool, error) {
 			return user.HasRole(ctx, query, actorID, user.Administrator)
 		})
@@ -631,9 +642,7 @@ func newServeCommand() *cobra.Command {
 		tutoring.Register(server, tutoringService, tutorManager)
 		speech.Register(server, speechService)
 		mentoring.Register(server, mentoringService)
-		course.Register(server, course.NewService(database, configuration.Main.DataDir, lifecycleRegistry,
-			material.MaterialReady, tutoringService.ActiveInCourse,
-			tutoringService.StudentActiveInCourse, auth.InvalidateSecurityArtifacts, logger.Slog()))
+		course.Register(server, courseService)
 		worker.Start(command.Context())
 		defer func() {
 			shutdown, cancel := contextWithTimeout(command.Context(), 30*time.Second)

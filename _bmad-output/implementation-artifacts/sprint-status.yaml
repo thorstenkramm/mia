@@ -35,7 +35,7 @@ project_key: NOKEY
 tracking_system: file-system
 story_location: _bmad-output/implementation-artifacts
 development_status:
-  epic-1: in-progress
+  epic-1: done
   1-1-kernel-foundation-and-serve-skeleton: done
   1-2-first-auth-slice-with-user-package-and-bootstrap-admin: done
   1-3-staff-password-recovery-over-smtp: done
@@ -48,5 +48,5 @@ development_status:
   1-10-tutoring-sessions-and-streaming-tutor: done
   1-11-mentoring: done
   1-12-text-to-speech: done
-  1-13-account-deletion-and-audit-log-api: backlog
+  1-13-account-deletion-and-audit-log-api: done
   epic-1-retrospective: optional

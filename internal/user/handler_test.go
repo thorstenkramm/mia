@@ -20,9 +20,29 @@ import (
 	"github.com/thorstenkramm/mia/internal/httpserver"
 	"github.com/thorstenkramm/mia/internal/httpserver/conformance"
 	"github.com/thorstenkramm/mia/internal/identity"
+	"github.com/thorstenkramm/mia/internal/lifecycle"
 	"github.com/thorstenkramm/mia/internal/provider/sms"
 	miSQLite "github.com/thorstenkramm/mia/internal/sqlite"
 )
+
+func TestAccountDeletionHandlerEnforcesAdministratorAndSafeguards(t *testing.T) {
+	server, database, staff, student, dataDir := profileServer(t)
+	administrator := handlerAccount(t, database, "deletion-admin", []Role{Administrator}, true)
+	RegisterDeletionRoutes(server, NewDeletionService(database, dataDir, &lifecycle.Registry{}, nil))
+	staffSession, staffCSRF := issueSession(t, server, staff)
+	denied := profileRequest(t, server, http.MethodDelete, "/api/v1/users/"+student,
+		staffSession, staffCSRF, "", "")
+	conformance.Error(t, denied, http.StatusForbidden, "user_deletion_unauthorized")
+	adminSession, adminCSRF := issueSession(t, server, administrator)
+	deleted := profileRequest(t, server, http.MethodDelete, "/api/v1/users/"+student,
+		adminSession, adminCSRF, "", "")
+	if deleted.Code != http.StatusNoContent {
+		t.Fatalf("student deletion status/body = %d %s", deleted.Code, deleted.Body.String())
+	}
+	lastAdministrator := profileRequest(t, server, http.MethodDelete, "/api/v1/users/"+administrator,
+		adminSession, adminCSRF, "", "")
+	conformance.Error(t, lastAdministrator, http.StatusConflict, "user_last_administrator")
+}
 
 func TestProfileHandlersRejectProtectedFieldsAndStudentSelfEdit(t *testing.T) {
 	server, database, staff, student, _ := profileServer(t)

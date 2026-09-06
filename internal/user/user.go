@@ -488,6 +488,19 @@ func EmailExists(ctx context.Context, query miSQLite.Querier, emailKey string) (
 	return exists != 0, nil
 }
 
+// EmailKeyForDeletion returns the normalized email owned by an account so a
+// registered lifecycle owner can remove records addressed to that identity.
+func EmailKeyForDeletion(ctx context.Context, query miSQLite.Querier, accountID string) (string, error) {
+	var emailKey sql.NullString
+	if err := query.QueryRowContext(ctx, "SELECT email_key FROM users WHERE id = ?", accountID).Scan(&emailKey); err != nil {
+		return "", fmt.Errorf("load account email key for deletion: %w", err)
+	}
+	if !emailKey.Valid {
+		return "", nil
+	}
+	return emailKey.String, nil
+}
+
 // isUsernameUniqueViolation checks if the error is a SQLite UNIQUE constraint violation
 // on the username_key column.
 func isUsernameUniqueViolation(err error) bool {

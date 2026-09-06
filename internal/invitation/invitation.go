@@ -100,6 +100,22 @@ func NewService(database *sql.DB, logger *slog.Logger) *Service {
 	return &Service{database: database, logger: logger}
 }
 
+// DeleteAccountData removes every invitation addressed to the deleted
+// account's normalized email in the caller's account-deletion transaction.
+func (service *Service) DeleteAccountData(ctx context.Context, query miSQLite.Querier, accountID string) error {
+	emailKey, err := user.EmailKeyForDeletion(ctx, query, accountID)
+	if err != nil {
+		return err
+	}
+	if emailKey == "" {
+		return nil
+	}
+	if _, err := query.ExecContext(ctx, "DELETE FROM invitations WHERE email_normalized = ?", emailKey); err != nil {
+		return fmt.Errorf("delete invitations addressed to account: %w", err)
+	}
+	return nil
+}
+
 // Create inserts a new pending invitation after authorization checks.
 func (s *Service) Create(ctx context.Context, input CreateInput) (Invitation, string, error) {
 	email, emailKey, err := identity.Email(input.Email)

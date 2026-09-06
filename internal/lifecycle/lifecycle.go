@@ -8,6 +8,10 @@ import (
 	miSQLite "github.com/thorstenkramm/mia/internal/sqlite"
 )
 
+// ErrAccountDeletionBlocked means an owning feature requires a retained
+// relationship before the account can be deleted.
+var ErrAccountDeletionBlocked = errors.New("account deletion blocked by required relationship")
+
 // CourseDeleter removes one feature's course-scoped data in the caller's transaction.
 type CourseDeleter interface {
 	DeleteCourseData(context.Context, miSQLite.Querier, string) error
