@@ -119,10 +119,23 @@ func EnsureInstructions(dataDir string) error {
 
 // Recover safely fails uncertain provider work and resumes never-started responses.
 func (manager *Manager) Recover(ctx context.Context) error {
+	if err := manager.FailStranded(ctx); err != nil {
+		return err
+	}
+	return manager.ResumeQueued(ctx)
+}
+
+// FailStranded marks uncertain provider work failed without starting queued work.
+func (manager *Manager) FailStranded(ctx context.Context) error {
 	if _, err := manager.database.ExecContext(ctx, `UPDATE tutor_responses SET state = 'failed',
 		failure_code = 'worker_restarted', finished_at = ? WHERE state = 'generating'`, instant(time.Now())); err != nil {
 		return fmt.Errorf("fail stranded tutor responses: %w", err)
 	}
+	return nil
+}
+
+// ResumeQueued starts responses that had never reached a provider before restart.
+func (manager *Manager) ResumeQueued(ctx context.Context) error {
 	rows, err := manager.database.QueryContext(ctx, `SELECT id FROM tutor_responses WHERE state = 'queued'
 		ORDER BY created_at, id`)
 	if err != nil {

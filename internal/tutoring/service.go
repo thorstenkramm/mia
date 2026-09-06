@@ -558,6 +558,59 @@ func (service *Service) MaterialSelectedByActive(ctx context.Context, query miSQ
 	return selected != 0, err
 }
 
+// LoadCompletedResponseForOwner returns speech-eligible response text without exposing other students' resources.
+func LoadCompletedResponseForOwner(ctx context.Context, query miSQLite.Querier, responseID,
+	studentID string) (CompletedResponse, error) {
+	var response CompletedResponse
+	err := query.QueryRowContext(ctx, `SELECT r.id, r.content FROM tutor_responses r
+		JOIN tutoring_sessions s ON s.id = r.session_id
+		WHERE r.id = ? AND r.state = 'completed' AND s.student_user_id = ?`, responseID, studentID).
+		Scan(&response.ID, &response.Content)
+	if errors.Is(err, sql.ErrNoRows) {
+		return CompletedResponse{}, ErrNotFound
+	}
+	if err != nil {
+		return CompletedResponse{}, fmt.Errorf("load speech source response: %w", err)
+	}
+	return response, nil
+}
+
+// ResponseIDsForCourse returns tutoring-owned response identifiers for lifecycle deletion.
+func ResponseIDsForCourse(ctx context.Context, query miSQLite.Querier, courseID string) ([]string, error) {
+	return responseIDs(ctx, query, "s.course_id = ?", courseID)
+}
+
+// ResponseIDsForStudentCourse returns tutoring-owned response identifiers for lifecycle deletion.
+func ResponseIDsForStudentCourse(ctx context.Context, query miSQLite.Querier, courseID,
+	studentID string) ([]string, error) {
+	return responseIDs(ctx, query, "s.course_id = ? AND s.student_user_id = ?", courseID, studentID)
+}
+
+// ResponseIDsForAccount returns tutoring-owned response identifiers for lifecycle deletion.
+func ResponseIDsForAccount(ctx context.Context, query miSQLite.Querier, accountID string) ([]string, error) {
+	return responseIDs(ctx, query, "s.student_user_id = ?", accountID)
+}
+
+func responseIDs(ctx context.Context, query miSQLite.Querier, condition string, args ...any) ([]string, error) {
+	rows, err := query.QueryContext(ctx, `SELECT r.id FROM tutor_responses r JOIN tutoring_sessions s
+		ON s.id = r.session_id WHERE `+condition+` ORDER BY r.id`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list tutoring response identifiers: %w", err)
+	}
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, errors.Join(err, rows.Close())
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, errors.Join(err, rows.Close())
+	}
+	return ids, rows.Close()
+}
+
 func (service *Service) DeleteCourseData(ctx context.Context, query miSQLite.Querier, courseID string) error {
 	return service.deleteSessions(ctx, query, "course_id = ?", courseID)
 }

@@ -66,3 +66,8 @@ type ListResult struct {
 type UsedMaterial struct {
 	ID, Name, Kind, Scope string
 }
+
+// CompletedResponse is the immutable source projection exposed to speech.
+type CompletedResponse struct {
+	ID, Content string
+}

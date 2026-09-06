@@ -175,7 +175,11 @@ These settings are fixed for the MVP and are not operator-configurable.
   slash, and the adapter composes only `POST /sms/send`. HTTP is permitted only
   for `localhost` or a loopback-IP compatible local test double.
 - ElevenLabs uses a ten-second response-header timeout and a two-minute total
-  deadline.
+  deadline. Its adapter calls only
+  `POST /v1/text-to-speech/{voice_id}?output_format=mp3_44100_128`, authenticates
+  with `xi-api-key`, and sends only `text` plus the fixed
+  `eleven_multilingual_v2` model ID. It accepts one complete signature-valid MP3
+  of at most 25 MiB and retains no provider error body.
 - Request-path provider operations do not retry automatically after failure.
   Authorized user retries and resends remain subject to normal state and rate
   limits. Background jobs use their separate durable retry policy.
@@ -226,7 +230,8 @@ specified with implementation.
 Startup first deletes expired generated-speech rows and files. It then changes
 speech rows stranded in generating state to failed with a sanitized restart code
 and removes associated incomplete output without repeating provider requests.
-Finally, it logs an error and exits when SQLite references a missing source file,
-processed `content.jsonl`, or unexpired available generated-speech file. Missing
+It then validates every database-referenced source file, processed
+`content.jsonl`, and unexpired available generated-speech file. Only after every
+required-file validation succeeds does startup remove filesystem orphans. Missing
 avatars and course logos are normal because their fixed-path presence defines
 availability.

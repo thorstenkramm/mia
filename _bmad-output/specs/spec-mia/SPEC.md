@@ -7,11 +7,15 @@ companions:
 sources: []
 ---
 
+<!-- markdownlint-disable MD041 -->
+
 > **Canonical contract.** This SPEC and the files in `companions:` are the complete, preservation-validated
 > contract for what to build, test, and validate. Source documents listed in frontmatter are for traceability —
 > consult them only if you need narrative rationale or prose color this contract intentionally omits.
 
 # MIA — Self-Hosted AI Tutoring Platform, Backend MVP
+
+<!-- markdownlint-enable MD041 -->
 
 ## Why
 
@@ -71,7 +75,8 @@ that contract — they never override it.
     factor; factor mutations require a single-use `mfa-management` proof consumed atomically.
 
 - **CAP-7** Profiles, avatars, and mobile verification (FR-33..36)
-  - **intent:** Staff edit their own non-security profile fields; supervisors edit student profiles
+  - **intent:** Staff edit their own non-security profile fields; assigned supervisors edit student profiles,
+    including exclusive control of student-only ElevenLabs voice selection
     (students cannot); avatars and logos are normalized to bounded metadata-free PNGs; staff mobile changes
     confirm via SMS.
   - **success:** Student self-edit is rejected; the untrusted image source is never served; avatar/logo

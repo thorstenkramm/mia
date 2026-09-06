@@ -35,10 +35,12 @@ import (
 	"github.com/thorstenkramm/mia/internal/logging"
 	"github.com/thorstenkramm/mia/internal/material"
 	"github.com/thorstenkramm/mia/internal/mentoring"
+	"github.com/thorstenkramm/mia/internal/provider/elevenlabs"
 	"github.com/thorstenkramm/mia/internal/provider/mistral"
 	"github.com/thorstenkramm/mia/internal/provider/openai"
 	"github.com/thorstenkramm/mia/internal/provider/sms"
 	"github.com/thorstenkramm/mia/internal/provider/smtp"
+	"github.com/thorstenkramm/mia/internal/speech"
 	miSQLite "github.com/thorstenkramm/mia/internal/sqlite"
 	"github.com/thorstenkramm/mia/internal/tutoring"
 	"github.com/thorstenkramm/mia/internal/user"
@@ -569,17 +571,38 @@ func newServeCommand() *cobra.Command {
 			}
 			return tutoringService.MaterialSelectedByActive(ctx, query, materialID)
 		}, logger.Slog())
-		if err := materialService.Reconcile(command.Context()); err != nil {
-			return err
-		}
 		tutoringService = tutoring.NewService(database, materialService, logger.Slog())
 		chatClient := openai.New(openai.Options{APIKey: configuration.OpenAI.APIKey,
 			Model: configuration.OpenAI.ChatModel, ResponseHeaderTimeout: 30 * time.Second})
 		tutorManager := tutoring.NewManager(database, tutoringService, chatClient, configuration.Main.DataDir, logger.Slog())
 		tutoringService.SetManager(tutorManager)
+		speechService := speech.NewService(database, configuration.Main.DataDir,
+			elevenlabs.New(elevenlabs.Options{APIKey: configuration.ElevenLabs.APIKey}),
+			configuration.ElevenLabs.CacheRetentionDays, logger.Slog())
+		if err := speechService.RecoverState(command.Context()); err != nil {
+			return err
+		}
+		if err := tutorManager.FailStranded(command.Context()); err != nil {
+			return err
+		}
+		if err := speechService.ValidateFiles(command.Context()); err != nil {
+			return err
+		}
+		if err := materialService.ValidateFiles(command.Context()); err != nil {
+			return err
+		}
+		if err := speechService.ReconcileOrphans(command.Context()); err != nil {
+			return err
+		}
+		if err := materialService.ReconcileOrphans(command.Context()); err != nil {
+			return err
+		}
 		lifecycleRegistry.RegisterCourse(materialService)
 		lifecycleRegistry.RegisterStudentCourse(materialService)
 		lifecycleRegistry.RegisterAccount(materialService)
+		lifecycleRegistry.RegisterCourse(speechService)
+		lifecycleRegistry.RegisterStudentCourse(speechService)
+		lifecycleRegistry.RegisterAccount(speechService)
 		lifecycleRegistry.RegisterCourse(tutoringService)
 		lifecycleRegistry.RegisterStudentCourse(tutoringService)
 		lifecycleRegistry.RegisterAccount(tutoringService)
@@ -600,12 +623,13 @@ func newServeCommand() *cobra.Command {
 		if err := worker.Recover(command.Context()); err != nil {
 			return err
 		}
-		if err := tutorManager.Recover(command.Context()); err != nil {
+		if err := tutorManager.ResumeQueued(command.Context()); err != nil {
 			return err
 		}
 		jobs.Register(server, oversight)
 		material.Register(server, materialService, oversight)
 		tutoring.Register(server, tutoringService, tutorManager)
+		speech.Register(server, speechService)
 		mentoring.Register(server, mentoringService)
 		course.Register(server, course.NewService(database, configuration.Main.DataDir, lifecycleRegistry,
 			material.MaterialReady, tutoringService.ActiveInCourse,
@@ -614,10 +638,10 @@ func newServeCommand() *cobra.Command {
 		defer func() {
 			shutdown, cancel := contextWithTimeout(command.Context(), 30*time.Second)
 			defer cancel()
-			returnErr = errors.Join(returnErr, tutorManager.Stop(shutdown), worker.Stop(shutdown))
+			returnErr = errors.Join(returnErr, speechService.Stop(shutdown), tutorManager.Stop(shutdown), worker.Stop(shutdown))
 		}()
 		return serve(command.Context(), configuration.HTTP.Listen, configuration.HTTP.SocketGroup, server.Echo,
-			func() { tutorManager.BeginShutdown(); worker.BeginShutdown() }, logger)
+			func() { speechService.BeginShutdown(); tutorManager.BeginShutdown(); worker.BeginShutdown() }, logger)
 	}}
 }
 

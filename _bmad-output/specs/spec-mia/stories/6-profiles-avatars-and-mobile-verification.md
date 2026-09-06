@@ -15,6 +15,8 @@ warnings: [oversized]
 deferred: []
 ---
 
+<!-- markdownlint-disable MD033 -->
+
 <intent-contract>
 
 ## Intent
@@ -54,6 +56,8 @@ bytes; expose filesystem paths; add course or supervisor-student authorization b
 
 </intent-contract>
 
+<!-- markdownlint-enable MD033 -->
+
 ## Code Map
 
 - `internal/user/user.go` -- owns user/profile records and the MFA-profile read; extend with staff-scoped profile and
@@ -76,6 +80,7 @@ bytes; expose filesystem paths; add course or supervisor-student authorization b
 ## Tasks & Acceptance
 
 **Execution:**
+
 - `migrations/000008_profiles.up.sql`, `internal/user/*.go` -- implement staff profile persistence and routes, mobile
   challenge lifecycle, avatar authorization, and same-transaction audit behavior.
 - `internal/imagefile/*`, `internal/filepublish/*` -- implement and test bounded signature decoding, EXIF orientation,
@@ -89,6 +94,7 @@ bytes; expose filesystem paths; add course or supervisor-student authorization b
   metadata stripping, safe download headers, and failed-publication cleanup without external providers.
 
 **Acceptance Criteria:**
+
 - Given a staff account, when it PATCHes only documented profile fields, then normalized values are persisted and audited;
   given a student-only account or protected field, the same self-edit operation is rejected without mutation.
 - Given configured SMS and a staff user, when a mobile challenge is successfully verified, then the new E.164 number
@@ -103,12 +109,15 @@ bytes; expose filesystem paths; add course or supervisor-student authorization b
 ## Design Notes
 
 Student profile administration remains in story 8 because shared-course authorization and memberships do not yet exist.
+Student-only accounts never self-edit their ElevenLabs voice; only an assigned supervisor sharing a course may set,
+change, or clear it.
 Course-logo HTTP operations remain in story 7 because the course package owns course visibility and mutation scope; this
 story delivers the complete reusable normalization/publication pipeline that those routes must call.
 
 ## Verification
 
 **Commands:**
+
 - `gofmt -w <changed Go files>` -- expected: all changed Go files are formatted.
 - `go test ./...` -- expected: all unit and integration tests pass without live provider calls.
 - `go vet ./...` -- expected: no findings.

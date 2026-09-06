@@ -41,6 +41,10 @@ User:
           description: Preferred IANA time zone for display.
         tts_voice:
           type: [string, 'null']
+          description: >-
+            Staff may manage their own voice. Only an assigned supervisor sharing
+            a course may manage this field for a student-only account; students
+            cannot select it themselves.
         has_verified_mobile:
           type: boolean
         avatar_url:
@@ -726,6 +730,30 @@ TutorResponse:
         started_at: { type: [string, 'null'], format: date-time }
         finished_at: { type: [string, 'null'], format: date-time }
 
+GeneratedSpeech:
+  type: object
+  required: [type, id, attributes]
+  properties:
+    type: { const: generated-speech }
+    id: { type: string }
+    attributes:
+      type: object
+      required: [tutor_response_id, state, failure_code, generated_at, expires_at]
+      properties:
+        tutor_response_id: { type: string }
+        state: { type: string, enum: [generating, available, failed] }
+        failure_code:
+          type: [string, 'null']
+          enum:
+            - null
+            - speech_provider_failed
+            - speech_publication_failed
+            - speech_commit_failed
+            - speech_shutdown
+            - speech_restart_interrupted
+        generated_at: { type: [string, 'null'], format: date-time }
+        expires_at: { type: [string, 'null'], format: date-time }
+
 StudentMessage:
   type: object
   required: [type, id, attributes]
@@ -1178,3 +1206,9 @@ JobCollectionDocument:
       $ref: ../json-api/documents.yaml#/PageMeta
     links:
       $ref: ../json-api/documents.yaml#/PageLinks
+GeneratedSpeechDocument:
+  type: object
+  required: [data]
+  properties:
+    data:
+      $ref: '#/GeneratedSpeech'

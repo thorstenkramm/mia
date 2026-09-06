@@ -60,6 +60,15 @@ type MinimalProfile struct {
 	Name, Nickname *string
 }
 
+// LoadTTSVoice returns the account's current explicitly selected ElevenLabs voice.
+func LoadTTSVoice(ctx context.Context, query miSQLite.Querier, accountID string) (*string, error) {
+	var voice sql.NullString
+	if err := query.QueryRowContext(ctx, "SELECT tts_voice FROM users WHERE id = ?", accountID).Scan(&voice); err != nil {
+		return nil, fmt.Errorf("load text-to-speech voice: %w", err)
+	}
+	return nullString(voice), nil
+}
+
 // LoadMinimalProfile returns only the identity fields permitted in a mentor projection.
 func LoadMinimalProfile(ctx context.Context, query miSQLite.Querier, accountID string) (MinimalProfile, error) {
 	var profile MinimalProfile
@@ -177,6 +186,28 @@ func (service *Service) UpdateSelf(ctx context.Context, accountID string, change
 		return Profile{}, err
 	}
 	return service.GetSelf(ctx, accountID)
+}
+
+// SetStudentTTSVoice validates and stores the supervisor-managed voice field.
+// The caller owns student-only and shared-course authorization.
+func SetStudentTTSVoice(ctx context.Context, query miSQLite.Querier, studentID, actorID string, voice *string) error {
+	normalized, err := normalizeVoice(OptionalString{Set: true, Value: voice})
+	if err != nil {
+		return ErrProfileInvalid
+	}
+	result, err := query.ExecContext(ctx, `UPDATE users SET tts_voice = ?, updated_at = ?, updated_by = ? WHERE id = ?`,
+		nullablePointer(normalized), instant(time.Now()), actorID, studentID)
+	if err != nil {
+		return fmt.Errorf("set student TTS voice: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("count student TTS voice update: %w", err)
+	}
+	if rows != 1 {
+		return ErrProfileInvalid
+	}
+	return nil
 }
 
 // StartMobileChallenge replaces the account's pending challenge before one provider attempt.

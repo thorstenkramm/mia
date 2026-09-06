@@ -1,21 +1,29 @@
 studentProfile:
   patch:
     tags: [Users]
-    operationId: updateStudentMentoringPermission
-    summary: Set a student-only account's mentoring-request permission
+    operationId: updateStudentProfile
+    summary: Update supervisor-managed student-only profile fields
+    description: >-
+      Only a supervisor assigned to a course shared with the student-only account
+      may update these global fields. Students cannot use this route or self-edit
+      their profile fields.
     security: [{ sessionCookie: [], csrfToken: [] }]
     parameters: [{ $ref: ../openapi.yaml#/components/parameters/ResourceID }]
     requestBody:
       required: true
       content:
         application/vnd.api+json:
-          schema: { $ref: ../schemas/requests/requests.yaml#/StudentMentoringPermissionRequestDocument }
+          schema: { $ref: ../schemas/requests/requests.yaml#/StudentProfileUpdateRequestDocument }
     responses:
-      '204': { description: Permission updated. }
+      '204': { description: Student profile fields updated. }
       '400': { $ref: ../responses/errors.yaml#/BadRequest }
       '401': { $ref: ../responses/errors.yaml#/Unauthorized }
-      '403': { $ref: ../responses/errors.yaml#/Forbidden }
-      '404': { $ref: ../responses/errors.yaml#/NotFound }
+      '403':
+        $ref: ../responses/errors.yaml#/Forbidden
+        description: CSRF or restricted session (`csrf_invalid` or `auth_password_change_required`).
+      '404':
+        $ref: ../responses/errors.yaml#/NotFound
+        description: Missing, staff, student caller, or out-of-scope student (`course_student_not_found`).
       '406': { $ref: ../responses/errors.yaml#/NotAcceptable }
       '413': { $ref: ../responses/errors.yaml#/RequestTooLarge }
       '415': { $ref: ../responses/errors.yaml#/UnsupportedMediaType }

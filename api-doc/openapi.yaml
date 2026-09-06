@@ -29,6 +29,8 @@ tags:
     description: Tutoring sessions, immutable chat, streaming responses, and completed-session review.
   - name: Mentoring
     description: Mentor assignments, supervisor triage, responses, external scheduling, and closure.
+  - name: Speech
+    description: Retained ElevenLabs speech for completed tutor responses.
 security:
   - sessionCookie: []
 paths:
@@ -146,6 +148,8 @@ paths:
     $ref: paths/tutoring.yaml#/tutorResponseInterruptions
   /api/v1/tutor-responses/{id}/events:
     $ref: paths/tutoring.yaml#/tutorResponseEvents
+  /api/v1/tutor-responses/{id}/speech:
+    $ref: paths/speech.yaml#/tutorResponseSpeech
   /api/v1/courses/{course_id}/mentors:
     $ref: paths/mentoring.yaml#/courseMentors
   /api/v1/courses/{course_id}/mentors/{user_id}:

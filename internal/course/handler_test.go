@@ -91,15 +91,36 @@ func TestCourseHandlersCreateAndBlockActivationUntilMaterialOwnerIsWired(t *test
 	if err != nil || !allowed {
 		t.Fatalf("mentoring permission = %t, %v", allowed, err)
 	}
+	voiceBody := []byte(`{"data":{"type":"users","id":"` + student +
+		`","attributes":{"tts_voice":"elevenlabs-voice"}}}`)
+	voiceResponse := courseHTTP(t, server, http.MethodPatch, "/api/v1/users/"+student,
+		supervisorSession, supervisorCSRF, "application/vnd.api+json", voiceBody)
+	if voiceResponse.Code != http.StatusNoContent {
+		t.Fatalf("TTS voice update = %d %s", voiceResponse.Code, voiceResponse.Body.String())
+	}
+	voice, err := user.LoadTTSVoice(context.Background(), database, student)
+	if err != nil || voice == nil || *voice != "elevenlabs-voice" {
+		t.Fatalf("student TTS voice = %v, %v", voice, err)
+	}
+	var voiceAudits int
+	if err := database.QueryRow(`SELECT COUNT(*) FROM audit_events
+		WHERE action = 'user.student_tts_voice.updated' AND actor_user_id = ? AND subject_user_id = ?`,
+		supervisor, student).Scan(&voiceAudits); err != nil || voiceAudits != 1 {
+		t.Fatalf("student TTS voice audits = %d, %v", voiceAudits, err)
+	}
 	unrelatedSession, unrelatedCSRF := courseSession(t, server, unrelated)
 	deniedPermissionBody := []byte(`{"data":{"type":"users","id":"` + student +
-		`","attributes":{"mentoring_requests_allowed":false}}}`)
+		`","attributes":{"mentoring_requests_allowed":false,"tts_voice":"unauthorized-voice"}}}`)
 	deniedPermission := courseHTTP(t, server, http.MethodPatch, "/api/v1/users/"+student,
 		unrelatedSession, unrelatedCSRF, "application/vnd.api+json", deniedPermissionBody)
 	assertCourseError(t, deniedPermission, http.StatusNotFound, "course_student_not_found")
 	allowed, err = user.MentoringRequestsAllowed(context.Background(), database, student)
 	if err != nil || !allowed {
 		t.Fatalf("mentoring permission after denied update = %t, %v", allowed, err)
+	}
+	voice, err = user.LoadTTSVoice(context.Background(), database, student)
+	if err != nil || voice == nil || *voice != "elevenlabs-voice" {
+		t.Fatalf("student TTS voice after denied update = %v, %v", voice, err)
 	}
 	renameBody := []byte(`{"data":{"type":"courses","id":"` + document.Data.ID +
 		`","attributes":{"name":"Renamed"}}}`)

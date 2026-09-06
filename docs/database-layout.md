@@ -20,6 +20,7 @@ behavior.
 - [MFA](#mfa)
 - [Material](#material)
 - [Tutoring](#tutoring)
+- [Generated speech](#generated_speech)
 - [Mentoring](#mentoring)
 - [Jobs and provider operations](#jobs-and-provider-operations)
 - [Audit](#audit)
@@ -108,7 +109,8 @@ continuing.
   stranded generation failed and removes incomplete output. It next logs an error
   and exits when SQLite references a missing source file, processed
   `content.jsonl`, or unexpired available speech file. It does not repair or
-  downgrade those remaining database states automatically.
+  downgrade those remaining database states automatically. It removes filesystem
+  orphans only after all required-file validations succeed.
 - Managed output is fully written and atomically published before the transaction
   marks its row processed or available. A failed or stale database commit deletes
   the newly published file; startup removes a crash-left orphan.
@@ -152,7 +154,9 @@ Columns:
 - `llm_instructions`, nullable normalized student-specific instructions, maximum
   4,000 Unicode code points and 16 KiB
 - `mentoring_requests_allowed`, boolean, not null, default false
-- `tts_voice`, nullable ElevenLabs voice identifier
+- `tts_voice`, nullable ElevenLabs voice identifier; staff may manage their own,
+  while only an assigned supervisor sharing a course may manage one for a
+  student-only account
 - `is_banned`, boolean, not null, default false
 - `created_at`, not null
 - `created_by`, nullable user ID, null only for local first-administrator
@@ -1080,7 +1084,8 @@ Constraints:
   failed-to-generating transition; startup never repeats the uncertain provider
   request.
 - After cleanup and stranded-generation recovery, startup checks that every
-  remaining available row has its file.
+  remaining available row has its file. Material and speech required-file checks
+  all succeed before any speech or material filesystem orphan is removed.
 
 ## Mentoring
 

@@ -210,6 +210,8 @@
   assigned course with a student-only account can edit that student's
   non-security profile fields. A supervisor-entered student mobile is immediately
   verified and invalidates pending mobile challenges and pending SMS factors.
+  Only such an assigned supervisor may set, change, or clear a student-only
+  account's ElevenLabs voice; students cannot select it themselves.
   Staff may edit their own non-security profile fields and remove their verified
   profile mobile; removal invalidates pending SMS factors but does not change an
   active SMS factor destination. Staff email is immutable.

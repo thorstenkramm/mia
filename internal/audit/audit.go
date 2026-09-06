@@ -68,22 +68,23 @@ const (
 	ActionUserAvatarUpdated                  Action = "user.avatar.updated"
 	ActionUserAvatarRemoved                  Action = "user.avatar.removed"
 
-	ActionCourseCourseCreated      Action = "course.course.created"
-	ActionCourseCourseUpdated      Action = "course.course.updated"
-	ActionCourseCourseActivated    Action = "course.course.activated"
-	ActionCourseCourseDeactivated  Action = "course.course.deactivated"
-	ActionCourseCourseDeleted      Action = "course.course.deleted"
-	ActionCourseSupervisorAssigned Action = "course.supervisor.assigned"
-	ActionCourseSupervisorRemoved  Action = "course.supervisor.removed"
-	ActionCourseLogoUpdated        Action = "course.logo.updated"
-	ActionCourseLogoRemoved        Action = "course.logo.removed"
-	ActionCourseMutationDenied     Action = "course.mutation.denied"
-	ActionCourseStudentProvisioned Action = "course.student.provisioned"
-	ActionCourseStudentAdded       Action = "course.student.added"
-	ActionCourseStudentRemoved     Action = "course.student.removed"
-	ActionUserTemporaryPasswordSet Action = "user.password.temporary_set"
-	ActionUserStudentBanned        Action = "user.student.banned"
-	ActionUserStudentUnbanned      Action = "user.student.unbanned"
+	ActionCourseCourseCreated        Action = "course.course.created"
+	ActionCourseCourseUpdated        Action = "course.course.updated"
+	ActionCourseCourseActivated      Action = "course.course.activated"
+	ActionCourseCourseDeactivated    Action = "course.course.deactivated"
+	ActionCourseCourseDeleted        Action = "course.course.deleted"
+	ActionCourseSupervisorAssigned   Action = "course.supervisor.assigned"
+	ActionCourseSupervisorRemoved    Action = "course.supervisor.removed"
+	ActionCourseLogoUpdated          Action = "course.logo.updated"
+	ActionCourseLogoRemoved          Action = "course.logo.removed"
+	ActionCourseMutationDenied       Action = "course.mutation.denied"
+	ActionCourseStudentProvisioned   Action = "course.student.provisioned"
+	ActionCourseStudentAdded         Action = "course.student.added"
+	ActionCourseStudentRemoved       Action = "course.student.removed"
+	ActionUserTemporaryPasswordSet   Action = "user.password.temporary_set"
+	ActionUserStudentBanned          Action = "user.student.banned"
+	ActionUserStudentUnbanned        Action = "user.student.unbanned"
+	ActionUserStudentTTSVoiceUpdated Action = "user.student_tts_voice.updated"
 
 	ActionMaterialCreated                Action = "material.material.created"
 	ActionMaterialFileUploaded           Action = "material.file.uploaded"
@@ -112,6 +113,8 @@ const (
 	ActionMentoringSessionCompleted      Action = "mentoring.session.completed"
 	ActionMentoringMutationDenied        Action = "mentoring.mutation.denied"
 	ActionUserMentoringPermissionUpdated Action = "user.mentoring_permission.updated"
+	ActionSpeechGenerationFailed         Action = "speech.generation.failed"
+	ActionSpeechMutationDenied           Action = "speech.mutation.denied"
 )
 
 var actions = map[Action]struct{}{
@@ -208,6 +211,9 @@ var actions = map[Action]struct{}{
 	ActionMentoringSessionCompleted:             {},
 	ActionMentoringMutationDenied:               {},
 	ActionUserMentoringPermissionUpdated:        {},
+	ActionUserStudentTTSVoiceUpdated:            {},
+	ActionSpeechGenerationFailed:                {},
+	ActionSpeechMutationDenied:                  {},
 }
 
 // Metadata contains typed, content-free audit metadata.
@@ -222,6 +228,8 @@ type Metadata struct {
 	MentorID            string `json:"mentor_id,omitempty"`
 	PreviousScheduledAt string `json:"previous_scheduled_at,omitempty"`
 	NewScheduledAt      string `json:"new_scheduled_at,omitempty"`
+	SpeechID            string `json:"speech_id,omitempty"`
+	TutorResponseID     string `json:"tutor_response_id,omitempty"`
 }
 
 // Write records one registered action in the same transaction as its mutation.

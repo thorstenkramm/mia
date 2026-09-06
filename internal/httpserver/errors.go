@@ -69,23 +69,32 @@ const (
 	CodeCourseStudentNotFound       Code = "course_student_not_found"
 	CodeCourseStudentInvalid        Code = "course_student_invalid"
 
-	CodeMaterialNotFound      Code = "material_not_found"
-	CodeMaterialInvalid       Code = "material_invalid"
-	CodeMaterialNameTaken     Code = "material_name_taken"
-	CodeMaterialInvalidState  Code = "material_invalid_state"
-	CodeJobNotFound           Code = "job_not_found"
-	CodeJobUnauthorized       Code = "job_unauthorized"
-	CodeJobInvalid            Code = "job_invalid"
-	CodeTutoringNotFound      Code = "tutoring_not_found"
-	CodeTutoringInvalid       Code = "tutoring_invalid"
-	CodeTutoringConflict      Code = "tutoring_request_conflict"
-	CodeTutoringActiveSession Code = "tutoring_active_session"
-	CodeTutoringBusy          Code = "tutoring_work_busy"
-	CodeTutoringInvalidState  Code = "tutoring_invalid_state"
-	CodeMentoringNotFound     Code = "mentoring_not_found"
-	CodeMentoringInvalid      Code = "mentoring_invalid"
-	CodeMentoringInvalidState Code = "mentoring_invalid_state"
-	CodeMentoringUnavailable  Code = "mentoring_unavailable"
+	CodeMaterialNotFound         Code = "material_not_found"
+	CodeMaterialInvalid          Code = "material_invalid"
+	CodeMaterialNameTaken        Code = "material_name_taken"
+	CodeMaterialInvalidState     Code = "material_invalid_state"
+	CodeJobNotFound              Code = "job_not_found"
+	CodeJobUnauthorized          Code = "job_unauthorized"
+	CodeJobInvalid               Code = "job_invalid"
+	CodeTutoringNotFound         Code = "tutoring_not_found"
+	CodeTutoringInvalid          Code = "tutoring_invalid"
+	CodeTutoringConflict         Code = "tutoring_request_conflict"
+	CodeTutoringActiveSession    Code = "tutoring_active_session"
+	CodeTutoringBusy             Code = "tutoring_work_busy"
+	CodeTutoringInvalidState     Code = "tutoring_invalid_state"
+	CodeMentoringNotFound        Code = "mentoring_not_found"
+	CodeMentoringInvalid         Code = "mentoring_invalid"
+	CodeMentoringInvalidState    Code = "mentoring_invalid_state"
+	CodeMentoringUnavailable     Code = "mentoring_unavailable"
+	CodeSpeechNotFound           Code = "speech_not_found"
+	CodeSpeechUnavailable        Code = "speech_unavailable"
+	CodeSpeechVoiceRequired      Code = "speech_voice_required"
+	CodeSpeechInvalidState       Code = "speech_invalid_state"
+	CodeSpeechProviderFailed     Code = "speech_provider_failed"
+	CodeSpeechPublicationFailed  Code = "speech_publication_failed"
+	CodeSpeechCommitFailed       Code = "speech_commit_failed"
+	CodeSpeechShutdown           Code = "speech_shutdown"
+	CodeSpeechRestartInterrupted Code = "speech_restart_interrupted"
 )
 
 type definition struct {
@@ -163,6 +172,24 @@ var errorRegistry = map[Code]definition{
 	CodeMentoringInvalid:            {http.StatusUnprocessableEntity, "Invalid Mentoring Request", "The request could not be completed."},
 	CodeMentoringInvalidState:       {http.StatusConflict, "Invalid Mentoring State", "The request could not be completed."},
 	CodeMentoringUnavailable:        {http.StatusConflict, "Mentoring Unavailable", "The request could not be completed."},
+	CodeSpeechNotFound:              {http.StatusNotFound, "Not Found", "The requested resource was not found."},
+	CodeSpeechUnavailable:           {http.StatusServiceUnavailable, "Speech Unavailable", "The request could not be completed."},
+	CodeSpeechVoiceRequired:         {http.StatusUnprocessableEntity, "Speech Voice Required", "A text-to-speech voice must be selected."},
+	CodeSpeechInvalidState:          {http.StatusConflict, "Speech Not Available", "The requested speech is not available."},
+	CodeSpeechProviderFailed:        {},
+	CodeSpeechPublicationFailed:     {},
+	CodeSpeechCommitFailed:          {},
+	CodeSpeechShutdown:              {},
+	CodeSpeechRestartInterrupted:    {},
+}
+
+// StableCode returns a centrally registered code for persistence, audit
+// metadata, logs, or client-visible failure state.
+func StableCode(code Code) string {
+	if _, ok := errorRegistry[code]; !ok {
+		panic("unregistered stable code")
+	}
+	return string(code)
 }
 
 // Error is a registered domain error translated centrally to a JSON:API response.
@@ -177,7 +204,8 @@ func (err *Error) Code() Code { return err.code }
 // NewError returns an error from the shared registry. Codes can only be added
 // by extending the registry in this package.
 func NewError(code Code) *Error {
-	if _, ok := errorRegistry[code]; !ok {
+	definition, ok := errorRegistry[code]
+	if !ok || definition.status == 0 {
 		return &Error{code: CodeInternalError}
 	}
 	return &Error{code: code}

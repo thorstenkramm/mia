@@ -1,0 +1,68 @@
+tutorResponseSpeech:
+  post:
+    tags: [Speech]
+    operationId: requestTutorResponseSpeech
+    summary: Request, retry, or reuse speech for a completed tutor response
+    security: [{ sessionCookie: [], csrfToken: [] }]
+    parameters: [{ $ref: ../openapi.yaml#/components/parameters/ResourceID }]
+    responses:
+      '200':
+        description: Existing available speech cache state.
+        content:
+          application/vnd.api+json:
+            schema: { $ref: ../schemas/resources/resources.yaml#/GeneratedSpeechDocument }
+      '202':
+        description: Shared generation is pending after a new request or explicit retry.
+        content:
+          application/vnd.api+json:
+            schema: { $ref: ../schemas/resources/resources.yaml#/GeneratedSpeechDocument }
+      '401': { $ref: ../responses/errors.yaml#/Unauthorized }
+      '403': { $ref: ../responses/errors.yaml#/Forbidden }
+      '404':
+        $ref: ../responses/errors.yaml#/NotFound
+        description: Tutor response is missing, ineligible, or hidden (`speech_not_found`).
+      '406': { $ref: ../responses/errors.yaml#/NotAcceptable }
+      '422':
+        $ref: ../responses/errors.yaml#/Unprocessable
+        description: No valid stored ElevenLabs voice is selected (`speech_voice_required`).
+      '503':
+        $ref: ../responses/errors.yaml#/ServiceUnavailable
+        description: ElevenLabs is not configured or speech generation is shutting down (`speech_unavailable`).
+  get:
+    tags: [Speech]
+    operationId: getTutorResponseSpeech
+    summary: Get speech state or download available MP3 audio
+    security: [{ sessionCookie: [] }]
+    parameters: [{ $ref: ../openapi.yaml#/components/parameters/ResourceID }]
+    responses:
+      '200':
+        description: Current generating/failed state or the available MP3.
+        headers:
+          Cache-Control:
+            description: Present only for an MP3 response; always `private, no-cache`.
+            schema: { type: string, const: 'private, no-cache' }
+          Content-Disposition:
+            description: Present only for an MP3 response; an inline filename derived from the generated-speech ID.
+            schema: { type: string, pattern: '^inline; filename="sp_[a-f0-9-]+\.mp3"$' }
+          X-Content-Type-Options:
+            description: Present only for an MP3 response.
+            schema: { type: string, const: nosniff }
+        content:
+          application/vnd.api+json:
+            schema: { $ref: ../schemas/resources/resources.yaml#/GeneratedSpeechDocument }
+          audio/mpeg:
+            schema:
+              type: string
+              contentEncoding: binary
+              maxLength: 26214400
+      '401': { $ref: ../responses/errors.yaml#/Unauthorized }
+      '403': { $ref: ../responses/errors.yaml#/Forbidden }
+      '404':
+        $ref: ../responses/errors.yaml#/NotFound
+        description: No matching unexpired cache exists or the response is hidden (`speech_not_found`).
+      '422':
+        $ref: ../responses/errors.yaml#/Unprocessable
+        description: No valid stored ElevenLabs voice is selected (`speech_voice_required`).
+      '503':
+        $ref: ../responses/errors.yaml#/ServiceUnavailable
+        description: ElevenLabs is not configured (`speech_unavailable`).

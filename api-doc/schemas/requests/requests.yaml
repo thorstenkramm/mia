@@ -805,7 +805,7 @@ StudentMessageContent:
   x-max-utf8-bytes: 32768
   description: Between 1 and 8,000 Unicode code points and at most 32 KiB when UTF-8 encoded.
 
-StudentMentoringPermissionRequestDocument:
+StudentProfileUpdateRequestDocument:
   type: object
   required: [data]
   additionalProperties: false
@@ -819,10 +819,18 @@ StudentMentoringPermissionRequestDocument:
         id: { type: string, minLength: 1 }
         attributes:
           type: object
-          required: [mentoring_requests_allowed]
+          minProperties: 1
           additionalProperties: false
           properties:
             mentoring_requests_allowed: { type: boolean }
+            tts_voice:
+              type: [string, 'null']
+              maxLength: 128
+              pattern: '^[\x20-\x7e]*$'
+              description: >-
+                ElevenLabs voice selected for this student-only account. Only a
+                supervisor assigned to a course shared with the student may set,
+                change, or clear it.
 
 CourseMentorAssignmentRequestDocument:
   type: object

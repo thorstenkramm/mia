@@ -99,7 +99,8 @@ type studentUpdateRequest struct {
 		Type       string `json:"type"`
 		ID         string `json:"id"`
 		Attributes struct {
-			MentoringRequestsAllowed *bool `json:"mentoring_requests_allowed"`
+			MentoringRequestsAllowed *bool           `json:"mentoring_requests_allowed"`
+			TTSVoice                 json.RawMessage `json:"tts_voice"`
 		} `json:"attributes"`
 	} `json:"data"`
 }
@@ -446,16 +447,31 @@ func updateStudentHandler(service *Service) echo.HandlerFunc {
 		if err := httpserver.DecodeJSONAPI(c, &request); err != nil {
 			return err
 		}
-		if request.Data.Type != "users" || request.Data.ID != c.Param("id") ||
-			request.Data.Attributes.MentoringRequestsAllowed == nil {
+		voice, err := studentTTSVoice(request.Data.Attributes.TTSVoice)
+		if err != nil || request.Data.Type != "users" || request.Data.ID != c.Param("id") ||
+			request.Data.Attributes.MentoringRequestsAllowed == nil && !voice.Set {
 			return denyMutation(c, service, actorID, "course_student_invalid", httpserver.CodeCourseStudentInvalid)
 		}
-		if err := service.SetMentoringRequestsAllowed(c.Request().Context(), c.Param("id"), actorID,
-			*request.Data.Attributes.MentoringRequestsAllowed); err != nil {
+		if err := service.UpdateStudentProfile(c.Request().Context(), c.Param("id"), actorID,
+			request.Data.Attributes.MentoringRequestsAllowed, voice); err != nil {
 			return mutationError(c, service, actorID, err)
 		}
 		return c.NoContent(http.StatusNoContent)
 	}
+}
+
+func studentTTSVoice(raw json.RawMessage) (user.OptionalString, error) {
+	if len(raw) == 0 {
+		return user.OptionalString{}, nil
+	}
+	if bytes.Equal(raw, []byte("null")) {
+		return user.OptionalString{Set: true}, nil
+	}
+	var value string
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return user.OptionalString{}, err
+	}
+	return user.OptionalString{Set: true, Value: &value}, nil
 }
 
 func studentBanHandler(service *Service, banned bool) echo.HandlerFunc {

@@ -39,8 +39,16 @@ func TestProfileHandlersRejectProtectedFieldsAndStudentSelfEdit(t *testing.T) {
 	assertUserCode(t, protected, http.StatusBadRequest, "malformed_request")
 	studentSession, studentCSRF := issueSession(t, server, student)
 	denied := profileRequest(t, server, http.MethodPatch, "/api/v1/users/me", studentSession, studentCSRF,
-		"application/vnd.api+json", `{"data":{"type":"users","id":"`+student+`","attributes":{"name":"No"}}}`)
+		"application/vnd.api+json", `{"data":{"type":"users","id":"`+student+
+			`","attributes":{"tts_voice":"self-selected"}}}`)
 	assertUserCode(t, denied, http.StatusForbidden, "user_profile_unauthorized")
+	var studentVoice sql.NullString
+	if err := database.QueryRow("SELECT tts_voice FROM users WHERE id = ?", student).Scan(&studentVoice); err != nil {
+		t.Fatal(err)
+	}
+	if studentVoice.Valid {
+		t.Fatalf("student self-selected TTS voice = %q", studentVoice.String)
+	}
 	var name string
 	if err := database.QueryRow("SELECT name FROM users WHERE id = ?", staff).Scan(&name); err != nil {
 		t.Fatal(err)

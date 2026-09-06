@@ -308,6 +308,11 @@ voice. Mobile-change challenge routes manage their verified mobile number.
 Username, email, roles, ban state, password state, and security fields remain
 outside generic profile PATCH.
 
+`PATCH /users/{id}` updates documented supervisor-managed fields of a student-only
+account. Only a supervisor assigned to a course shared with that student may set,
+change, or clear the student's ElevenLabs TTS voice. Students cannot use this
+operation or select a voice through `/users/me`.
+
 DELETE on the current user's mobile clears the verified profile number and
 pending mobile-verification challenges and pending SMS factors without SMS
 delivery. It leaves an active SMS MFA factor's enrolled destination unchanged and
@@ -659,6 +664,12 @@ GET route returns JSON:API state while generation is pending or failed and audio
 with its documented media type when available. Every request reauthorizes access
 to the source response.
 
+POST returns `202` with a `generated-speech` resource while shared generation is
+pending and `200` when reusing available cache state. GET returns that resource
+for `generating` or `failed` state and returns the MP3 body for `available` state.
+The concrete schemas, security requirements, bounds, and stable errors are in
+OpenAPI.
+
 Only completed tutor responses are eligible. Available audio is MP3 served as
 `audio/mpeg`. Concurrent POST requests reuse one cache record and provider
 operation. Retrying a failed variant transitions the same record back to
@@ -667,14 +678,17 @@ generating; request-path generation never retries automatically.
 When ElevenLabs is not configured, both routes return a stable
 feature-unavailable error.
 Generation also requires a stored voice ID of at most 128 printable ASCII
-characters; absence returns a stable validation error. MP3 output is limited to
-25 MiB and is signature-validated before atomic publication.
+characters; absence returns a stable validation error. Only an assigned supervisor
+sharing a course with the student-only account may set, change, or clear that
+voice; students cannot select it themselves. MP3 output is limited to 25 MiB and
+is signature-validated before atomic publication.
 
 At startup, after expired-speech cleanup, every cache row stranded in generating
 state becomes failed with a sanitized restart code and loses any partial or
 published MP3. MIA does not repeat the uncertain ElevenLabs request. A later
 authorized POST retries the same row through the normal failed-to-generating
-transition.
+transition. Startup validates all required material and speech files before it
+removes either cache's filesystem orphans.
 
 ## Mentoring
 
@@ -746,10 +760,10 @@ automatic retries.
 
 ## Open decisions
 
-Authentication, invitation, current-user, course, material, job, tutoring, and
-mentoring transport contracts are concrete in OpenAPI. Unimplemented
-generated-speech and audit route families still require concrete transport and
+Authentication, invitation, current-user, course, material, job, tutoring,
+mentoring, and generated-speech transport contracts are concrete in OpenAPI. The
+unimplemented audit route family still requires concrete transport and
 authorization decisions before implementation. Add those decisions to OpenAPI
-when the implementation exists; do not duplicate their field-level contracts
-in this narrative. Superseded proposals should be removed rather than retained
-as history.
+when the implementation exists; do not duplicate field-level contracts in this
+narrative. Superseded proposals should be removed rather than retained as
+history.

@@ -273,7 +273,8 @@ that student's non-security profile fields:
 - avatar;
 - language and country;
 - student-specific AI tutor instructions;
-- text-to-speech voice;
+- text-to-speech voice, which only an assigned supervisor sharing a course with
+  the student may set, change, or clear;
 - whether the student may request mentoring.
 
 This authority affects the student's global profile, not only the shared course.
@@ -1422,7 +1423,9 @@ required by its workload.
   transition on that row.
 - Speech generation requires an explicitly stored ElevenLabs voice ID containing
   at most 128 printable ASCII characters. Absence returns a stable validation
-  error; MIA provides no provider voice discovery.
+  error; MIA provides no provider voice discovery. Only an assigned supervisor
+  sharing a course with a student-only account may set, change, or clear that
+  student's voice. Students cannot select or edit it themselves.
 - One generated MP3 is limited to 25 MiB. MIA validates its MP3 signature and
   complete bounded response, writes a mode-`0600` temporary file, publishes by
   atomic rename, and removes partial output after failure.
@@ -1449,9 +1452,10 @@ required by its workload.
   stranded generation failed and removes incomplete output. It next logs an error
   and exits when SQLite references a missing source file, normalized
   `content.jsonl`, or unexpired available generated-speech file. It does not
-  repair or downgrade those remaining states automatically. Avatar and
-  course-logo absence is normal because their fixed-path presence alone
-  determines availability.
+  repair or downgrade those remaining states automatically. All required-file
+  validation succeeds before startup removes any filesystem orphan. Avatar and
+  course-logo absence is normal because their fixed-path presence alone determines
+  availability.
 - The configured base data directory must exist. MIA creates missing required
   subdirectories at startup.
 - HTTPS through a reverse proxy is mandatory.

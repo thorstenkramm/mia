@@ -606,14 +606,39 @@ func (service *Service) SetStudentBanned(ctx context.Context, studentID, actorID
 
 // SetMentoringRequestsAllowed changes the global student request gate through shared-course authorization.
 func (service *Service) SetMentoringRequestsAllowed(ctx context.Context, studentID, actorID string, allowed bool) error {
+	return service.UpdateStudentProfile(ctx, studentID, actorID, &allowed, user.OptionalString{})
+}
+
+// UpdateStudentProfile changes supervisor-managed global fields only after
+// shared-course authorization proves that the target is a student-only account.
+func (service *Service) UpdateStudentProfile(ctx context.Context, studentID, actorID string,
+	mentoringRequestsAllowed *bool, voice user.OptionalString,
+) error {
+	if mentoringRequestsAllowed == nil && !voice.Set {
+		return ErrStudentInvalid
+	}
 	return miSQLite.WithTx(ctx, service.database, func(tx *sql.Tx) error {
 		if err := requireSharedStudent(ctx, tx, studentID, actorID); err != nil {
 			return err
 		}
-		if err := user.SetMentoringRequestsAllowed(ctx, tx, studentID, allowed); err != nil {
-			return err
+		if mentoringRequestsAllowed != nil {
+			if err := user.SetMentoringRequestsAllowed(ctx, tx, studentID, *mentoringRequestsAllowed); err != nil {
+				return err
+			}
+			if err := audit.Write(ctx, tx, audit.ActionUserMentoringPermissionUpdated, actorID, studentID); err != nil {
+				return err
+			}
 		}
-		return audit.Write(ctx, tx, audit.ActionUserMentoringPermissionUpdated, actorID, studentID)
+		if voice.Set {
+			if err := user.SetStudentTTSVoice(ctx, tx, studentID, actorID, voice.Value); err != nil {
+				if errors.Is(err, user.ErrProfileInvalid) {
+					return ErrStudentInvalid
+				}
+				return err
+			}
+			return audit.Write(ctx, tx, audit.ActionUserStudentTTSVoiceUpdated, actorID, studentID)
+		}
+		return nil
 	})
 }
 

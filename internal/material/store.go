@@ -233,26 +233,18 @@ func (service *Service) removeContentFiles(materialID string) {
 	}
 }
 
-// Reconcile enforces startup integrity for database-referenced material files,
-// then removes filesystem material directories that have no owning row.
-func (service *Service) Reconcile(ctx context.Context) error {
+// ValidateFiles enforces startup integrity for database-referenced material files.
+func (service *Service) ValidateFiles(ctx context.Context) error {
 	rows, err := service.database.QueryContext(ctx, `SELECT f.id, f.material_id, f.state FROM material_files f
 		JOIN materials m ON m.id = f.material_id ORDER BY f.material_id, f.id`)
 	if err != nil {
 		return fmt.Errorf("list material files for integrity check: %w", err)
 	}
-	knownMaterials := make(map[string]bool)
-	knownFiles := make(map[string]map[string]bool)
 	for rows.Next() {
 		var fileID, materialID, state string
 		if err := rows.Scan(&fileID, &materialID, &state); err != nil {
 			return closeRows(rows, fmt.Errorf("scan material integrity row: %w", err))
 		}
-		knownMaterials[materialID] = true
-		if knownFiles[materialID] == nil {
-			knownFiles[materialID] = make(map[string]bool)
-		}
-		knownFiles[materialID][fileID] = true
 		source, err := service.sourcePath(materialID, fileID)
 		if err != nil {
 			return closeRows(rows, err)
@@ -283,6 +275,34 @@ func (service *Service) Reconcile(ctx context.Context) error {
 	}
 	if err := rows.Close(); err != nil {
 		return fmt.Errorf("close material integrity rows: %w", err)
+	}
+	return nil
+}
+
+// ReconcileOrphans removes material directories without owning rows after all
+// required-file validation has succeeded.
+func (service *Service) ReconcileOrphans(ctx context.Context) error {
+	knownMaterials := make(map[string]bool)
+	knownFiles := make(map[string]map[string]bool)
+	fileRows, err := service.database.QueryContext(ctx, "SELECT id, material_id FROM material_files")
+	if err != nil {
+		return fmt.Errorf("list material files for reconciliation: %w", err)
+	}
+	for fileRows.Next() {
+		var fileID, materialID string
+		if err := fileRows.Scan(&fileID, &materialID); err != nil {
+			return closeRows(fileRows, err)
+		}
+		if knownFiles[materialID] == nil {
+			knownFiles[materialID] = make(map[string]bool)
+		}
+		knownFiles[materialID][fileID] = true
+	}
+	if err := fileRows.Err(); err != nil {
+		return closeRows(fileRows, err)
+	}
+	if err := fileRows.Close(); err != nil {
+		return err
 	}
 	materialRows, err := service.database.QueryContext(ctx, "SELECT id FROM materials")
 	if err != nil {
@@ -333,6 +353,14 @@ func (service *Service) Reconcile(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// Reconcile validates required material files before removing filesystem orphans.
+func (service *Service) Reconcile(ctx context.Context) error {
+	if err := service.ValidateFiles(ctx); err != nil {
+		return err
+	}
+	return service.ReconcileOrphans(ctx)
 }
 
 func validScope(value string) bool { return value == "course-wide" || value == "student-private" }

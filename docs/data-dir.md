@@ -119,7 +119,8 @@ directory, and startup reconciliation removes directories for missing courses.
 
 Startup first deletes expired speech rows and files. It then marks every remaining
 speech row stranded in generating state failed with a sanitized restart code and
-removes associated incomplete output. Finally, it logs an error and exits if
-SQLite references a missing source file, processed `content.jsonl`, or unexpired
-available speech file. Missing avatar and logo files are normal and mean no image
-is set.
+removes associated incomplete output. It then logs an error and exits if SQLite
+references a missing source file, processed `content.jsonl`, or unexpired
+available speech file. Filesystem orphans are removed only after every required
+file passes validation. Missing avatar and logo files are normal and mean no
+image is set.
