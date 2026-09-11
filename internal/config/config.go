@@ -324,17 +324,38 @@ var supportedModels = map[string]struct{}{"gpt-5.6-terra": {}}
 
 func supportedModel(value string) bool { _, ok := supportedModels[value]; return ok }
 
+// normalizePublicURL validates the origin MIA embeds into invitation and
+// password-recovery links. HTTP is restricted to loopback hosts so local
+// development and tests work without TLS while no deployable origin can emit
+// unencrypted links.
 func normalizePublicURL(config *Config) error {
 	parsed, err := url.Parse(config.Main.PublicURL)
 	if err != nil {
 		return fmt.Errorf("invalid main.public_url: %w", err)
 	}
-	if parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil || (parsed.Path != "" && parsed.Path != "/") || parsed.RawQuery != "" || parsed.Fragment != "" {
-		return errors.New("main.public_url must be an HTTPS origin")
+	if parsed.Host == "" || parsed.User != nil || (parsed.Path != "" && parsed.Path != "/") || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return errors.New("main.public_url must be an HTTPS origin or a loopback HTTP origin")
+	}
+	switch parsed.Scheme {
+	case "https":
+	case "http":
+		if !loopbackHost(parsed.Hostname()) {
+			return errors.New("main.public_url HTTP requires localhost or a loopback IP")
+		}
+	default:
+		return errors.New("main.public_url must use HTTPS or loopback HTTP")
 	}
 	parsed.Path = ""
 	config.Main.PublicURL = parsed.String()
 	return nil
+}
+
+func loopbackHost(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	address := net.ParseIP(host)
+	return address != nil && address.IsLoopback()
 }
 
 // normalizeClickSendBaseURL validates the only provider endpoint base MIA supports.
@@ -363,9 +384,7 @@ func normalizeClickSendBaseURL(config *Config) error {
 	switch parsed.Scheme {
 	case "https":
 	case "http":
-		host := parsed.Hostname()
-		address := net.ParseIP(host)
-		if !strings.EqualFold(host, "localhost") && (address == nil || !address.IsLoopback()) {
+		if !loopbackHost(parsed.Hostname()) {
 			return errors.New("clicksend.base_url HTTP requires localhost or a loopback IP")
 		}
 	default:

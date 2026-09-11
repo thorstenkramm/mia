@@ -141,6 +141,23 @@ func TestLoadNormalizesTrailingPublicURLSlash(t *testing.T) {
 	}
 }
 
+func TestNormalizePublicURLRestrictsHTTPToLoopback(t *testing.T) {
+	for _, value := range []string{"http://localhost:9900", "http://127.0.0.1:9900", "http://[::1]:9900", "http://localhost"} {
+		configuration := Config{}
+		configuration.Main.PublicURL = value
+		if err := normalizePublicURL(&configuration); err != nil {
+			t.Errorf("%s rejected: %v", value, err)
+		}
+	}
+	for _, value := range []string{"http://mia.example.test", "http://localhost.example.test", "http://10.0.0.1:9900", "ftp://localhost"} {
+		configuration := Config{}
+		configuration.Main.PublicURL = value
+		if err := normalizePublicURL(&configuration); err == nil {
+			t.Errorf("%s accepted", value)
+		}
+	}
+}
+
 func TestSupportedModelRegistryRejectsUnknownValues(t *testing.T) {
 	if !supportedModel("gpt-5.6-terra") {
 		t.Fatal("default model is unsupported")

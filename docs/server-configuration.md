@@ -141,6 +141,9 @@ only when the frontend demonstrably requires it.
 The externally visible origin used for invitation and password-recovery links, for example `https://mia.example.org`. It
 must use HTTPS and contain no credentials, non-root path, query, or fragment. A trailing root slash is accepted and
 normalized. MIA never derives security-sensitive links from request or forwarded headers.
+
+HTTP is accepted only when the host is `localhost` or a loopback IP address, for example `http://localhost:9900`. This
+exists so the server can be run locally for development and testing without TLS. Every other origin must use HTTPS.
 Generated links are `<public_url>/invitation#token=<uuid>` and
 `<public_url>/password-reset#token=<uuid>`.
 

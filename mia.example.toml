@@ -22,7 +22,10 @@
   ## Public HTTPS origin, string, mandatory
   ## Can be overridden with --main-public-url or MIA_MAIN_PUBLIC_URL
   ## Used for invitation and password-recovery links
+  ## HTTP is accepted only for localhost or a loopback IP, for local
+  ## development and testing. Every other origin must use HTTPS.
   ## Example: "https://mia.example.org"
+  ## Local development example: "http://localhost:9900"
   ## Default: none
   public_url = "https://mia.example.org"
 
