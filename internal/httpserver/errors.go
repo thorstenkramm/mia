@@ -239,6 +239,14 @@ func errorHandler(c *echo.Context, err error) {
 		}
 	}
 	problem := errorRegistry[code]
+	// A server-side failure must leave a diagnosable record. The response body is
+	// deliberately opaque, so this is the only place the cause survives. Log the
+	// error itself and the request id that correlates it with the request record;
+	// never the request body, credentials, or other request content.
+	if problem.status >= http.StatusInternalServerError || directStatus >= http.StatusInternalServerError {
+		c.Logger().Error("unhandled request error", "request_id", c.Response().Header().Get(echo.HeaderXRequestID),
+			"code", string(code), "error", err)
+	}
 	if !isAPIPath(c.Request().URL.Path) {
 		if directStatus != 0 {
 			if writeErr := c.NoContent(directStatus); writeErr != nil {

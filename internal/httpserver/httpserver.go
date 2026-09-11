@@ -406,6 +406,9 @@ func New(options Options) (*Server, AuthRouteRegistrar, error) {
 		logger = slog.Default()
 	}
 	application := echo.New()
+	// Route c.Logger() to the configured logger so error records reach the
+	// operator's log file, level, and format instead of Echo's own default.
+	application.Logger = logger
 	application.HTTPErrorHandler = errorHandler
 	application.GET("/*", staticHandler(options.DocRoot))
 	application.HEAD("/*", staticHandler(options.DocRoot))
