@@ -445,7 +445,7 @@ hardening.
 - Follow `.agents/rules/markdown.md` for Markdown and
   `.agents/rules/toml.md` for TOML.
 
-Once Go code exists, run the applicable checks after code changes:
+Once Go code exists, run the applicable checks while iterating on a change:
 
 1. `gofmt` on changed Go files.
 2. `go test ./...`.
@@ -457,6 +457,40 @@ Once Go code exists, run the applicable checks after code changes:
 Do not run overlapping Go build, test, vet, or lint commands against the same
 module. If a required tool or module does not exist yet, state that verification
 was not applicable rather than inventing project setup.
+
+### Full project check
+
+`./run-all-tests.sh` is the complete test suite and the authoritative gate. The
+Go checks above are the fast subset for iterating; they are not sufficient on
+their own, because the script also enforces checks that no Go command covers.
+Run the full script before reporting work complete whenever a change touches Go
+sources, Markdown, the OpenAPI description, the shell scripts, or dependencies.
+The repository has no CI, so nothing else runs these checks. Skipping the script
+is how the duplication gate stayed red across four consecutive stories.
+
+The script runs these components in order:
+
+1. `gofmt -l` over tracked and untracked Go files.
+2. `go test ./...`.
+3. `go vet ./...`.
+4. `golangci-lint run ./...`.
+5. `go test -race ./...`.
+6. A duplication marker balance check over Go files. An unbalanced
+   `jscpd:ignore-start` suppresses duplication detection to the end of that
+   file while still exiting successfully, so the imbalance has to fail before
+   the scan reports a clean result.
+7. JSCPD duplication detection over Go and markup sources at `--threshold 0`.
+   Follow `.agents/rules/duplication.md` when it reports a clone.
+8. `govulncheck ./...`, only when that tool is installed.
+9. `trivy fs .` for dependency vulnerabilities and committed secrets.
+10. Redocly lint of `api-doc/openapi.yaml`.
+11. `markdownlint` over tracked Markdown outside `_bmad`, `_bmad-output`,
+    `.agents/skills`, `.opencode`, `.cache`, and `vendor`.
+
+The script includes the individual Go checks, so do not repeat them afterwards.
+Several components download tooling through `npx` and need network access. When
+a component cannot run, name it and say it was skipped instead of implying the
+full suite passed.
 
 ## More rules
 
