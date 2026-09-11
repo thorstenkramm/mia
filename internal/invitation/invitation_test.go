@@ -473,21 +473,12 @@ func testServer(t *testing.T) (*httpserver.Server, *sql.DB) {
 		return httpserver.IdentityState{SecurityGeneration: account.SecurityGeneration, MustChangePassword: account.MustChangePassword, Banned: account.Banned}, nil
 	})
 	service := NewService(database, nil)
-	deliveries := NewDeliveryManager(service, database, delayedNoopMailer{}, nil)
+	deliveries := NewDeliveryManager(service, database, successMailer{}, nil)
 	t.Cleanup(deliveries.Close)
 	Register(server, service, "https://mia.test", deliveries)
 	RegisterRoleRoutes(server, database, nil)
 	registerLoginRoute(t, server, database)
 	return server, database
-}
-
-// delayedNoopMailer adds a small delay to prevent database lock contention
-// when multiple deliveries complete at the same time.
-type delayedNoopMailer struct{}
-
-func (delayedNoopMailer) SendInvitation(_ context.Context, _, _, _ string) error {
-	time.Sleep(10 * time.Millisecond)
-	return nil
 }
 
 func registerLoginRoute(t *testing.T, server *httpserver.Server, database *sql.DB) {

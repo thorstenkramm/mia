@@ -68,7 +68,14 @@ func Open(dataDir string) (*sql.DB, error) {
 	if err := validateExistingFiles(path); err != nil {
 		return nil, err
 	}
-	dsn := "file:" + path + "?_pragma=journal_mode(WAL)&_pragma=synchronous(FULL)&_pragma=foreign_keys(ON)&_pragma=busy_timeout(5000)"
+	// _txlock=immediate takes the write lock when a transaction begins. The
+	// driver's deferred default starts a transaction as a reader and upgrades it
+	// on the first write, which fails outright with SQLITE_BUSY_SNAPSHOT when
+	// another connection commits in between. busy_timeout cannot help there,
+	// because waiting does not repair a stale snapshot. Beginning immediately
+	// removes the upgrade, so writers queue under busy_timeout instead.
+	dsn := "file:" + path + "?_pragma=journal_mode(WAL)&_pragma=synchronous(FULL)&_pragma=foreign_keys(ON)" +
+		"&_pragma=busy_timeout(5000)&_txlock=immediate"
 	db, err := openDatabase(dsn)
 	if err != nil {
 		return nil, err
