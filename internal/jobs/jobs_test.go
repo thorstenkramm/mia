@@ -220,3 +220,41 @@ func jobsDatabase(t *testing.T) (*sql.DB, string) {
 	}
 	return database, "cou_test"
 }
+
+// countResult reports a fixed row count, or a driver failure, so the
+// guarded-commit rule can be exercised for outcomes a real driver rarely
+// produces.
+type countResult struct {
+	count int64
+	err   error
+}
+
+func (result countResult) LastInsertId() (int64, error) { return 0, errors.ErrUnsupported }
+
+func (result countResult) RowsAffected() (int64, error) { return result.count, result.err }
+
+// A late commit may only update an existing target. Exactly one affected row
+// commits; zero or several discard the result as a stale lease. An undetermined
+// row count is a dependency failure and must keep its own identity instead of
+// being reported as a stale lease, which would silently discard finished work.
+func TestRequireCommittedAcceptsOneRowAndDiscardsOtherCounts(t *testing.T) {
+	if err := RequireCommitted(countResult{count: 1}); err != nil {
+		t.Errorf("single affected row rejected: %v", err)
+	}
+	for _, count := range []int64{0, 2, -1} {
+		if err := RequireCommitted(countResult{count: count}); !errors.Is(err, ErrStaleLease) {
+			t.Errorf("count %d returned %v, want ErrStaleLease", count, err)
+		}
+	}
+}
+
+func TestRequireCommittedKeepsRowCountFailureIdentity(t *testing.T) {
+	failure := errors.New("row count unavailable")
+	err := RequireCommitted(countResult{err: failure})
+	if !errors.Is(err, failure) {
+		t.Fatalf("error = %v, want %v", err, failure)
+	}
+	if errors.Is(err, ErrStaleLease) {
+		t.Fatal("dependency failure reported as a stale lease")
+	}
+}
