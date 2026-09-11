@@ -36,3 +36,32 @@ func Collection(c *echo.Context, data []map[string]any, page Page, hasMore bool)
 	}
 	return JSONAPI(c, http.StatusOK, document)
 }
+
+// CollectionHandler authenticates the actor, parses pagination, maps the loaded
+// domain values with resource, and renders the JSON:API collection. The owning
+// package supplies load, resource, its own invalid-request sentinel, and
+// translate, so resource authorization, existence hiding, and error codes stay
+// with the domain that owns them.
+func CollectionHandler[T any](translate func(error) error, invalidRequest error,
+	load func(c *echo.Context, page Page, actorID string) ([]T, bool, error),
+	resource func(T) map[string]any) echo.HandlerFunc {
+	return func(c *echo.Context) error {
+		actorID, err := AuthenticatedUser(c)
+		if err != nil {
+			return err
+		}
+		page, err := ParsePagination(c.QueryParams())
+		if err != nil {
+			return translate(invalidRequest)
+		}
+		values, hasMore, err := load(c, page, actorID)
+		if err != nil {
+			return translate(err)
+		}
+		data := make([]map[string]any, 0, len(values))
+		for _, value := range values {
+			data = append(data, resource(value))
+		}
+		return Collection(c, data, page, hasMore)
+	}
+}

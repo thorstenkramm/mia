@@ -57,6 +57,24 @@ func DecodeJSONAPI(c *echo.Context, destination any) error {
 	return nil
 }
 
+// OptionalStringAttribute decodes a tri-state JSON:API string attribute. An
+// absent member reports set false, an explicit null reports set true with a nil
+// value, and a string reports set true with that value. Callers keep their own
+// domain type for the decoded result and validate the value themselves.
+func OptionalStringAttribute(raw json.RawMessage) (set bool, value *string, err error) {
+	if len(raw) == 0 {
+		return false, nil, nil
+	}
+	if bytes.Equal(raw, []byte("null")) {
+		return true, nil, nil
+	}
+	var decoded string
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		return false, nil, err
+	}
+	return true, &decoded, nil
+}
+
 // validateUniqueObjectMembers rejects ambiguous last-wins JSON while allowing
 // the same member name in distinct objects.
 func validateUniqueObjectMembers(body []byte) error {

@@ -597,18 +597,7 @@ func responseIDs(ctx context.Context, query miSQLite.Querier, condition string, 
 	if err != nil {
 		return nil, fmt.Errorf("list tutoring response identifiers: %w", err)
 	}
-	var ids []string
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, errors.Join(err, rows.Close())
-		}
-		ids = append(ids, id)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, errors.Join(err, rows.Close())
-	}
-	return ids, rows.Close()
+	return miSQLite.ScanStrings(rows)
 }
 
 func (service *Service) DeleteCourseData(ctx context.Context, query miSQLite.Querier, courseID string) error {
@@ -627,18 +616,8 @@ func (service *Service) deleteSessions(ctx context.Context, query miSQLite.Queri
 	if err != nil {
 		return err
 	}
-	var ids []string
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return errors.Join(err, rows.Close())
-		}
-		ids = append(ids, id)
-	}
-	if err := rows.Err(); err != nil {
-		return errors.Join(err, rows.Close())
-	}
-	if err := rows.Close(); err != nil {
+	ids, err := miSQLite.ScanStrings(rows)
+	if err != nil {
 		return err
 	}
 	for _, id := range ids {

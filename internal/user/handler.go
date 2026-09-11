@@ -114,17 +114,11 @@ func profileChanges(request profilePatchRequest) (ProfileChanges, error) {
 }
 
 func optionalString(raw json.RawMessage) (OptionalString, error) {
-	if len(raw) == 0 {
-		return OptionalString{}, nil
-	}
-	if bytes.Equal(raw, []byte("null")) {
-		return OptionalString{Set: true}, nil
-	}
-	var value string
-	if err := json.Unmarshal(raw, &value); err != nil {
+	set, value, err := httpserver.OptionalStringAttribute(raw)
+	if err != nil {
 		return OptionalString{}, err
 	}
-	return OptionalString{Set: true, Value: &value}, nil
+	return OptionalString{Set: set, Value: value}, nil
 }
 
 func requiredString(raw json.RawMessage) (*string, error) {

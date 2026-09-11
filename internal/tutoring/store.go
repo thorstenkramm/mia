@@ -149,23 +149,9 @@ func loadResponse(ctx context.Context, query miSQLite.Querier, responseID string
 	row := query.QueryRowContext(ctx, `SELECT id, session_id, student_message_id, COALESCE(retry_of_response_id, ''), attempt,
 		state, content, COALESCE(failure_code, ''), created_at, started_at, finished_at FROM tutor_responses WHERE id = ?`,
 		responseID)
-	var response Response
-	var created string
-	var started, finished sql.NullString
-	err := row.Scan(&response.ID, &response.SessionID, &response.MessageID, &response.RetryOfID, &response.Attempt,
-		&response.State, &response.Content, &response.FailureCode, &created, &started, &finished)
+	response, err := scanResponse(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Response{}, ErrNotFound
-	}
-	if err != nil {
-		return Response{}, err
-	}
-	response.CreatedAt, err = parseInstant(created)
-	if err == nil {
-		response.StartedAt, err = parseOptionalInstant(started)
-	}
-	if err == nil {
-		response.FinishedAt, err = parseOptionalInstant(finished)
 	}
 	return response, err
 }

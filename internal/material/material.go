@@ -272,19 +272,9 @@ func (service *Service) Finalize(ctx context.Context, materialID, actorID string
 		if err != nil {
 			return fmt.Errorf("list files for finalization: %w", err)
 		}
-		var fileIDs []string
-		for rows.Next() {
-			var id string
-			if err := rows.Scan(&id); err != nil {
-				return closeRows(rows, fmt.Errorf("scan finalization file: %w", err))
-			}
-			fileIDs = append(fileIDs, id)
-		}
-		if err := rows.Err(); err != nil {
-			return closeRows(rows, fmt.Errorf("iterate finalization files: %w", err))
-		}
-		if err := rows.Close(); err != nil {
-			return fmt.Errorf("close finalization files: %w", err)
+		fileIDs, err := miSQLite.ScanStrings(rows)
+		if err != nil {
+			return fmt.Errorf("collect finalization files: %w", err)
 		}
 		if len(fileIDs) == 0 {
 			return ErrInvalid
@@ -575,55 +565,22 @@ func (service *Service) DeleteCourseData(ctx context.Context, query miSQLite.Que
 }
 
 func (service *Service) DeleteStudentCourseData(ctx context.Context, query miSQLite.Querier, courseID, studentID string) error {
-	rows, err := query.QueryContext(ctx, `SELECT id FROM materials WHERE course_id = ? AND owner_user_id = ?`,
-		courseID, studentID)
-	if err != nil {
-		return err
-	}
-	var materialIDs []string
-	for rows.Next() {
-		var materialID string
-		if err := rows.Scan(&materialID); err != nil {
-			return closeRows(rows, err)
-		}
-		materialIDs = append(materialIDs, materialID)
-	}
-	if err := rows.Err(); err != nil {
-		return closeRows(rows, err)
-	}
-	if err := rows.Close(); err != nil {
-		return err
-	}
-	for _, materialID := range materialIDs {
-		subjects, err := materialSubjectIDs(ctx, query, materialID)
-		if err != nil {
-			return err
-		}
-		if err := jobs.DeleteSubjects(ctx, query, subjects); err != nil {
-			return err
-		}
-	}
-	_, err = query.ExecContext(ctx, `DELETE FROM materials WHERE course_id = ? AND owner_user_id = ?`, courseID, studentID)
-	return err
+	return deleteMaterials(ctx, query, "course_id = ? AND owner_user_id = ?", courseID, studentID)
 }
 
 func (service *Service) DeleteAccountData(ctx context.Context, query miSQLite.Querier, accountID string) error {
-	rows, err := query.QueryContext(ctx, "SELECT id FROM materials WHERE owner_user_id = ?", accountID)
+	return deleteMaterials(ctx, query, "owner_user_id = ?", accountID)
+}
+
+// deleteMaterials removes the matching materials after discarding the job
+// subjects owned by each material and its files.
+func deleteMaterials(ctx context.Context, query miSQLite.Querier, condition string, args ...any) error {
+	rows, err := query.QueryContext(ctx, "SELECT id FROM materials WHERE "+condition, args...)
 	if err != nil {
 		return err
 	}
-	var materialIDs []string
-	for rows.Next() {
-		var materialID string
-		if err := rows.Scan(&materialID); err != nil {
-			return closeRows(rows, err)
-		}
-		materialIDs = append(materialIDs, materialID)
-	}
-	if err := rows.Err(); err != nil {
-		return closeRows(rows, err)
-	}
-	if err := rows.Close(); err != nil {
+	materialIDs, err := miSQLite.ScanStrings(rows)
+	if err != nil {
 		return err
 	}
 	for _, materialID := range materialIDs {
@@ -635,7 +592,7 @@ func (service *Service) DeleteAccountData(ctx context.Context, query miSQLite.Qu
 			return err
 		}
 	}
-	_, err = query.ExecContext(ctx, "DELETE FROM materials WHERE owner_user_id = ?", accountID)
+	_, err = query.ExecContext(ctx, "DELETE FROM materials WHERE "+condition, args...)
 	return err
 }
 

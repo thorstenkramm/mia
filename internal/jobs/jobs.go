@@ -25,6 +25,21 @@ const (
 
 var ErrStaleLease = errors.New("job lease is stale")
 
+// RequireCommitted enforces the guarded-commit rule for a handler's durable
+// update: a late commit may only update an existing target, so anything other
+// than exactly one affected row discards the result as a stale lease instead of
+// upserting, requeueing, or retrying.
+func RequireCommitted(result sql.Result) error {
+	count, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if count != 1 {
+		return ErrStaleLease
+	}
+	return nil
+}
+
 type Job struct {
 	ID, Type, SubjectType, SubjectID, CourseID string
 	OwnerUserID, LeaseToken                    string

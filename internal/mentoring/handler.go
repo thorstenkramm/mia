@@ -162,26 +162,21 @@ func listStudentMentorsHandler(service *Service) echo.HandlerFunc {
 	})
 }
 
-type collectionResult struct {
-	data    []map[string]any
-	hasMore bool
-}
-
 func assignmentListHandler(list func(*echo.Context, ListInput, string) (AssignmentListResult, error)) echo.HandlerFunc {
-	return collectionHandler(func(c *echo.Context, input ListInput, actorID string) (collectionResult, error) {
-		result, err := list(c, input, actorID)
-		if err != nil {
-			return collectionResult{}, err
-		}
-		data := make([]map[string]any, 0, len(result.Assignments))
-		for _, value := range result.Assignments {
-			data = append(data, map[string]any{"type": "users", "id": value.MentorID})
-		}
-		return collectionResult{data: data, hasMore: result.HasMore}, nil
-	})
+	return httpserver.CollectionHandler(mentoringError, ErrInvalid,
+		func(c *echo.Context, page httpserver.Page, actorID string) ([]Assignment, bool, error) {
+			result, err := list(c, ListInput{Limit: page.Limit, Offset: page.Offset}, actorID)
+			return result.Assignments, result.HasMore, err
+		},
+		func(value Assignment) map[string]any {
+			return map[string]any{"type": "users", "id": value.MentorID}
+		})
 }
 
-func createSessionHandler(service *Service) echo.HandlerFunc {
+// sessionMutationHandler authenticates the actor and decodes the session request
+// body. Each mutation keeps its own attribute invariants and audits its own
+// denial, because create and update accept different attributes.
+func sessionMutationHandler(mutate func(*echo.Context, sessionRequest, string) error) echo.HandlerFunc {
 	return func(c *echo.Context) error {
 		actorID, err := httpserver.AuthenticatedUser(c)
 		if err != nil {
@@ -191,6 +186,12 @@ func createSessionHandler(service *Service) echo.HandlerFunc {
 		if err := httpserver.DecodeJSONAPI(c, &body); err != nil {
 			return err
 		}
+		return mutate(c, body, actorID)
+	}
+}
+
+func createSessionHandler(service *Service) echo.HandlerFunc {
+	return sessionMutationHandler(func(c *echo.Context, body sessionRequest, actorID string) error {
 		topic, topicSet := rawString(body.Data.Attributes.Topic)
 		proposed, err := rawTime(body.Data.Attributes.ProposedFor)
 		if err != nil || body.Data.Type != "mentoring-sessions" || body.Data.ID != "" || !topicSet ||
@@ -205,9 +206,12 @@ func createSessionHandler(service *Service) echo.HandlerFunc {
 			return mutationError(c, service, actorID, err)
 		}
 		return sessionResponse(c, http.StatusCreated, value)
-	}
+	})
 }
 
+// Mentoring session reads keep mentoring-specific authorization, existence
+// hiding, and error translation, which is why this matches the tutoring session
+// read. The duplication marker lives at internal/tutoring/handler.go.
 func getSessionHandler(service *Service) echo.HandlerFunc {
 	return func(c *echo.Context) error {
 		actorID, err := httpserver.AuthenticatedUser(c)
@@ -223,47 +227,16 @@ func getSessionHandler(service *Service) echo.HandlerFunc {
 }
 
 func listSessionsHandler(service *Service) echo.HandlerFunc {
-	return collectionHandler(func(c *echo.Context, input ListInput, actorID string) (collectionResult, error) {
-		result, err := service.List(c.Request().Context(), c.Param("course_id"), actorID, input)
-		if err != nil {
-			return collectionResult{}, err
-		}
-		data := make([]map[string]any, 0, len(result.Sessions))
-		for _, value := range result.Sessions {
-			data = append(data, sessionResource(value))
-		}
-		return collectionResult{data: data, hasMore: result.HasMore}, nil
-	})
-}
-
-func collectionHandler(load func(*echo.Context, ListInput, string) (collectionResult, error)) echo.HandlerFunc {
-	return func(c *echo.Context) error {
-		actorID, err := httpserver.AuthenticatedUser(c)
-		if err != nil {
-			return err
-		}
-		page, err := httpserver.ParsePagination(c.QueryParams())
-		if err != nil {
-			return mentoringError(ErrInvalid)
-		}
-		result, err := load(c, ListInput{Limit: page.Limit, Offset: page.Offset}, actorID)
-		if err != nil {
-			return mentoringError(err)
-		}
-		return httpserver.Collection(c, result.data, page, result.hasMore)
-	}
+	return httpserver.CollectionHandler(mentoringError, ErrInvalid,
+		func(c *echo.Context, page httpserver.Page, actorID string) ([]Session, bool, error) {
+			result, err := service.List(c.Request().Context(), c.Param("course_id"), actorID,
+				ListInput{Limit: page.Limit, Offset: page.Offset})
+			return result.Sessions, result.HasMore, err
+		}, sessionResource)
 }
 
 func updateSessionHandler(service *Service) echo.HandlerFunc {
-	return func(c *echo.Context) error {
-		actorID, err := httpserver.AuthenticatedUser(c)
-		if err != nil {
-			return err
-		}
-		var body sessionRequest
-		if err := httpserver.DecodeJSONAPI(c, &body); err != nil {
-			return err
-		}
+	return sessionMutationHandler(func(c *echo.Context, body sessionRequest, actorID string) error {
 		if body.Data.Type != "mentoring-sessions" || body.Data.ID != c.Param("id") ||
 			anyRaw(body.Data.Attributes.Topic, body.Data.Attributes.ProposedFor) {
 			return denyMutation(c, service, actorID, ErrInvalid)
@@ -277,7 +250,7 @@ func updateSessionHandler(service *Service) echo.HandlerFunc {
 			return mutationError(c, service, actorID, err)
 		}
 		return sessionResponse(c, http.StatusOK, value)
-	}
+	})
 }
 
 func updateInput(body sessionRequest, actorID string) (UpdateInput, error) {
@@ -323,17 +296,11 @@ func updateInput(body sessionRequest, actorID string) (UpdateInput, error) {
 }
 
 func rawOptionalString(raw json.RawMessage) (OptionalString, error) {
-	if len(raw) == 0 {
-		return OptionalString{}, nil
-	}
-	if bytes.Equal(raw, []byte("null")) {
-		return OptionalString{Set: true}, nil
-	}
-	var value string
-	if err := json.Unmarshal(raw, &value); err != nil {
+	set, value, err := httpserver.OptionalStringAttribute(raw)
+	if err != nil {
 		return OptionalString{}, err
 	}
-	return OptionalString{Set: true, Value: &value}, nil
+	return OptionalString{Set: set, Value: value}, nil
 }
 
 func rawString(raw json.RawMessage) (string, bool) {

@@ -105,6 +105,11 @@ func startSessionHandler(service *Service) echo.HandlerFunc {
 	}
 }
 
+// jscpd:ignore-start
+// Tutoring and mentoring session reads retain separate authorization, existence
+// hiding, and error translation. Unifying them would move those decisions out of
+// the packages that own them for two unrelated resources. This single marker
+// covers the pair with internal/mentoring/handler.go.
 func getSessionHandler(service *Service) echo.HandlerFunc {
 	return func(c *echo.Context) error {
 		actorID, err := httpserver.AuthenticatedUser(c)
@@ -119,27 +124,15 @@ func getSessionHandler(service *Service) echo.HandlerFunc {
 	}
 }
 
+// jscpd:ignore-end
+
 func listSessionsHandler(service *Service) echo.HandlerFunc {
-	return func(c *echo.Context) error {
-		actorID, err := httpserver.AuthenticatedUser(c)
-		if err != nil {
-			return err
-		}
-		page, err := httpserver.ParsePagination(c.QueryParams())
-		if err != nil {
-			return tutoringError(ErrInvalid)
-		}
-		result, err := service.List(c.Request().Context(), c.Param("course_id"), actorID,
-			ListInput{Limit: page.Limit, Offset: page.Offset})
-		if err != nil {
-			return tutoringError(err)
-		}
-		data := make([]map[string]any, 0, len(result.Sessions))
-		for _, value := range result.Sessions {
-			data = append(data, sessionResource(value))
-		}
-		return httpserver.Collection(c, data, page, result.HasMore)
-	}
+	return httpserver.CollectionHandler(tutoringError, ErrInvalid,
+		func(c *echo.Context, page httpserver.Page, actorID string) ([]Session, bool, error) {
+			result, err := service.List(c.Request().Context(), c.Param("course_id"), actorID,
+				ListInput{Limit: page.Limit, Offset: page.Offset})
+			return result.Sessions, result.HasMore, err
+		}, sessionResource)
 }
 
 func correctSummaryHandler(service *Service) echo.HandlerFunc {
@@ -219,50 +212,23 @@ func submitMessageHandler(service *Service) echo.HandlerFunc {
 }
 
 func listMessagesHandler(service *Service) echo.HandlerFunc {
-	return func(c *echo.Context) error {
-		actorID, err := httpserver.AuthenticatedUser(c)
-		if err != nil {
-			return err
-		}
-		page, err := httpserver.ParsePagination(c.QueryParams())
-		if err != nil {
-			return tutoringError(ErrInvalid)
-		}
-		values, hasMore, err := service.Messages(c.Request().Context(), c.Param("id"), actorID,
-			ListInput{Limit: page.Limit, Offset: page.Offset})
-		if err != nil {
-			return tutoringError(err)
-		}
-		data := make([]map[string]any, 0, len(values))
-		for _, value := range values {
-			data = append(data, transcriptResource(value))
-		}
-		return httpserver.Collection(c, data, page, hasMore)
-	}
+	return httpserver.CollectionHandler(tutoringError, ErrInvalid,
+		func(c *echo.Context, page httpserver.Page, actorID string) ([]MessageResult, bool, error) {
+			return service.Messages(c.Request().Context(), c.Param("id"), actorID,
+				ListInput{Limit: page.Limit, Offset: page.Offset})
+		}, transcriptResource)
 }
 
 func listMaterialsHandler(service *Service) echo.HandlerFunc {
-	return func(c *echo.Context) error {
-		actorID, err := httpserver.AuthenticatedUser(c)
-		if err != nil {
-			return err
-		}
-		page, err := httpserver.ParsePagination(c.QueryParams())
-		if err != nil {
-			return tutoringError(ErrInvalid)
-		}
-		values, hasMore, err := service.Materials(c.Request().Context(), c.Param("id"), actorID,
-			ListInput{Limit: page.Limit, Offset: page.Offset})
-		if err != nil {
-			return tutoringError(err)
-		}
-		data := make([]map[string]any, 0, len(values))
-		for _, value := range values {
-			data = append(data, map[string]any{"type": "materials", "id": value.ID, "attributes": map[string]any{
-				"name": value.Name, "kind": value.Kind, "scope": value.Scope}})
-		}
-		return httpserver.Collection(c, data, page, hasMore)
-	}
+	return httpserver.CollectionHandler(tutoringError, ErrInvalid,
+		func(c *echo.Context, page httpserver.Page, actorID string) ([]UsedMaterial, bool, error) {
+			return service.Materials(c.Request().Context(), c.Param("id"), actorID,
+				ListInput{Limit: page.Limit, Offset: page.Offset})
+		},
+		func(value UsedMaterial) map[string]any {
+			return map[string]any{"type": "materials", "id": value.ID, "attributes": map[string]any{
+				"name": value.Name, "kind": value.Kind, "scope": value.Scope}}
+		})
 }
 
 func retryResponseHandler(service *Service) echo.HandlerFunc {

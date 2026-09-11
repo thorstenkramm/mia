@@ -311,19 +311,9 @@ func (service *Service) Supervisors(ctx context.Context, courseID, actorID strin
 	if err != nil {
 		return nil, false, fmt.Errorf("list course supervisors page: %w", err)
 	}
-	var ids []string
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, false, errors.Join(fmt.Errorf("scan course supervisor: %w", err), closeRows(rows))
-		}
-		ids = append(ids, id)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, false, errors.Join(fmt.Errorf("iterate course supervisors: %w", err), closeRows(rows))
-	}
-	if err := closeRows(rows); err != nil {
-		return nil, false, err
+	ids, err := miSQLite.ScanStrings(rows)
+	if err != nil {
+		return nil, false, fmt.Errorf("collect course supervisors page: %w", err)
 	}
 	hasMore := len(ids) > input.Limit
 	if hasMore {
@@ -973,19 +963,9 @@ func supervisorIDs(ctx context.Context, query miSQLite.Querier, courseID string)
 	if err != nil {
 		return nil, fmt.Errorf("list course supervisors: %w", err)
 	}
-	var ids []string
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, errors.Join(fmt.Errorf("scan course supervisor: %w", err), closeRows(rows))
-		}
-		ids = append(ids, id)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, errors.Join(fmt.Errorf("iterate course supervisors: %w", err), closeRows(rows))
-	}
-	if err := closeRows(rows); err != nil {
-		return nil, err
+	ids, err := miSQLite.ScanStrings(rows)
+	if err != nil {
+		return nil, fmt.Errorf("collect course supervisors: %w", err)
 	}
 	return ids, nil
 }

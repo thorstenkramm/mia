@@ -186,18 +186,11 @@ func materialSubjectIDs(ctx context.Context, query miSQLite.Querier, materialID 
 	if err != nil {
 		return nil, err
 	}
-	subjects := []string{materialID}
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, closeRows(rows, err)
-		}
-		subjects = append(subjects, id)
+	fileIDs, err := miSQLite.ScanStrings(rows)
+	if err != nil {
+		return nil, err
 	}
-	if err := rows.Err(); err != nil {
-		return nil, closeRows(rows, err)
-	}
-	return subjects, rows.Close()
+	return append([]string{materialID}, fileIDs...), nil
 }
 
 func (service *Service) sourcePath(materialID, fileID string) (string, error) {

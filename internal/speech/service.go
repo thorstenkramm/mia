@@ -467,21 +467,16 @@ func (service *Service) reconcileOrphans(ctx context.Context) error {
 }
 
 func scanIDs(rows *sql.Rows) ([]string, error) {
-	var ids []string
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, errors.Join(err, rows.Close())
-		}
+	ids, err := miSQLite.ScanStrings(rows)
+	if err != nil {
+		return nil, err
+	}
+	for _, id := range ids {
 		if !validSpeechID(id) {
-			return nil, errors.Join(errors.New("invalid persisted generated speech identifier"), rows.Close())
+			return nil, errors.New("invalid persisted generated speech identifier")
 		}
-		ids = append(ids, id)
 	}
-	if err := rows.Err(); err != nil {
-		return nil, errors.Join(err, rows.Close())
-	}
-	return ids, rows.Close()
+	return ids, nil
 }
 
 func loadVariant(ctx context.Context, query miSQLite.Querier, responseID string, hash []byte,

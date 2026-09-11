@@ -173,12 +173,14 @@ func (handler *SessionSummaryHandler) Commit(ctx context.Context, query miSQLite
 		summary_source = 'generated', summary_updated_at = ?, summary_updated_by = NULL
 		WHERE id = ? AND state = 'completed' AND summary IS NULL AND
 		(summary_source IS NULL OR summary_source = 'generated')`, value.Summary, value.FollowUp, instant(time.Now()), job.SubjectID)
+	// The guarded-commit tail and TerminalFailure signature below are fixed by
+	// the jobs.Handler contract and match internal/material/jobs.go for that
+	// reason. The duplication marker lives at that counterpart.
 	if err != nil {
 		return nil, err
 	}
-	count, err := resultSQL.RowsAffected()
-	if err != nil || count != 1 {
-		return nil, jobs.ErrStaleLease
+	if err := jobs.RequireCommitted(resultSQL); err != nil {
+		return nil, err
 	}
 	return nil, nil
 }
