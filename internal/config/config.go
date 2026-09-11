@@ -184,7 +184,7 @@ func optionalProviderPresence(v *viper.Viper, flags *pflag.FlagSet) optionalProv
 		}
 		for _, key := range keys {
 			settingKey := table + "." + key
-			if _, configured := os.LookupEnv("MIA_" + strings.ToUpper(strings.ReplaceAll(settingKey, ".", "_"))); v.InConfig(settingKey) || configured {
+			if _, configured := os.LookupEnv(environmentName(settingKey)); v.InConfig(settingKey) || configured {
 				return true
 			}
 			for _, item := range settings {
@@ -196,6 +196,54 @@ func optionalProviderPresence(v *viper.Viper, flags *pflag.FlagSet) optionalProv
 		return false
 	}
 	return optionalProviders{clickSend: present("clicksend", "username", "api_key", "sender_id", "base_url"), elevenLabs: present("eleven_labs", "api_key", "cache_retention_days")}
+}
+
+// environmentName returns the environment variable that overrides a setting.
+func environmentName(settingKey string) string {
+	return "MIA_" + strings.ToUpper(strings.ReplaceAll(settingKey, ".", "_"))
+}
+
+// requiredSettings reports every mandatory setting that is still empty, so one
+// startup attempt names all of them instead of revealing them one at a time.
+func requiredSettings(config *Config) error {
+	var missing []string
+	for _, required := range []struct{ key, value string }{
+		{"openai.api_key", config.OpenAI.APIKey},
+		{"mistral.api_key", config.Mistral.APIKey},
+		{"smtp.host", config.SMTP.Host},
+		{"smtp.sender_email", config.SMTP.SenderEmail},
+	} {
+		if required.value == "" {
+			missing = append(missing, required.key+" ("+environmentName(required.key)+")")
+		}
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("required configuration is missing: %s", strings.Join(missing, ", "))
+	}
+	return nil
+}
+
+// uploadLimits validates each configurable bound separately so the operator
+// learns which limit is wrong and what range it accepts.
+func uploadLimits(config *Config) error {
+	for _, limit := range []struct {
+		key              string
+		value, low, high int
+	}{
+		{"uploads.max_file_size_mib", config.Uploads.MaxFileSizeMiB, 1, 512},
+		{"uploads.max_material_size_mib", config.Uploads.MaxMaterialSizeMiB, 1, 512},
+		{"uploads.max_material_pages", config.Uploads.MaxMaterialPages, 1, 2000},
+		{"uploads.max_material_files", config.Uploads.MaxMaterialFiles, 1, 200},
+		{"uploads.max_image_megapixels", config.Uploads.MaxImageMegapixels, 1, 100},
+	} {
+		if limit.value < limit.low || limit.value > limit.high {
+			return fmt.Errorf("%s must be between %d and %d", limit.key, limit.low, limit.high)
+		}
+	}
+	if config.Uploads.MaxMaterialSizeMiB < config.Uploads.MaxFileSizeMiB {
+		return errors.New("uploads.max_material_size_mib must be greater than or equal to uploads.max_file_size_mib")
+	}
+	return nil
 }
 
 func validate(config *Config, serve bool, optional optionalProviders) error {
@@ -246,11 +294,14 @@ func validate(config *Config, serve bool, optional optionalProviders) error {
 	if config.Log.File != "" && !filepath.IsAbs(config.Log.File) {
 		return errors.New("log.file must be absolute")
 	}
-	if config.OpenAI.APIKey == "" || config.Mistral.APIKey == "" || config.SMTP.Host == "" || config.SMTP.SenderEmail == "" {
-		return errors.New("required provider configuration is missing")
+	if err := requiredSettings(config); err != nil {
+		return err
 	}
-	if !supportedModel(config.OpenAI.ChatModel) || !supportedModel(config.OpenAI.JobModel) {
-		return errors.New("configured OpenAI model lacks a supported tokenizer and capability mapping")
+	if !supportedModel(config.OpenAI.ChatModel) {
+		return fmt.Errorf("openai.chat_model %q lacks a supported tokenizer and capability mapping", config.OpenAI.ChatModel)
+	}
+	if !supportedModel(config.OpenAI.JobModel) {
+		return fmt.Errorf("openai.job_model %q lacks a supported tokenizer and capability mapping", config.OpenAI.JobModel)
 	}
 	if _, _, err := identity.Email(config.SMTP.SenderEmail); err != nil {
 		return errors.New("invalid smtp.sender_email")
@@ -273,10 +324,7 @@ func validate(config *Config, serve bool, optional optionalProviders) error {
 	if optional.elevenLabs && (config.ElevenLabs.CacheRetentionDays < 1 || config.ElevenLabs.CacheRetentionDays > 365) {
 		return errors.New("invalid eleven_labs.cache_retention_days")
 	}
-	if config.Uploads.MaxFileSizeMiB < 1 || config.Uploads.MaxFileSizeMiB > 512 || config.Uploads.MaxMaterialSizeMiB < config.Uploads.MaxFileSizeMiB || config.Uploads.MaxMaterialSizeMiB > 512 || config.Uploads.MaxMaterialPages < 1 || config.Uploads.MaxMaterialPages > 2000 || config.Uploads.MaxMaterialFiles < 1 || config.Uploads.MaxMaterialFiles > 200 || config.Uploads.MaxImageMegapixels < 1 || config.Uploads.MaxImageMegapixels > 100 {
-		return errors.New("invalid upload limits")
-	}
-	return nil
+	return uploadLimits(config)
 }
 
 func requiredPath(name, value string, private bool) error {

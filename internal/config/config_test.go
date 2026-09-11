@@ -388,3 +388,115 @@ func TestNormalizeClickSendBaseURL(t *testing.T) {
 		})
 	}
 }
+
+// Listing every missing setting at once, with the environment variable that
+// overrides it, avoids a fix-one-restart-repeat cycle.
+func TestRequiredSettingsNameEveryMissingKey(t *testing.T) {
+	if err := requiredSettings(&Config{}); err != nil {
+		for _, want := range []string{
+			"openai.api_key", "MIA_OPENAI_API_KEY",
+			"mistral.api_key", "MIA_MISTRAL_API_KEY",
+			"smtp.host", "MIA_SMTP_HOST",
+			"smtp.sender_email", "MIA_SMTP_SENDER_EMAIL",
+		} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("error %q does not mention %q", err, want)
+			}
+		}
+	} else {
+		t.Fatal("empty configuration accepted")
+	}
+	complete := Config{}
+	complete.OpenAI.APIKey = "key"
+	complete.Mistral.APIKey = "key"
+	complete.SMTP.Host = "smtp.example.test"
+	complete.SMTP.SenderEmail = "mia@example.test"
+	if err := requiredSettings(&complete); err != nil {
+		t.Fatalf("complete configuration rejected: %v", err)
+	}
+}
+
+// An operator cannot act on "invalid upload limits", so each bound names its
+// own setting and the range it accepts.
+func TestUploadLimitsNameTheOffendingSetting(t *testing.T) {
+	valid := func() Config {
+		configuration := Config{}
+		configuration.Uploads.MaxFileSizeMiB = 100
+		configuration.Uploads.MaxMaterialSizeMiB = 200
+		configuration.Uploads.MaxMaterialPages = 1000
+		configuration.Uploads.MaxMaterialFiles = 200
+		configuration.Uploads.MaxImageMegapixels = 40
+		return configuration
+	}
+	if err := uploadLimits(&Config{Uploads: valid().Uploads}); err != nil {
+		t.Fatalf("valid limits rejected: %v", err)
+	}
+	for name, testCase := range map[string]struct {
+		mutate func(*Config)
+		expect []string
+	}{
+		"file size too small":   {func(c *Config) { c.Uploads.MaxFileSizeMiB = 0 }, []string{"uploads.max_file_size_mib", "1", "512"}},
+		"material size too big": {func(c *Config) { c.Uploads.MaxMaterialSizeMiB = 900 }, []string{"uploads.max_material_size_mib", "512"}},
+		"pages out of range":    {func(c *Config) { c.Uploads.MaxMaterialPages = 5000 }, []string{"uploads.max_material_pages", "2000"}},
+		"files out of range":    {func(c *Config) { c.Uploads.MaxMaterialFiles = 0 }, []string{"uploads.max_material_files", "200"}},
+		"megapixels out of range": {func(c *Config) { c.Uploads.MaxImageMegapixels = 999 },
+			[]string{"uploads.max_image_megapixels", "100"}},
+		"material smaller than file": {func(c *Config) { c.Uploads.MaxMaterialSizeMiB = 50 },
+			[]string{"uploads.max_material_size_mib", "uploads.max_file_size_mib"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			configuration := valid()
+			testCase.mutate(&configuration)
+			err := uploadLimits(&configuration)
+			if err == nil {
+				t.Fatal("invalid limit accepted")
+			}
+			for _, want := range testCase.expect {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("error %q does not mention %q", err, want)
+				}
+			}
+		})
+	}
+}
+
+// The two model settings are validated separately so the message identifies
+// which one the operator has to change.
+func TestUnsupportedModelErrorNamesItsSetting(t *testing.T) {
+	for setting, variable := range map[string]string{
+		"openai.chat_model": "MIA_OPENAI_CHAT_MODEL",
+		"openai.job_model":  "MIA_OPENAI_JOB_MODEL",
+	} {
+		t.Run(setting, func(t *testing.T) {
+			temporary := t.TempDir()
+			dataDir := filepath.Join(temporary, "data")
+			docRoot := filepath.Join(temporary, "frontend")
+			if err := os.Mkdir(dataDir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Mkdir(docRoot, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			configPath := filepath.Join(temporary, "mia.toml")
+			content := "[main]\ndata_dir = \"" + dataDir + "\"\ndoc_root = \"" + docRoot +
+				"\"\npublic_url = \"https://mia.example.test\"\n[openai]\napi_key = \"key\"\n[mistral]\napi_key = \"key\"\n" +
+				"[smtp]\nhost = \"smtp.example.test\"\nsender_email = \"mia@example.test\"\n"
+			if err := os.WriteFile(configPath, []byte(content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv(variable, "unsupported-model")
+			flags := pflag.NewFlagSet("test", pflag.ContinueOnError)
+			AddFlags(flags)
+			if err := flags.Set("config", configPath); err != nil {
+				t.Fatal(err)
+			}
+			_, err := Load(flags, true)
+			if err == nil {
+				t.Fatal("unsupported model accepted")
+			}
+			if !strings.Contains(err.Error(), setting) || !strings.Contains(err.Error(), "unsupported-model") {
+				t.Fatalf("error %q does not name %q and its value", err, setting)
+			}
+		})
+	}
+}
