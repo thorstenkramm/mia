@@ -115,7 +115,7 @@ func TestMaterialNonJSONRoutesAreAcceptExemptAndAuthenticatedRoutesDoNotConsumeP
 	uploadRequest.Header.Set("Accept", parameterizedAccept)
 	uploadRequest.Header.Set("Content-Type", "multipart/form-data")
 	uploadRequest.AddCookie(session)
-	uploadRequest.AddCookie(&http.Cookie{Name: "__Host-mia_csrf", Value: csrf})
+	uploadRequest.AddCookie(&http.Cookie{Name: server.CSRFCookieName(), Value: csrf})
 	uploadRequest.Header.Set("X-CSRF-Token", csrf)
 	uploadResponse := httptest.NewRecorder()
 	server.Echo.ServeHTTP(uploadResponse, uploadRequest)
@@ -141,7 +141,7 @@ func TestMaterialNonJSONRoutesAreAcceptExemptAndAuthenticatedRoutesDoNotConsumeP
 				request.AddCookie(session)
 				if testCase.contentType != "" {
 					request.Header.Set("Content-Type", testCase.contentType)
-					request.AddCookie(&http.Cookie{Name: "__Host-mia_csrf", Value: csrf})
+					request.AddCookie(&http.Cookie{Name: server.CSRFCookieName(), Value: csrf})
 					request.Header.Set("X-CSRF-Token", csrf)
 				}
 				response := httptest.NewRecorder()
@@ -227,7 +227,7 @@ func materialSession(t *testing.T, server *httpserver.Server, accountID string) 
 		if err := server.StartSession(c, accountID, 1, "authenticated", time.Now()); err != nil {
 			return err
 		}
-		httpserver.RotateCSRF(c)
+		server.RotateCSRF(c)
 		return c.NoContent(http.StatusNoContent)
 	})
 	request := httptest.NewRequest(http.MethodGet, "http://mia.test"+path, nil)
@@ -236,10 +236,10 @@ func materialSession(t *testing.T, server *httpserver.Server, accountID string) 
 	var session *http.Cookie
 	csrf := ""
 	for _, cookie := range response.Result().Cookies() {
-		if cookie.Name == "__Host-mia_session" {
+		if cookie.Name == server.SessionCookieName() {
 			session = cookie
 		}
-		if cookie.Name == "__Host-mia_csrf" {
+		if cookie.Name == server.CSRFCookieName() {
 			csrf = cookie.Value
 		}
 	}
@@ -254,7 +254,7 @@ func materialHTTP(t *testing.T, server *httpserver.Server, method, path string, 
 	t.Helper()
 	request := httptest.NewRequest(method, "http://mia.test"+path, bytes.NewReader(body))
 	request.AddCookie(session)
-	request.AddCookie(&http.Cookie{Name: "__Host-mia_csrf", Value: csrf})
+	request.AddCookie(&http.Cookie{Name: server.CSRFCookieName(), Value: csrf})
 	request.Header.Set("X-CSRF-Token", csrf)
 	if contentType != "" {
 		request.Header.Set("Content-Type", contentType)

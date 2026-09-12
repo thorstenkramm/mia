@@ -525,7 +525,7 @@ func newServeCommand() *cobra.Command {
 				returnErr = errors.Join(returnErr, fmt.Errorf("close database: %w", closeErr))
 			}
 		}()
-		server, authRoutes, err := httpserver.New(httpserver.Options{DataDir: configuration.Main.DataDir, DocRoot: configuration.Main.DocRoot, TrustedProxyCIDRs: configuration.HTTP.TrustedProxyCIDRs, Logger: logger.Slog()})
+		server, authRoutes, err := httpserver.New(httpserver.Options{DataDir: configuration.Main.DataDir, DocRoot: configuration.Main.DocRoot, TrustedProxyCIDRs: configuration.HTTP.TrustedProxyCIDRs, Logger: logger.Slog(), CookiePolicy: configuration.CookiePolicy})
 		if err != nil {
 			return err
 		}

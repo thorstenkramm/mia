@@ -158,6 +158,64 @@ func TestNormalizePublicURLRestrictsHTTPToLoopback(t *testing.T) {
 	}
 }
 
+func TestLoadDerivesCookiePolicyAndRestrictsLocalHTTPListeners(t *testing.T) {
+	for name, test := range map[string]struct {
+		publicURL, listen, session, csrf string
+		trustedProxyCIDRs                string
+		secure                           bool
+		valid                            bool
+	}{
+		"HTTPS accepts TCP listener":  {"https://mia.example.test", "0.0.0.0:9900", "__Host-mia_session", "__Host-mia_csrf", "", true, true},
+		"HTTPS accepts Unix listener": {"https://mia.example.test", "unix:/run/mia/mia.sock", "__Host-mia_session", "__Host-mia_csrf", "", true, true},
+		"loopback IPv4 HTTP":          {"http://127.0.0.1:9900", "127.0.0.1:9900", "mia_session", "mia_csrf", "", false, true},
+		"loopback IPv6 HTTP":          {"http://[::1]:9900", "[::1]:9900", "mia_session", "mia_csrf", "", false, true},
+		"loopback hostname HTTP":      {"http://localhost:9900", "localhost:9900", "mia_session", "mia_csrf", "", false, true},
+		"loopback HTTP trusted proxy": {"http://localhost:9900", "localhost:9900", "", "", "127.0.0.1/32", false, false},
+		"wildcard HTTP":               {"http://localhost:9900", ":9900", "", "", "", false, false},
+		"remote HTTP":                 {"http://localhost:9900", "192.0.2.1:9900", "", "", "", false, false},
+		"Unix HTTP":                   {"http://localhost:9900", "unix:/run/mia/mia.sock", "", "", "", false, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			temporary := t.TempDir()
+			dataDir := filepath.Join(temporary, "data")
+			docRoot := filepath.Join(temporary, "frontend")
+			if err := os.Mkdir(dataDir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Mkdir(docRoot, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			configPath := filepath.Join(temporary, "mia.toml")
+			content := "[main]\ndata_dir = \"" + dataDir + "\"\ndoc_root = \"" + docRoot + "\"\npublic_url = \"" + test.publicURL + "\"\n[http]\nlisten = \"" + test.listen + "\"\n"
+			if test.trustedProxyCIDRs != "" {
+				content += "trusted_proxy_cidrs = [\"" + test.trustedProxyCIDRs + "\"]\n"
+			}
+			content += "[openai]\napi_key = \"key\"\n[mistral]\napi_key = \"key\"\n[smtp]\nhost = \"smtp.example.test\"\nsender_email = \"mia@example.test\"\n"
+			if err := os.WriteFile(configPath, []byte(content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			flags := pflag.NewFlagSet("test", pflag.ContinueOnError)
+			AddFlags(flags)
+			if err := flags.Set("config", configPath); err != nil {
+				t.Fatal(err)
+			}
+			configuration, err := Load(flags, true)
+			if !test.valid {
+				if err == nil {
+					t.Fatal("unsafe listener accepted")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if configuration.CookiePolicy.SessionName != test.session || configuration.CookiePolicy.CSRFName != test.csrf || configuration.CookiePolicy.Secure != test.secure {
+				t.Fatalf("cookie policy = %#v", configuration.CookiePolicy)
+			}
+		})
+	}
+}
+
 func TestSupportedModelRegistryRejectsUnknownValues(t *testing.T) {
 	if !supportedModel("gpt-5.6-terra") {
 		t.Fatal("default model is unsupported")

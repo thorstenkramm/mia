@@ -147,6 +147,16 @@ exists so the server can be run locally for development and testing without TLS.
 Generated links are `<public_url>/invitation#token=<uuid>` and
 `<public_url>/password-reset#token=<uuid>`.
 
+When `main.public_url` uses loopback HTTP, `http.listen` must be a loopback TCP
+endpoint such as `127.0.0.1:9900`, `[::1]:9900`, or `localhost:9900`. Wildcard,
+remote TCP, and Unix listeners are rejected. This local-only mode changes browser
+cookie names to `mia_session` and `mia_csrf` and omits their `Secure` attribute.
+HTTPS retains the production `__Host-mia_session` and `__Host-mia_csrf` cookies.
+There is no setting to override this derived policy. This mode rejects
+`http.trusted_proxy_cidrs`; do not reverse-proxy or otherwise expose it. MIA cannot
+prevent an undeclared local proxy from publishing loopback HTTP, so that remains an
+operator security boundary.
+
 ### `[http]`
 
 The HTTP table defines the local listener and reverse proxies trusted to report client addresses. HTTPS terminates at an

@@ -123,6 +123,17 @@ These settings are fixed for the MVP and are not operator-configurable.
   same bounded header parser and one shared local limiter key when the header is
   absent or invalid; audit `source_ip` is then null.
 
+### Browser cookie policy
+
+- `main.public_url` derives one immutable browser cookie policy during startup.
+  HTTPS uses secure `__Host-mia_session` and `__Host-mia_csrf` cookies. A loopback
+  HTTP origin uses non-Secure `mia_session` and `mia_csrf` cookies.
+- Loopback HTTP requires a loopback TCP listener and rejects trusted proxies.
+  Wildcard, remote TCP, and Unix listeners are rejected before the server starts.
+  Operators must not expose it through an undeclared local reverse proxy.
+- Gorilla sessions and custom double-submit CSRF middleware consume the same
+  policy. It is server wiring, never derived from a request or forwarded header.
+
 ## Tutor Context And Retrieval
 
 - One student message contains at most 8,000 Unicode code points and 32 KiB of

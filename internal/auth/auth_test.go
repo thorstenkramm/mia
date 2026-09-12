@@ -46,7 +46,7 @@ func TestLoginPasswordGateStrictInputAndAuditEvents(t *testing.T) {
 	if stage(t, login.Body.Bytes()) != "password-change" {
 		t.Fatalf("login stage = %q", stage(t, login.Body.Bytes()))
 	}
-	session, rotatedCSRF := authCookies(t, login)
+	session, rotatedCSRF := authCookies(t, server, login)
 
 	blocked := serve(t, server, http.MethodPost, "/api/v1/auth/logout", rotatedCSRF, []*http.Cookie{session}, "")
 	if blocked.Code != http.StatusNoContent {
@@ -75,17 +75,17 @@ func TestPasswordChangeTransitionsAndStaleStagesAreRejected(t *testing.T) {
 	account := createAccount(t, database, true)
 	csrf := csrfToken(t, server)
 	login := serve(t, server, http.MethodPost, "/api/v1/auth/login", csrf, nil, loginBody("student", "correct horse battery"))
-	session, csrf := authCookies(t, login)
+	session, csrf := authCookies(t, server, login)
 
 	changed := serve(t, server, http.MethodPost, "/api/v1/auth/password-changes", csrf, []*http.Cookie{session}, `{"data":{"type":"password-changes","attributes":{"password":"a different strong password","password_confirmation":"a different strong password"}}}`)
 	assertCode(t, changed, http.StatusOK, "")
 	if stage(t, changed.Body.Bytes()) != "authenticated" {
 		t.Fatalf("changed stage = %q", stage(t, changed.Body.Bytes()))
 	}
-	freshSession, _ := authCookies(t, changed)
+	freshSession, _ := authCookies(t, server, changed)
 	freshRequest := httptest.NewRequest(http.MethodPost, "http://mia.test/api/v1/auth/logout", nil)
 	freshRequest.AddCookie(freshSession)
-	stored, err := server.Sessions.Get(freshRequest, cookieName)
+	stored, err := server.Sessions.Get(freshRequest, server.SessionCookieName())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,15 +104,29 @@ func TestPasswordChangeTransitionsAndStaleStagesAreRejected(t *testing.T) {
 	}
 }
 
+func TestLocalCookiePolicyAuthTransitions(t *testing.T) {
+	server, database := testLocalServer(t)
+	createAccount(t, database, true)
+	csrf := csrfToken(t, server)
+	login := serve(t, server, http.MethodPost, "/api/v1/auth/login", csrf, nil, loginBody("student", "correct horse battery"))
+	assertLocalCSRFCookie(t, login)
+	session, csrf := authCookies(t, server, login)
+	changed := serve(t, server, http.MethodPost, "/api/v1/auth/password-changes", csrf, []*http.Cookie{session}, `{"data":{"type":"password-changes","attributes":{"password":"a different strong password","password_confirmation":"a different strong password"}}}`)
+	assertLocalCSRFCookie(t, changed)
+	session, csrf = authCookies(t, server, changed)
+	logout := serve(t, server, http.MethodPost, "/api/v1/auth/logout", csrf, []*http.Cookie{session}, "")
+	assertLocalCSRFCookie(t, logout)
+}
+
 func TestRestrictedRoutesRequireValidUnexpiredSession(t *testing.T) {
 	server, database := testServer(t)
 	account := createAccount(t, database, false)
 	csrf := csrfToken(t, server)
 	login := serve(t, server, http.MethodPost, "/api/v1/auth/login", csrf, nil, loginBody("student", "correct horse battery"))
-	session, csrf := authCookies(t, login)
+	session, csrf := authCookies(t, server, login)
 	request := httptest.NewRequest(http.MethodPost, "http://mia.test/api/v1/auth/logout", nil)
 	request.AddCookie(session)
-	stored, err := server.Sessions.Get(request, cookieName)
+	stored, err := server.Sessions.Get(request, server.SessionCookieName())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -205,7 +219,7 @@ func TestCurrentGateAndInvalidSessionsAreEnforcedAndCleared(t *testing.T) {
 	account := createAccount(t, database, false)
 	csrf := csrfToken(t, server)
 	login := serve(t, server, http.MethodPost, "/api/v1/auth/login", csrf, nil, loginBody("student", "correct horse battery"))
-	session, csrf := authCookies(t, login)
+	session, csrf := authCookies(t, server, login)
 	server.AuthenticatedPOST("/api/v1/test", func(c *echo.Context) error { return c.NoContent(http.StatusNoContent) })
 	if _, err := database.Exec("UPDATE users SET must_change_password = 1 WHERE id = ?", account.ID); err != nil {
 		t.Fatal(err)
@@ -215,9 +229,9 @@ func TestCurrentGateAndInvalidSessionsAreEnforcedAndCleared(t *testing.T) {
 	changed := serve(t, server, http.MethodPost, "/api/v1/auth/password-changes", csrf, []*http.Cookie{session}, `{"data":{"type":"password-changes","attributes":{"password":"a different strong password","password_confirmation":"a different strong password"}}}`)
 	assertCode(t, changed, http.StatusOK, "")
 
-	malformed := serve(t, server, http.MethodPost, "/api/v1/auth/logout", csrf, []*http.Cookie{{Name: cookieName, Value: "malformed"}}, "")
+	malformed := serve(t, server, http.MethodPost, "/api/v1/auth/logout", csrf, []*http.Cookie{{Name: server.SessionCookieName(), Value: "malformed"}}, "")
 	assertCode(t, malformed, http.StatusUnauthorized, "auth_unauthenticated")
-	if !hasClearedSession(malformed) {
+	if !hasClearedSession(server, malformed) {
 		t.Fatal("malformed cookie was not cleared")
 	}
 }
@@ -227,10 +241,10 @@ func TestAuthenticatedRefreshesOnlySuccessfulRequests(t *testing.T) {
 	createAccount(t, database, false)
 	csrf := csrfToken(t, server)
 	login := serve(t, server, http.MethodPost, "/api/v1/auth/login", csrf, nil, loginBody("student", "correct horse battery"))
-	session, csrf := authCookies(t, login)
+	session, csrf := authCookies(t, server, login)
 	request := httptest.NewRequest(http.MethodPost, "http://mia.test/api/v1/succeeds", nil)
 	request.AddCookie(session)
-	stored, err := server.Sessions.Get(request, cookieName)
+	stored, err := server.Sessions.Get(request, server.SessionCookieName())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -244,7 +258,7 @@ func TestAuthenticatedRefreshesOnlySuccessfulRequests(t *testing.T) {
 	if err := server.Sessions.Save(request, olderRecorder, stored); err != nil {
 		t.Fatal(err)
 	}
-	session = sessionCookie(t, olderRecorder)
+	session = sessionCookie(t, server, olderRecorder)
 	previousIdle, idleOK := stored.Values["idle_until"].(int64)
 	if !idleOK {
 		t.Fatal("older session idle deadline missing")
@@ -252,13 +266,13 @@ func TestAuthenticatedRefreshesOnlySuccessfulRequests(t *testing.T) {
 	server.AuthenticatedPOST("/api/v1/succeeds", func(c *echo.Context) error { return c.NoContent(http.StatusNoContent) })
 	server.AuthenticatedPOST("/api/v1/fails", func(*echo.Context) error { return httpserver.NewError(httpserver.CodeInvalidRequest) })
 	success := serve(t, server, http.MethodPost, "/api/v1/succeeds", csrf, []*http.Cookie{session}, "")
-	if !hasSession(success) {
+	if !hasSession(server, success) {
 		t.Fatal("successful authenticated request did not refresh session")
 	}
-	refreshed := sessionCookie(t, success)
+	refreshed := sessionCookie(t, server, success)
 	request = httptest.NewRequest(http.MethodPost, "http://mia.test/api/v1/succeeds", nil)
 	request.AddCookie(refreshed)
-	stored, err = server.Sessions.Get(request, cookieName)
+	stored, err = server.Sessions.Get(request, server.SessionCookieName())
 	refreshedIdle, idleOK := stored.Values["idle_until"].(int64)
 	refreshedAbsolute, absoluteOK := stored.Values["expires_at"].(int64)
 	if err != nil || !idleOK || !absoluteOK || refreshedIdle <= previousIdle || refreshedIdle > refreshedAbsolute || refreshedAbsolute != absolute {
@@ -266,7 +280,7 @@ func TestAuthenticatedRefreshesOnlySuccessfulRequests(t *testing.T) {
 	}
 	failure := serve(t, server, http.MethodPost, "/api/v1/fails", csrf, []*http.Cookie{session}, "")
 	assertCode(t, failure, http.StatusUnprocessableEntity, "auth_invalid_request")
-	if hasSession(failure) {
+	if hasSession(server, failure) {
 		t.Fatal("failed authenticated request refreshed session")
 	}
 }
@@ -291,13 +305,13 @@ func TestBanDeletionAndSecurityGenerationInvalidateCookies(t *testing.T) {
 			account := createAccount(t, database, false)
 			csrf := csrfToken(t, server)
 			login := serve(t, server, http.MethodPost, "/api/v1/auth/login", csrf, nil, loginBody("student", "correct horse battery"))
-			session, csrf := authCookies(t, login)
+			session, csrf := authCookies(t, server, login)
 			if err := mutate(database, account.ID); err != nil {
 				t.Fatal(err)
 			}
 			response := serve(t, server, http.MethodPost, "/api/v1/auth/logout", csrf, []*http.Cookie{session}, "")
 			assertCode(t, response, http.StatusUnauthorized, "auth_unauthenticated")
-			if !hasClearedSession(response) {
+			if !hasClearedSession(server, response) {
 				t.Fatal("invalidated cookie was not cleared")
 			}
 		})
@@ -501,7 +515,7 @@ func TestTOTPEnrollmentLoginAndStepReplay(t *testing.T) {
 	account := createAccount(t, database, false)
 	csrf := csrfToken(t, server)
 	login := serve(t, server, http.MethodPost, "/api/v1/auth/login", csrf, nil, loginBody("student", "correct horse battery"))
-	session, csrf := authCookies(t, login)
+	session, csrf := authCookies(t, server, login)
 	enrollment := serve(t, server, http.MethodPost, "/api/v1/users/me/mfa-enrollments", csrf, []*http.Cookie{session}, `{"data":{"type":"mfa-enrollments","attributes":{"method":"totp"}}}`)
 	if enrollment.Code != http.StatusCreated {
 		t.Fatalf("enrollment status=%d body=%s", enrollment.Code, enrollment.Body.String())
@@ -527,7 +541,7 @@ func TestTOTPEnrollmentLoginAndStepReplay(t *testing.T) {
 	if stage(t, login.Body.Bytes()) != "mfa" {
 		t.Fatalf("stage=%q", stage(t, login.Body.Bytes()))
 	}
-	mfaSession, csrf := authCookies(t, login)
+	mfaSession, csrf := authCookies(t, server, login)
 	var challenge struct {
 		Data struct {
 			Attributes struct {
@@ -550,7 +564,7 @@ func TestManagementProofsUseUniqueOpaqueResourceIDs(t *testing.T) {
 	createAccount(t, database, false)
 	csrf := csrfToken(t, server)
 	login := serve(t, server, http.MethodPost, "/api/v1/auth/login", csrf, nil, loginBody("student", "correct horse battery"))
-	session, csrf := authCookies(t, login)
+	session, csrf := authCookies(t, server, login)
 	enrollment := serve(t, server, http.MethodPost, "/api/v1/users/me/mfa-enrollments", csrf, []*http.Cookie{session}, `{"data":{"type":"mfa-enrollments","attributes":{"method":"totp"}}}`)
 	if enrollment.Code != http.StatusCreated {
 		t.Fatalf("enrollment status=%d body=%s", enrollment.Code, enrollment.Body.String())
@@ -666,7 +680,7 @@ func TestInvalidRecoveryCodeCountsAsChallengeFailure(t *testing.T) {
 	if err := server.StartMFASession(context, account.ID, account.SecurityGeneration, challengeID, time.Now()); err != nil {
 		t.Fatal(err)
 	}
-	response := serve(t, server, http.MethodPost, "/api/v1/auth/mfa-challenges/"+challengeID+"/recovery-code-consumptions", csrfToken(t, server), []*http.Cookie{sessionCookie(t, recorder)}, `{"data":{"type":"mfa-recovery-code-consumptions","attributes":{"code":"invalid"}}}`)
+	response := serve(t, server, http.MethodPost, "/api/v1/auth/mfa-challenges/"+challengeID+"/recovery-code-consumptions", csrfToken(t, server), []*http.Cookie{sessionCookie(t, server, recorder)}, `{"data":{"type":"mfa-recovery-code-consumptions","attributes":{"code":"invalid"}}}`)
 	assertCode(t, response, http.StatusUnprocessableEntity, "auth_invalid_recovery_code")
 	var failures int
 	if err := database.QueryRow("SELECT failures FROM mfa_challenges WHERE id = ?", challengeID).Scan(&failures); err != nil {
@@ -703,7 +717,7 @@ func TestSMSEnrollmentDeliversAndVerifiesOneCode(t *testing.T) {
 	}
 	csrf := csrfToken(t, server)
 	login := serve(t, server, http.MethodPost, "/api/v1/auth/login", csrf, nil, loginBody("student", "correct horse battery"))
-	session, csrf := authCookies(t, login)
+	session, csrf := authCookies(t, server, login)
 	enrollment := serve(t, server, http.MethodPost, "/api/v1/users/me/mfa-enrollments", csrf, []*http.Cookie{session}, `{"data":{"type":"mfa-enrollments","attributes":{"method":"sms"}}}`)
 	if enrollment.Code != http.StatusCreated {
 		t.Fatalf("SMS enrollment=%d %s", enrollment.Code, enrollment.Body.String())
@@ -824,18 +838,22 @@ func assertAuditCount(t *testing.T, database *sql.DB, action string, expected in
 }
 
 func testServer(t *testing.T) (*httpserver.Server, *sql.DB) {
-	return testServerWithMailerAndSMS(t, recoveryMailerFunc(func(context.Context, string, string) error { return nil }), sms.Unavailable{})
+	return testServerWithMailerAndSMS(t, recoveryMailerFunc(func(context.Context, string, string) error { return nil }), sms.Unavailable{}, httpserver.CookiePolicy{})
 }
 
 func testServerWithMailer(t *testing.T, mailer recoveryMailer) (*httpserver.Server, *sql.DB) {
-	return testServerWithMailerAndSMS(t, mailer, sms.Unavailable{})
+	return testServerWithMailerAndSMS(t, mailer, sms.Unavailable{}, httpserver.CookiePolicy{})
 }
 
 func testServerWithSMS(t *testing.T, sender sms.Sender) (*httpserver.Server, *sql.DB) {
-	return testServerWithMailerAndSMS(t, recoveryMailerFunc(func(context.Context, string, string) error { return nil }), sender)
+	return testServerWithMailerAndSMS(t, recoveryMailerFunc(func(context.Context, string, string) error { return nil }), sender, httpserver.CookiePolicy{})
 }
 
-func testServerWithMailerAndSMS(t *testing.T, mailer recoveryMailer, sender sms.Sender) (*httpserver.Server, *sql.DB) {
+func testLocalServer(t *testing.T) (*httpserver.Server, *sql.DB) {
+	return testServerWithMailerAndSMS(t, recoveryMailerFunc(func(context.Context, string, string) error { return nil }), sms.Unavailable{}, httpserver.CookiePolicy{SessionName: "mia_session", CSRFName: "mia_csrf"})
+}
+
+func testServerWithMailerAndSMS(t *testing.T, mailer recoveryMailer, sender sms.Sender, policy httpserver.CookiePolicy) (*httpserver.Server, *sql.DB) {
 	t.Helper()
 	directory := t.TempDir()
 	docRoot := filepath.Join(directory, "public")
@@ -854,7 +872,7 @@ func testServerWithMailerAndSMS(t *testing.T, mailer recoveryMailer, sender sms.
 			t.Error(err)
 		}
 	})
-	server, routes, err := httpserver.New(httpserver.Options{DataDir: directory, DocRoot: docRoot})
+	server, routes, err := httpserver.New(httpserver.Options{DataDir: directory, DocRoot: docRoot, CookiePolicy: policy})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -922,7 +940,7 @@ func csrfToken(t *testing.T, server *httpserver.Server) string {
 	response := httptest.NewRecorder()
 	server.Echo.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "http://mia.test/api/v1/missing", nil))
 	for _, cookie := range response.Result().Cookies() {
-		if cookie.Name == "__Host-mia_csrf" {
+		if cookie.Name == server.CSRFCookieName() {
 			return cookie.Value
 		}
 	}
@@ -936,7 +954,7 @@ func serve(t *testing.T, server *httpserver.Server, method, path, csrf string, c
 	request.Header.Set("Content-Type", "application/vnd.api+json")
 	request.Header.Set("X-CSRF-Token", csrf)
 	if csrf != "" {
-		request.AddCookie(&http.Cookie{Name: "__Host-mia_csrf", Value: csrf})
+		request.AddCookie(&http.Cookie{Name: server.CSRFCookieName(), Value: csrf})
 	}
 	for _, cookie := range cookies {
 		request.AddCookie(cookie)
@@ -951,7 +969,7 @@ func serveMedia(t *testing.T, server *httpserver.Server, csrf, mediaType, body s
 	request := httptest.NewRequest(http.MethodPost, "http://mia.test/api/v1/auth/login", bytes.NewBufferString(body))
 	request.Header.Set("Content-Type", mediaType)
 	request.Header.Set("X-CSRF-Token", csrf)
-	request.AddCookie(&http.Cookie{Name: "__Host-mia_csrf", Value: csrf})
+	request.AddCookie(&http.Cookie{Name: server.CSRFCookieName(), Value: csrf})
 	response := httptest.NewRecorder()
 	server.Echo.ServeHTTP(response, request)
 	return response
@@ -972,15 +990,15 @@ func assertCode(t *testing.T, response *httptest.ResponseRecorder, status int, c
 	}
 }
 
-func authCookies(t *testing.T, response *httptest.ResponseRecorder) (*http.Cookie, string) {
+func authCookies(t *testing.T, server *httpserver.Server, response *httptest.ResponseRecorder) (*http.Cookie, string) {
 	t.Helper()
 	var session *http.Cookie
 	var csrf string
 	for _, cookie := range response.Result().Cookies() {
 		switch cookie.Name {
-		case cookieName:
+		case server.SessionCookieName():
 			session = cookie
-		case "__Host-mia_csrf":
+		case server.CSRFCookieName():
 			csrf = cookie.Value
 		}
 	}
@@ -990,28 +1008,41 @@ func authCookies(t *testing.T, response *httptest.ResponseRecorder) (*http.Cooki
 	return session, csrf
 }
 
-func hasSession(response *httptest.ResponseRecorder) bool {
-	for _, cookie := range response.Result().Cookies() {
-		if cookie.Name == cookieName && cookie.MaxAge >= 0 {
-			return true
-		}
-	}
-	return false
-}
-
-func hasClearedSession(response *httptest.ResponseRecorder) bool {
-	for _, cookie := range response.Result().Cookies() {
-		if cookie.Name == cookieName && cookie.MaxAge < 0 {
-			return true
-		}
-	}
-	return false
-}
-
-func sessionCookie(t *testing.T, response *httptest.ResponseRecorder) *http.Cookie {
+func assertLocalCSRFCookie(t *testing.T, response *httptest.ResponseRecorder) {
 	t.Helper()
 	for _, cookie := range response.Result().Cookies() {
-		if cookie.Name == cookieName {
+		if cookie.Name == "mia_csrf" {
+			if cookie.Secure {
+				t.Fatal("local CSRF cookie is Secure")
+			}
+			return
+		}
+	}
+	t.Fatal("local CSRF cookie missing")
+}
+
+func hasSession(server *httpserver.Server, response *httptest.ResponseRecorder) bool {
+	for _, cookie := range response.Result().Cookies() {
+		if cookie.Name == server.SessionCookieName() && cookie.MaxAge >= 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func hasClearedSession(server *httpserver.Server, response *httptest.ResponseRecorder) bool {
+	for _, cookie := range response.Result().Cookies() {
+		if cookie.Name == server.SessionCookieName() && cookie.MaxAge < 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func sessionCookie(t *testing.T, server *httpserver.Server, response *httptest.ResponseRecorder) *http.Cookie {
+	t.Helper()
+	for _, cookie := range response.Result().Cookies() {
+		if cookie.Name == server.SessionCookieName() {
 			return cookie
 		}
 	}

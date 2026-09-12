@@ -147,7 +147,7 @@ func speechCookie(t *testing.T, server *httpserver.Server, accountID string) (*h
 		if err := server.StartSession(c, accountID, 1, "authenticated", time.Now()); err != nil {
 			return err
 		}
-		httpserver.RotateCSRF(c)
+		server.RotateCSRF(c)
 		return c.NoContent(http.StatusNoContent)
 	})
 	request := httptest.NewRequest(http.MethodGet, "http://mia.test"+path, nil)
@@ -156,10 +156,10 @@ func speechCookie(t *testing.T, server *httpserver.Server, accountID string) (*h
 	var session *http.Cookie
 	csrf := ""
 	for _, cookie := range response.Result().Cookies() {
-		if cookie.Name == "__Host-mia_session" {
+		if cookie.Name == server.SessionCookieName() {
 			session = cookie
 		}
-		if cookie.Name == "__Host-mia_csrf" {
+		if cookie.Name == server.CSRFCookieName() {
 			csrf = cookie.Value
 		}
 	}
@@ -174,7 +174,7 @@ func speechHTTP(server *httpserver.Server, method, path string, session *http.Co
 		request.AddCookie(session)
 	}
 	if csrf != "" {
-		request.AddCookie(&http.Cookie{Name: "__Host-mia_csrf", Value: csrf})
+		request.AddCookie(&http.Cookie{Name: server.CSRFCookieName(), Value: csrf})
 		request.Header.Set("X-CSRF-Token", csrf)
 	}
 	response := httptest.NewRecorder()

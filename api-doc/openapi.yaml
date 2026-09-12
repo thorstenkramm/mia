@@ -179,12 +179,12 @@ components:
       type: apiKey
       in: cookie
       name: __Host-mia_session
-      description: Signed and encrypted HttpOnly browser session cookie.
+      description: Signed and encrypted HttpOnly browser session cookie for HTTPS. Loopback HTTP uses mia_session.
     csrfToken:
       type: apiKey
       in: header
       name: X-CSRF-Token
-      description: Required with the matching __Host-mia_csrf cookie on every unsafe API request.
+      description: Required with the matching CSRF cookie on every unsafe API request. HTTPS uses __Host-mia_csrf; loopback HTTP uses mia_csrf.
   parameters:
     ResourceID:
       name: id

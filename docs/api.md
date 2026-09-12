@@ -99,11 +99,11 @@ ID are never sufficient authorization.
 
 ### Browser session and CSRF
 
-The MVP uses Echo session middleware with Gorilla `CookieStore`. The signed and
-encrypted `__Host-mia_session` cookie contains only the user ID, login stage,
-stage-specific challenge ID when needed, security generation, authentication
-time, idle expiry, and absolute expiry. It is `Secure`, `HttpOnly`,
-`SameSite=Lax`, has path `/`, and has no `Domain` attribute.
+The MVP uses Gorilla `CookieStore` and custom shared CSRF middleware. For HTTPS,
+the signed and encrypted `__Host-mia_session` cookie contains only the user ID,
+login stage, stage-specific challenge ID when needed, security generation,
+authentication time, idle expiry, and absolute expiry. It is `Secure`,
+`HttpOnly`, `SameSite=Lax`, has path `/`, and has no `Domain` attribute.
 
 Every authenticated request reloads current account, role, assignment, ban, and
 password-gate state from SQLite. Authorization never trusts those values from the
@@ -112,12 +112,13 @@ cleared and rejected. Each successful authenticated request reissues the cookie
 with a 30-minute idle expiry capped by the original 12-hour absolute expiry. An
 SSE connection refreshes the cookie when established; server-sent events do not.
 
-MIA uses Echo's CSRF middleware with Fetch Metadata checks and token validation
-for unsafe methods. The `__Host-mia_csrf` cookie is `Secure`, `SameSite=Lax`,
-host-only, uses path `/`, and is readable by the frontend rather than
-`HttpOnly`. The frontend sends its value in `X-CSRF-Token` when token validation
-is required. MIA supports same-origin browser access only in the MVP and does not
-enable CORS.
+MIA's shared CSRF middleware uses Fetch Metadata checks and double-submit token
+validation for unsafe methods. The HTTPS `__Host-mia_csrf` cookie is `Secure`,
+`SameSite=Lax`, host-only, uses path `/`, and is readable by the frontend rather
+than `HttpOnly`. The frontend sends its value in `X-CSRF-Token` when token
+validation is required. A loopback-HTTP `main.public_url` uses the non-Secure
+`mia_session` and `mia_csrf` names only with a loopback TCP listener. MIA supports
+same-origin browser access only in the MVP and does not enable CORS.
 
 `GET /api/v1/auth/session` always issues or refreshes anonymous CSRF state. Every
 unsafe public endpoint, including login, invitation preview and acceptance, and

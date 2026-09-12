@@ -294,7 +294,7 @@ func serveWithMedia(t *testing.T, server *httpserver.Server, path, csrf, mediaTy
 	request := httptest.NewRequest(http.MethodPost, "http://mia.test"+path, bytes.NewBufferString(body))
 	request.Header.Set("Content-Type", mediaType)
 	request.Header.Set("X-CSRF-Token", csrf)
-	request.AddCookie(&http.Cookie{Name: "__Host-mia_csrf", Value: csrf})
+	request.AddCookie(&http.Cookie{Name: server.CSRFCookieName(), Value: csrf})
 	response := httptest.NewRecorder()
 	server.Echo.ServeHTTP(response, request)
 	return response
@@ -502,7 +502,7 @@ func registerLoginRoute(t *testing.T, server *httpserver.Server, database *sql.D
 		if _, err := identity.VerifyPassword(req.Data.Attributes.Password, account.PasswordHash); err != nil {
 			return httpserver.NewError(httpserver.CodeInvalidCredentials)
 		}
-		httpserver.RotateCSRF(c)
+		server.RotateCSRF(c)
 		if err := server.StartSession(c, account.ID, account.SecurityGeneration, "authenticated", time.Now()); err != nil {
 			return err
 		}
@@ -567,7 +567,7 @@ func csrfToken(t *testing.T, server *httpserver.Server) string {
 	response := httptest.NewRecorder()
 	server.Echo.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "http://mia.test/api/v1/missing", nil))
 	for _, cookie := range response.Result().Cookies() {
-		if cookie.Name == "__Host-mia_csrf" {
+		if cookie.Name == server.CSRFCookieName() {
 			return cookie.Value
 		}
 	}
@@ -587,9 +587,9 @@ func loginSession(t *testing.T, server *httpserver.Server, username, password st
 	var newCSRF string
 	for _, cookie := range response.Result().Cookies() {
 		switch cookie.Name {
-		case "__Host-mia_session":
+		case server.SessionCookieName():
 			session = cookie
-		case "__Host-mia_csrf":
+		case server.CSRFCookieName():
 			newCSRF = cookie.Value
 		}
 	}
@@ -605,7 +605,7 @@ func serve(t *testing.T, server *httpserver.Server, method, path, csrf string, s
 	request.Header.Set("Content-Type", "application/vnd.api+json")
 	request.Header.Set("X-CSRF-Token", csrf)
 	if csrf != "" {
-		request.AddCookie(&http.Cookie{Name: "__Host-mia_csrf", Value: csrf})
+		request.AddCookie(&http.Cookie{Name: server.CSRFCookieName(), Value: csrf})
 	}
 	if session != nil {
 		request.AddCookie(session)

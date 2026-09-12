@@ -193,7 +193,7 @@ func TestAvatarRoutesAreExemptFromJSONAPIAcceptNegotiation(t *testing.T) {
 		request.AddCookie(session)
 		if testCase.method == http.MethodPut {
 			request.Header.Set("Content-Type", testCase.contentType)
-			request.AddCookie(&http.Cookie{Name: "__Host-mia_csrf", Value: csrf})
+			request.AddCookie(&http.Cookie{Name: server.CSRFCookieName(), Value: csrf})
 			request.Header.Set("X-CSRF-Token", csrf)
 		}
 		response := httptest.NewRecorder()
@@ -325,7 +325,7 @@ func issueSession(t *testing.T, server *httpserver.Server, accountID string) (*h
 		if err := server.StartSession(c, accountID, 1, "authenticated", time.Now()); err != nil {
 			return err
 		}
-		httpserver.RotateCSRF(c)
+		server.RotateCSRF(c)
 		return c.NoContent(http.StatusNoContent)
 	})
 	response := httptest.NewRecorder()
@@ -334,9 +334,9 @@ func issueSession(t *testing.T, server *httpserver.Server, accountID string) (*h
 	csrf := ""
 	for _, cookie := range response.Result().Cookies() {
 		switch cookie.Name {
-		case "__Host-mia_session":
+		case server.SessionCookieName():
 			session = cookie
-		case "__Host-mia_csrf":
+		case server.CSRFCookieName():
 			csrf = cookie.Value
 		}
 	}
@@ -361,7 +361,7 @@ func profileRequestBytes(t *testing.T, server *httpserver.Server, method, path s
 		request.Header.Set("Content-Type", contentType)
 	}
 	if method != http.MethodGet {
-		request.AddCookie(&http.Cookie{Name: "__Host-mia_csrf", Value: csrf})
+		request.AddCookie(&http.Cookie{Name: server.CSRFCookieName(), Value: csrf})
 		request.Header.Set("X-CSRF-Token", csrf)
 	}
 	response := httptest.NewRecorder()

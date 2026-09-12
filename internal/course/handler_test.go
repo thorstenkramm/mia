@@ -281,7 +281,7 @@ func TestCourseLogoRoutesAreExemptFromJSONAPIAcceptNegotiation(t *testing.T) {
 		request.AddCookie(session)
 		if method == http.MethodPut {
 			request.Header.Set("Content-Type", "image/png")
-			request.AddCookie(&http.Cookie{Name: "__Host-mia_csrf", Value: csrf})
+			request.AddCookie(&http.Cookie{Name: server.CSRFCookieName(), Value: csrf})
 			request.Header.Set("X-CSRF-Token", csrf)
 		}
 		response := httptest.NewRecorder()
@@ -598,7 +598,7 @@ func courseSessionGeneration(
 		if err := server.StartSession(c, accountID, generation, "authenticated", time.Now()); err != nil {
 			return err
 		}
-		httpserver.RotateCSRF(c)
+		server.RotateCSRF(c)
 		return c.NoContent(http.StatusNoContent)
 	})
 	request := httptest.NewRequest(http.MethodGet, "http://mia.test"+path, nil)
@@ -607,10 +607,10 @@ func courseSessionGeneration(
 	var session *http.Cookie
 	csrf := ""
 	for _, cookie := range response.Result().Cookies() {
-		if cookie.Name == "__Host-mia_session" {
+		if cookie.Name == server.SessionCookieName() {
 			session = cookie
 		}
-		if cookie.Name == "__Host-mia_csrf" {
+		if cookie.Name == server.CSRFCookieName() {
 			csrf = cookie.Value
 		}
 	}
@@ -625,7 +625,7 @@ func courseHTTP(t *testing.T, server *httpserver.Server, method, path string, se
 	t.Helper()
 	request := httptest.NewRequest(method, "http://mia.test"+path, bytes.NewReader(body))
 	request.AddCookie(session)
-	request.AddCookie(&http.Cookie{Name: "__Host-mia_csrf", Value: csrf})
+	request.AddCookie(&http.Cookie{Name: server.CSRFCookieName(), Value: csrf})
 	request.Header.Set("X-CSRF-Token", csrf)
 	if contentType != "" {
 		request.Header.Set("Content-Type", contentType)
@@ -641,7 +641,7 @@ func courseHTTPUnknownLength(t *testing.T, server *httpserver.Server, method, pa
 	request := httptest.NewRequest(method, "http://mia.test"+path, bytes.NewReader(body))
 	request.ContentLength = -1
 	request.AddCookie(session)
-	request.AddCookie(&http.Cookie{Name: "__Host-mia_csrf", Value: csrf})
+	request.AddCookie(&http.Cookie{Name: server.CSRFCookieName(), Value: csrf})
 	request.Header.Set("X-CSRF-Token", csrf)
 	request.Header.Set("Content-Type", contentType)
 	response := httptest.NewRecorder()

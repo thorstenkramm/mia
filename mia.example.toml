@@ -19,11 +19,14 @@
   ## Default: none
   doc_root = "/usr/share/mia/frontend"
 
-  ## Public HTTPS origin, string, mandatory
+  ## Public origin, string, mandatory
   ## Can be overridden with --main-public-url or MIA_MAIN_PUBLIC_URL
   ## Used for invitation and password-recovery links
   ## HTTP is accepted only for localhost or a loopback IP, for local
-  ## development and testing. Every other origin must use HTTPS.
+  ## development and testing. It requires a loopback TCP listen address and
+  ## uses non-Secure mia_session and mia_csrf cookies and rejects trusted proxies.
+  ## Do not reverse-proxy or expose loopback HTTP. Every other origin uses HTTPS and
+  ## Secure __Host- cookies.
   ## Example: "https://mia.example.org"
   ## Local development example: "http://localhost:9900"
   ## Default: none
@@ -33,7 +36,7 @@
   ## TCP or Unix listener endpoint, string, optional
   ## Can be overridden with --http-listen or MIA_HTTP_LISTEN
   ## TCP example: "127.0.0.1:9900"
-  ## Unix example: "unix:/run/mia/mia.sock"
+  ## Unix example: "unix:/run/mia/mia.sock"; loopback HTTP public_url requires TCP
   ## Default: "127.0.0.1:9900"
   #listen = "127.0.0.1:9900"
 

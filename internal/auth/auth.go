@@ -26,8 +26,6 @@ import (
 	"github.com/thorstenkramm/mia/internal/user"
 )
 
-const cookieName = "__Host-mia_session"
-
 type recoveryMailer interface {
 	SendPasswordRecovery(context.Context, string, string) error
 }
@@ -153,7 +151,7 @@ func login(server *httpserver.Server, database *sql.DB, smsSender sms.Sender) ec
 		if err != nil {
 			return err
 		}
-		httpserver.RotateCSRF(c)
+		server.RotateCSRF(c)
 		return sessionResponseWithChallenge(c, account.ID, stage, challengeID)
 	}
 }
@@ -207,7 +205,7 @@ func logout(server *httpserver.Server, database *sql.DB) echo.HandlerFunc {
 		if err := server.EndSession(c); err != nil {
 			return err
 		}
-		httpserver.RotateCSRF(c)
+		server.RotateCSRF(c)
 		return c.NoContent(http.StatusNoContent)
 	}
 }
@@ -253,7 +251,7 @@ func changePassword(server *httpserver.Server, database *sql.DB) echo.HandlerFun
 		if err := server.TransitionSession(c, "authenticated", time.Now()); err != nil {
 			return err
 		}
-		httpserver.RotateCSRF(c)
+		server.RotateCSRF(c)
 		return sessionResponse(c, accountID, "authenticated")
 	}
 }
@@ -512,7 +510,7 @@ func verifyChallenge(server *httpserver.Server, database *sql.DB) echo.HandlerFu
 		if err := server.TransitionSession(c, transition, time.Now()); err != nil {
 			return err
 		}
-		httpserver.RotateCSRF(c)
+		server.RotateCSRF(c)
 		return sessionResponse(c, accountID, transition)
 	}
 }
@@ -592,7 +590,7 @@ func consumeChallengeRecoveryCode(server *httpserver.Server, database *sql.DB) e
 		if err := server.TransitionSession(c, transition, time.Now()); err != nil {
 			return err
 		}
-		httpserver.RotateCSRF(c)
+		server.RotateCSRF(c)
 		return sessionResponse(c, accountID, transition)
 	}
 }

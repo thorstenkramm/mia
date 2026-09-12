@@ -16,12 +16,14 @@ import (
 
 	"github.com/spf13/pflag"
 	"github.com/spf13/viper"
+	"github.com/thorstenkramm/mia/internal/httpserver"
 	"github.com/thorstenkramm/mia/internal/identity"
 )
 
 // Config is the complete MIA configuration schema.
 type Config struct {
-	Main struct {
+	CookiePolicy httpserver.CookiePolicy `mapstructure:"-"`
+	Main         struct {
 		DataDir   string `mapstructure:"data_dir"`
 		DocRoot   string `mapstructure:"doc_root"`
 		PublicURL string `mapstructure:"public_url"`
@@ -276,6 +278,9 @@ func validate(config *Config, serve bool, optional optionalProviders) error {
 	if err := listen(config.HTTP.Listen); err != nil {
 		return err
 	}
+	if err := cookiePolicy(config); err != nil {
+		return err
+	}
 	if strings.HasPrefix(config.HTTP.Listen, "unix:") && config.HTTP.SocketGroup == "" { /* primary group is used */
 	} else if !strings.HasPrefix(config.HTTP.Listen, "unix:") && config.HTTP.SocketGroup != "" {
 		return errors.New("http.socket_group requires a Unix listener")
@@ -398,6 +403,24 @@ func normalizePublicURL(config *Config) error {
 	return nil
 }
 
+// cookiePolicy derives browser cookie settings from the validated public origin.
+// HTTP is usable only on a loopback TCP listener, so non-secure cookies cannot
+// become reachable through a proxy, wildcard, or remote listener.
+func cookiePolicy(config *Config) error {
+	if strings.HasPrefix(config.Main.PublicURL, "http://") {
+		if !loopbackTCPListener(config.HTTP.Listen) {
+			return errors.New("loopback HTTP main.public_url requires a loopback TCP http.listen")
+		}
+		if len(config.HTTP.TrustedProxyCIDRs) != 0 {
+			return errors.New("loopback HTTP main.public_url does not allow trusted proxies")
+		}
+		config.CookiePolicy = httpserver.CookiePolicy{SessionName: "mia_session", CSRFName: "mia_csrf"}
+		return nil
+	}
+	config.CookiePolicy = httpserver.CookiePolicy{SessionName: "__Host-mia_session", CSRFName: "__Host-mia_csrf", Secure: true}
+	return nil
+}
+
 func loopbackHost(host string) bool {
 	if strings.EqualFold(host, "localhost") {
 		return true
@@ -454,6 +477,14 @@ func listen(value string) error {
 		return fmt.Errorf("invalid http.listen: %w", err)
 	}
 	return nil
+}
+
+func loopbackTCPListener(value string) bool {
+	if strings.HasPrefix(value, "unix:") {
+		return false
+	}
+	host, _, err := net.SplitHostPort(value)
+	return err == nil && loopbackHost(host)
 }
 
 type valueKind uint8

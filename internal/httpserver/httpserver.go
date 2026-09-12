@@ -40,6 +40,14 @@ type Options struct {
 	DocRoot           string
 	TrustedProxyCIDRs []string
 	Logger            *slog.Logger
+	CookiePolicy      CookiePolicy
+}
+
+// CookiePolicy defines the fixed cookie names and transport flag for one server.
+type CookiePolicy struct {
+	SessionName string
+	CSRFName    string
+	Secure      bool
 }
 
 // Server is safe for concurrent use after construction and route
@@ -52,6 +60,7 @@ type Server struct {
 	limiter        *Limiter
 	resolver       *ClientIPResolver
 	routes         map[string]routeRegistration
+	cookiePolicy   CookiePolicy
 }
 
 // AuthRouteRegistrar is a wiring-issued capability for auth's restricted routes.
@@ -168,9 +177,15 @@ type IdentityState struct {
 type IdentityLoader func(context.Context, string) (IdentityState, error)
 
 // RotateCSRF invalidates the current browser CSRF token after an auth boundary.
-func RotateCSRF(c *echo.Context) {
-	http.SetCookie(c.Response(), &http.Cookie{Name: "__Host-mia_csrf", Value: randomToken(32), Path: "/", Secure: true, SameSite: http.SameSiteLaxMode})
+func (server *Server) RotateCSRF(c *echo.Context) {
+	server.setCSRFCookie(c, randomToken(32))
 }
+
+// SessionCookieName returns this server's immutable session cookie name.
+func (server *Server) SessionCookieName() string { return server.cookiePolicy.SessionName }
+
+// CSRFCookieName returns this server's immutable CSRF cookie name.
+func (server *Server) CSRFCookieName() string { return server.cookiePolicy.CSRFName }
 
 // PrivateAvatarPNG writes a normalized private avatar with shared cache and download-safety headers.
 func PrivateAvatarPNG(c *echo.Context, data []byte, etag string) error {
@@ -235,12 +250,12 @@ func (registrar AuthRouteRegistrar) DELETE(path, stage string, next echo.Handler
 // StartSession creates a new login-stage cookie. It is used after successful
 // login and stage transitions, each of which starts with a fresh CSRF token.
 func (server *Server) StartSession(c *echo.Context, userID string, generation int64, stage string, now time.Time) error {
-	return saveSession(c, server.Sessions, userID, generation, stage, "", now)
+	return saveSession(c, server.Sessions, server.cookiePolicy, userID, generation, stage, "", now)
 }
 
 // StartMFASession creates the restricted MFA stage bound to one server-side challenge.
 func (server *Server) StartMFASession(c *echo.Context, userID string, generation int64, challengeID string, now time.Time) error {
-	return saveSession(c, server.Sessions, userID, generation, "mfa", challengeID, now)
+	return saveSession(c, server.Sessions, server.cookiePolicy, userID, generation, "mfa", challengeID, now)
 }
 
 // TransitionSession moves the validated current session to another stage.
@@ -250,12 +265,13 @@ func (server *Server) TransitionSession(c *echo.Context, stage string, now time.
 	if !userOK || !generationOK || userID == "" || generation == 0 {
 		return NewError(CodeUnauthenticated)
 	}
-	return saveSession(c, server.Sessions, userID, generation, stage, "", now)
+	return saveSession(c, server.Sessions, server.cookiePolicy, userID, generation, stage, "", now)
 }
 
 // EndSession clears the validated current browser session.
 func (server *Server) EndSession(c *echo.Context) error {
-	return clearSession(c, server.Sessions)
+	c.Set("mia.auth.end_session", true)
+	return clearSession(c, server.Sessions, server.cookiePolicy)
 }
 
 func (server *Server) authenticatedPOST(path, stage string, next echo.HandlerFunc) {
@@ -271,7 +287,7 @@ func (server *Server) authenticated(path, stage string, next echo.HandlerFunc, r
 		if server.identityLoader == nil {
 			return NewError(CodeInternalError)
 		}
-		session, err := server.Sessions.Get(c.Request(), "__Host-mia_session")
+		session, err := server.Sessions.Get(c.Request(), server.cookiePolicy.SessionName)
 		if err != nil {
 			return server.clearedStageError(c, stage)
 		}
@@ -294,7 +310,7 @@ func (server *Server) authenticated(path, stage string, next echo.HandlerFunc, r
 			return server.clearedStageError(c, stage)
 		}
 		if current == "password-change" && !state.MustChangePassword {
-			if err := clearSession(c, server.Sessions); err != nil {
+			if err := clearSession(c, server.Sessions, server.cookiePolicy); err != nil {
 				return err
 			}
 			return NewError(CodePasswordChangeRequired)
@@ -318,8 +334,8 @@ func (server *Server) authenticated(path, stage string, next echo.HandlerFunc, r
 			return fmt.Errorf("unwrap authenticated response: %w", unwrapErr)
 		}
 		response.Before(func() {
-			if current == "authenticated" && stage == "authenticated" && response.Status >= http.StatusOK && response.Status < http.StatusMultipleChoices {
-				if err := refreshSession(c, server.Sessions, session, time.Now()); err != nil {
+			if current == "authenticated" && stage == "authenticated" && c.Get("mia.auth.end_session") != true && response.Status >= http.StatusOK && response.Status < http.StatusMultipleChoices {
+				if err := refreshSession(c, server.Sessions, server.cookiePolicy, session, time.Now()); err != nil {
 					c.Logger().Error("refresh authenticated session", "error", err)
 				}
 			}
@@ -329,7 +345,7 @@ func (server *Server) authenticated(path, stage string, next echo.HandlerFunc, r
 }
 
 func (server *Server) clearedStageError(c *echo.Context, stage string) error {
-	if err := clearSession(c, server.Sessions); err != nil {
+	if err := clearSession(c, server.Sessions, server.cookiePolicy); err != nil {
 		return err
 	}
 	if stage == "password-change" {
@@ -338,8 +354,8 @@ func (server *Server) clearedStageError(c *echo.Context, stage string) error {
 	return NewError(CodeUnauthenticated)
 }
 
-func saveSession(c *echo.Context, store *sessions.CookieStore, userID string, generation int64, stage, challengeID string, now time.Time) error {
-	session, err := store.New(c.Request(), "__Host-mia_session")
+func saveSession(c *echo.Context, store *sessions.CookieStore, policy CookiePolicy, userID string, generation int64, stage, challengeID string, now time.Time) error {
+	session, err := store.New(c.Request(), policy.SessionName)
 	if err != nil {
 		return err
 	}
@@ -359,11 +375,11 @@ func saveSession(c *echo.Context, store *sessions.CookieStore, userID string, ge
 		idleUntil = expires
 	}
 	session.Values["idle_until"] = idleUntil.Unix()
-	session.Options = &sessions.Options{Path: "/", MaxAge: int(time.Until(expires).Seconds()), Secure: true, HttpOnly: true, SameSite: http.SameSiteLaxMode}
+	session.Options = &sessions.Options{Path: "/", MaxAge: int(time.Until(expires).Seconds()), Secure: policy.Secure, HttpOnly: true, SameSite: http.SameSiteLaxMode}
 	return store.Save(c.Request(), c.Response(), session)
 }
 
-func refreshSession(c *echo.Context, store *sessions.CookieStore, session *sessions.Session, now time.Time) error {
+func refreshSession(c *echo.Context, store *sessions.CookieStore, policy CookiePolicy, session *sessions.Session, now time.Time) error {
 	absolute, ok := session.Values["expires_at"].(int64)
 	if !ok || !now.Before(time.Unix(absolute, 0)) {
 		return errors.New("authenticated session has invalid absolute expiry")
@@ -374,16 +390,16 @@ func refreshSession(c *echo.Context, store *sessions.CookieStore, session *sessi
 		idleUntil = absoluteExpiry
 	}
 	session.Values["idle_until"] = idleUntil.Unix()
-	session.Options = &sessions.Options{Path: "/", MaxAge: int(time.Unix(absolute, 0).Sub(now).Seconds()), Secure: true, HttpOnly: true, SameSite: http.SameSiteLaxMode}
+	session.Options = &sessions.Options{Path: "/", MaxAge: int(time.Unix(absolute, 0).Sub(now).Seconds()), Secure: policy.Secure, HttpOnly: true, SameSite: http.SameSiteLaxMode}
 	return store.Save(c.Request(), c.Response(), session)
 }
 
-func clearSession(c *echo.Context, store *sessions.CookieStore) error {
-	session, err := store.Get(c.Request(), "__Host-mia_session")
+func clearSession(c *echo.Context, store *sessions.CookieStore, policy CookiePolicy) error {
+	session, err := store.Get(c.Request(), policy.SessionName)
 	if err != nil {
-		session = sessions.NewSession(store, "__Host-mia_session")
+		session = sessions.NewSession(store, policy.SessionName)
 	}
-	session.Options = &sessions.Options{Path: "/", MaxAge: -1, Secure: true, HttpOnly: true, SameSite: http.SameSiteLaxMode}
+	session.Options = &sessions.Options{Path: "/", MaxAge: -1, Secure: policy.Secure, HttpOnly: true, SameSite: http.SameSiteLaxMode}
 	if err := store.Save(c.Request(), c.Response(), session); err != nil {
 		return fmt.Errorf("clear auth session: %w", err)
 	}
@@ -413,9 +429,25 @@ func New(options Options) (*Server, AuthRouteRegistrar, error) {
 	application.GET("/*", staticHandler(options.DocRoot))
 	application.HEAD("/*", staticHandler(options.DocRoot))
 	limiter := NewLimiter(50_000)
-	server := &Server{Echo: application, Sessions: store, limiter: limiter, resolver: resolver, routes: make(map[string]routeRegistration)}
-	application.Use(recoverMiddleware(logger), requestMiddleware(logger), securityHeaders, server.rateLimitMiddleware, csrfMiddleware, server.acceptMiddleware)
+	policy, err := resolveCookiePolicy(options.CookiePolicy)
+	if err != nil {
+		return nil, AuthRouteRegistrar{}, err
+	}
+	server := &Server{Echo: application, Sessions: store, limiter: limiter, resolver: resolver, routes: make(map[string]routeRegistration), cookiePolicy: policy}
+	application.Use(recoverMiddleware(logger), requestMiddleware(logger), securityHeaders, server.rateLimitMiddleware, server.csrfMiddleware, server.acceptMiddleware)
 	return server, AuthRouteRegistrar{server: server}, nil
+}
+
+func resolveCookiePolicy(policy CookiePolicy) (CookiePolicy, error) {
+	production := CookiePolicy{SessionName: "__Host-mia_session", CSRFName: "__Host-mia_csrf", Secure: true}
+	local := CookiePolicy{SessionName: "mia_session", CSRFName: "mia_csrf"}
+	if policy == (CookiePolicy{}) || policy == production {
+		return production, nil
+	}
+	if policy == local {
+		return local, nil
+	}
+	return CookiePolicy{}, errors.New("invalid cookie policy")
 }
 
 func loadSessionStore(dataDir string) (*sessions.CookieStore, error) {
@@ -506,18 +538,25 @@ func securityHeaders(next echo.HandlerFunc) echo.HandlerFunc {
 
 // csrfMiddleware applies same-origin CSRF protection to unsafe requests and
 // supplies a host-only token cookie for the frontend.
-func csrfMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
+func (server *Server) csrfMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
 	return func(c *echo.Context) error {
 		if !isAPIPath(c.Request().URL.Path) {
 			return next(c)
 		}
-		cookie, err := c.Request().Cookie("__Host-mia_csrf")
-		if errors.Is(err, http.ErrNoCookie) {
+		var cookie *http.Cookie
+		for _, candidate := range c.Request().Cookies() {
+			if candidate.Name != server.cookiePolicy.CSRFName {
+				continue
+			}
+			if cookie != nil {
+				return NewError(CodeCSRFInvalid)
+			}
+			cookie = candidate
+		}
+		if cookie == nil {
 			token := randomToken(32)
-			http.SetCookie(c.Response(), &http.Cookie{Name: "__Host-mia_csrf", Value: token, Path: "/", Secure: true, SameSite: http.SameSiteLaxMode})
+			server.setCSRFCookie(c, token)
 			cookie = &http.Cookie{Value: token}
-		} else if err != nil {
-			return NewError(CodeCSRFInvalid)
 		}
 		if isSafeMethod(c.Request().Method) {
 			return next(c)
@@ -527,6 +566,10 @@ func csrfMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
 		}
 		return next(c)
 	}
+}
+
+func (server *Server) setCSRFCookie(c *echo.Context, token string) {
+	http.SetCookie(c.Response(), &http.Cookie{Name: server.cookiePolicy.CSRFName, Value: token, Path: "/", Secure: server.cookiePolicy.Secure, SameSite: http.SameSiteLaxMode})
 }
 
 func isSafeMethod(method string) bool {
