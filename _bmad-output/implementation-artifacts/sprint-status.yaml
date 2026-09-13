@@ -29,7 +29,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 # - Retrospective appends its action items to action_items; the status view surfaces open ones
 generated: 08-29-2026 17:56
-last_updated: 08-31-2026 10:00
+last_updated: 09-13-2026 14:26
 project: mia
 project_key: NOKEY
 tracking_system: file-system
@@ -50,3 +50,18 @@ development_status:
   1-12-text-to-speech: done
   1-13-account-deletion-and-audit-log-api: done
   epic-1-retrospective: optional
+
+  epic-2: backlog
+  2-1-protect-browser-responses-and-bound-error-disclosure: backlog
+  2-2-discover-and-extend-browser-sessions-safely: backlog
+  2-3-manage-invitations-through-delivery-ambiguity: backlog
+  2-4-discover-account-capabilities-and-administration-targets: backlog
+  2-5-inspect-mfa-state-and-recover-lost-factors: backlog
+  2-6-observe-and-continue-mobile-verification: backlog
+  2-7-understand-course-readiness-and-confirm-destructive-course-a: backlog
+  2-8-discover-and-resume-the-active-tutoring-session: backlog
+  2-9-observe-and-control-current-tutoring-work: backlog
+  2-10-follow-tutoring-summary-generation-and-regeneration: backlog
+  2-11-request-mentoring-and-complete-eligible-work: backlog
+  2-12-resolve-and-grant-mentor-targets-safely: backlog
+  epic-2-retrospective: optional

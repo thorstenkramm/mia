@@ -97,3 +97,87 @@
     lifecycle registry, de-identified audit fingerprints, and the administrator
     audit-log endpoint.
   done_checkpoint: true
+- id: "14"
+  title: Protect browser responses and bound error disclosure
+  description: >-
+    Apply no-store protection to every API representation and return bounded,
+    valid JSON:API errors that disclose only safe registry information.
+  spec_checkpoint: false
+  done_checkpoint: true
+- id: "15"
+  title: Discover and extend browser sessions safely
+  description: >-
+    Provide authoritative browser-session discovery, explicit idle extension,
+    and logout-safe cookie and CSRF transitions without background refreshes.
+  spec_checkpoint: false
+  done_checkpoint: true
+- id: "16"
+  title: Manage invitations through delivery ambiguity
+  description: >-
+    Expose authorized invitation delivery state and bind invitation mutations
+    to reviewed ETags so ambiguous SMTP outcomes are safely reconciled.
+  spec_checkpoint: false
+  done_checkpoint: true
+- id: "17"
+  title: Discover account capabilities and administration targets
+  description: >-
+    Return authoritative scoped capabilities and administrator-safe account
+    discovery with minimal disclosure and precondition-bound mutations.
+  spec_checkpoint: false
+  done_checkpoint: true
+- id: "18"
+  title: Inspect MFA state and recover lost factors
+  description: >-
+    Provide safe MFA lifecycle discovery and scoped lost-factor recovery while
+    preserving secret redaction, atomic cleanup, and exact session effects.
+  spec_checkpoint: false
+  done_checkpoint: true
+- id: "19"
+  title: Observe and continue mobile verification
+  description: >-
+    Provide authoritative mobile-verification lifecycle and resend state that
+    preserves expiry, code, and failure counts without exposing sensitive data.
+  spec_checkpoint: false
+  done_checkpoint: true
+- id: "20"
+  title: Understand course readiness and confirm destructive course actions
+  description: >-
+    Expose viewer-safe, current course readiness and bind destructive course
+    actions to reviewed state so stale operations cannot change course data.
+  spec_checkpoint: false
+  done_checkpoint: true
+- id: "21"
+  title: Discover and resume the active tutoring session
+  description: >-
+    Let students discover their single active tutoring session across courses
+    to resume it safely after reloads, conflicts, or ambiguous creation.
+  spec_checkpoint: false
+  done_checkpoint: true
+- id: "22"
+  title: Observe and control current tutoring work
+  description: >-
+    Return authoritative current tutoring work and action eligibility for
+    submitting, queuing, stopping, retrying, reconnecting, and finishing.
+  spec_checkpoint: false
+  done_checkpoint: true
+- id: "23"
+  title: Follow tutoring summary generation and regeneration
+  description: >-
+    Represent tutoring-summary lifecycle and regeneration eligibility without
+    inferring state from content absence or exposing generic job internals.
+  spec_checkpoint: false
+  done_checkpoint: true
+- id: "24"
+  title: Request mentoring and complete eligible work
+  description: >-
+    Provide authoritative mentoring-request and completion eligibility with
+    reviewed lifecycle actions that respect current assignments and state.
+  spec_checkpoint: false
+  done_checkpoint: true
+- id: "25"
+  title: Resolve and grant mentor targets safely
+  description: >-
+    Let supervisors resolve one exact eligible staff target and grant the
+    mentor role with minimal disclosure, throttling, and ETag preconditions.
+  spec_checkpoint: false
+  done_checkpoint: true
