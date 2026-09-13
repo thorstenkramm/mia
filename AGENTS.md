@@ -442,6 +442,8 @@ hardening.
   generated artifacts and mention them in the result.
 - Follow the 120-character Markdown limit configured in
   `.markdownlint.json`; prefer shorter lines when they remain readable.
+  Remember: Markdown inside `_bmad`, `_bmad-output`, `.agents/skills`, `.opencode`, `.cache`, and `vendor` must not be
+  validated. Files are accepted as they are.
 - Follow `.agents/rules/markdown.md` for Markdown and
   `.agents/rules/toml.md` for TOML.
 
