@@ -6,6 +6,7 @@ me:
     security: [{ sessionCookie: [] }]
     responses:
       '200':
+        headers: { Cache-Control: { $ref: ../openapi.yaml#/components/headers/CacheControlNoStore } }
         description: Current user profile.
         content:
           application/vnd.api+json:
@@ -27,6 +28,7 @@ me:
           schema: { $ref: ../schemas/requests/requests.yaml#/ProfileUpdateRequestDocument }
     responses:
       '200':
+        headers: { Cache-Control: { $ref: ../openapi.yaml#/components/headers/CacheControlNoStore } }
         description: Updated user profile.
         content:
           application/vnd.api+json:
@@ -58,6 +60,7 @@ mobileChallenges:
           schema: { $ref: ../schemas/requests/requests.yaml#/MobileChallengeRequestDocument }
     responses:
       '201':
+        headers: { Cache-Control: { $ref: ../openapi.yaml#/components/headers/CacheControlNoStore } }
         description: Identity-only mobile challenge; the code is sent by SMS.
         content:
           application/vnd.api+json:
@@ -93,7 +96,9 @@ mobileChallengeVerifications:
         application/vnd.api+json:
           schema: { $ref: ../schemas/requests/requests.yaml#/MobileVerificationRequestDocument }
     responses:
-      '204': { description: Mobile verified and pending SMS factors invalidated. }
+      '204':
+        $ref: ../responses/success.yaml#/NoContent
+        description: Mobile verified and pending SMS factors invalidated.
       '400': { $ref: ../responses/errors.yaml#/BadRequest }
       '401': { $ref: ../responses/errors.yaml#/Unauthorized }
       '403':
@@ -119,7 +124,9 @@ mobileChallengeResends:
     security: [{ sessionCookie: [], csrfToken: [] }]
     parameters: [{ $ref: ../openapi.yaml#/components/parameters/ResourceID }]
     responses:
-      '204': { description: Existing code sent without extending challenge expiry. }
+      '204':
+        $ref: ../responses/success.yaml#/NoContent
+        description: Existing code sent without extending challenge expiry.
       '401': { $ref: ../responses/errors.yaml#/Unauthorized }
       '403':
         $ref: ../responses/errors.yaml#/Forbidden
@@ -142,7 +149,9 @@ mobile:
     summary: Remove verified mobile
     security: [{ sessionCookie: [], csrfToken: [] }]
     responses:
-      '204': { description: Verified mobile and pending mobile state removed. }
+      '204':
+        $ref: ../responses/success.yaml#/NoContent
+        description: Verified mobile and pending mobile state removed.
       '401': { $ref: ../responses/errors.yaml#/Unauthorized }
       '403':
         $ref: ../responses/errors.yaml#/Forbidden
@@ -159,11 +168,12 @@ avatar:
     security: [{ sessionCookie: [] }]
     responses:
       '200':
-        description: Metadata-free PNG with ETag and private no-cache headers.
+        description: Metadata-free PNG protected by Cache-Control no-store without a validator-based cache exception.
+        headers:
+          Cache-Control: { $ref: ../openapi.yaml#/components/headers/CacheControlNoStore }
         content:
           image/png:
             schema: { $ref: ../schemas/json-api/documents.yaml#/BinaryPayload }
-      '304': { description: The If-None-Match validator matched. }
       '401': { $ref: ../responses/errors.yaml#/Unauthorized }
       '403':
         $ref: ../responses/errors.yaml#/Forbidden
@@ -185,7 +195,9 @@ avatar:
         image/png:
           schema: { $ref: ../schemas/requests/requests.yaml#/ImageUploadRequest }
     responses:
-      '204': { description: Normalized PNG avatar saved. }
+      '204':
+        $ref: ../responses/success.yaml#/NoContent
+        description: Normalized PNG avatar saved.
       '401': { $ref: ../responses/errors.yaml#/Unauthorized }
       '403':
         $ref: ../responses/errors.yaml#/Forbidden
@@ -201,7 +213,9 @@ avatar:
     summary: Delete avatar
     security: [{ sessionCookie: [], csrfToken: [] }]
     responses:
-      '204': { description: Avatar deleted; absence is idempotent. }
+      '204':
+        $ref: ../responses/success.yaml#/NoContent
+        description: Avatar deleted; absence is idempotent.
       '401': { $ref: ../responses/errors.yaml#/Unauthorized }
       '403':
         $ref: ../responses/errors.yaml#/Forbidden
@@ -223,7 +237,9 @@ roles:
         application/vnd.api+json:
           schema: { $ref: ../schemas/requests/requests.yaml#/RoleGrantRequestDocument }
     responses:
-      '204': { description: Role granted immediately; an existing grant is idempotent. }
+      '204':
+        $ref: ../responses/success.yaml#/NoContent
+        description: Role granted immediately; an existing grant is idempotent.
       '400': { $ref: ../responses/errors.yaml#/BadRequest }
       '401': { $ref: ../responses/errors.yaml#/Unauthorized }
       '403':
@@ -252,7 +268,9 @@ account:
     security: [{ sessionCookie: [], csrfToken: [] }]
     parameters: [{ $ref: ../openapi.yaml#/components/parameters/ResourceID }]
     responses:
-      '204': { description: Account and operational data deleted. }
+      '204':
+        $ref: ../responses/success.yaml#/NoContent
+        description: Account and operational data deleted.
       '400': { $ref: ../responses/errors.yaml#/BadRequest }
       '401': { $ref: ../responses/errors.yaml#/Unauthorized }
       '403':

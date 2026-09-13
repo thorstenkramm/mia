@@ -164,6 +164,14 @@ operator-managed reverse proxy; MIA does not expose TLS certificate settings.
 
 The reverse proxy must pass `/api/v1/tutor-responses/{id}/events` responses
 incrementally and disable response buffering for that Server-Sent Events route.
+It must preserve MIA's `Cache-Control: no-store` header on every `/api` response
+or strengthen it with an equivalent no-storage policy; it must never replace it
+with a cacheable policy. Proxy caching, stale replay, and response buffering must
+be disabled for all `/api` routes. If the proxy generates an API error itself, it
+must return a complete valid UTF-8 JSON:API error no larger than 65,536 bytes,
+exclude upstream bodies and internal diagnostics, set
+`Content-Type: application/vnd.api+json`, and include `Cache-Control: no-store`.
+The preferred configuration is to pass MIA's API errors through unchanged.
 
 #### `http.listen`
 

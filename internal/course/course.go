@@ -3,7 +3,6 @@ package course
 
 import (
 	"context"
-	"crypto/sha256"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -1306,25 +1305,24 @@ func (service *Service) PutLogo(ctx context.Context, courseID, actorID string, d
 	return change.Finish(true)
 }
 
-func (service *Service) Logo(ctx context.Context, courseID, actorID string) ([]byte, string, error) {
+func (service *Service) Logo(ctx context.Context, courseID, actorID string) ([]byte, error) {
 	service.logoMu.RLock()
 	defer service.logoMu.RUnlock()
 	if _, err := loadScoped(ctx, service.database, courseID, actorID, false); err != nil {
-		return nil, "", err
+		return nil, err
 	}
 	path, err := service.logoPath(courseID)
 	if err != nil {
-		return nil, "", err
+		return nil, err
 	}
 	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
-		return nil, "", ErrLogoNotFound
+		return nil, ErrLogoNotFound
 	}
 	if err != nil {
-		return nil, "", fmt.Errorf("read course logo: %w", err)
+		return nil, fmt.Errorf("read course logo: %w", err)
 	}
-	digest := sha256.Sum256(data)
-	return data, fmt.Sprintf("\"%x\"", digest), nil
+	return data, nil
 }
 
 func (service *Service) DeleteLogo(ctx context.Context, courseID, actorID string) error {

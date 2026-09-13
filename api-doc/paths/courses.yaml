@@ -9,6 +9,7 @@ courses:
       - { $ref: ../openapi.yaml#/components/parameters/PageOffset }
     responses:
       '200':
+        headers: { Cache-Control: { $ref: ../openapi.yaml#/components/headers/CacheControlNoStore } }
         description: Paginated visible courses.
         content:
           application/vnd.api+json:
@@ -33,6 +34,7 @@ courses:
           schema: { $ref: ../schemas/requests/requests.yaml#/CourseCreateRequestDocument }
     responses:
       '201':
+        headers: { Cache-Control: { $ref: ../openapi.yaml#/components/headers/CacheControlNoStore } }
         description: Created inactive course.
         content:
           application/vnd.api+json:
@@ -63,6 +65,7 @@ course:
     parameters: [{ $ref: ../openapi.yaml#/components/parameters/ResourceID }]
     responses:
       '200':
+        headers: { Cache-Control: { $ref: ../openapi.yaml#/components/headers/CacheControlNoStore } }
         description: Visible course.
         content:
           application/vnd.api+json:
@@ -88,6 +91,7 @@ course:
           schema: { $ref: ../schemas/requests/requests.yaml#/CourseUpdateRequestDocument }
     responses:
       '200':
+        headers: { Cache-Control: { $ref: ../openapi.yaml#/components/headers/CacheControlNoStore } }
         description: Updated course.
         content:
           application/vnd.api+json:
@@ -118,7 +122,9 @@ course:
     security: [{ sessionCookie: [], csrfToken: [] }]
     parameters: [{ $ref: ../openapi.yaml#/components/parameters/ResourceID }]
     responses:
-      '204': { description: Inactive course and its course-scoped data deleted. }
+      '204':
+        $ref: ../responses/success.yaml#/NoContent
+        description: Inactive course and its course-scoped data deleted.
       '401': { $ref: ../responses/errors.yaml#/Unauthorized }
       '403':
         $ref: ../responses/errors.yaml#/Forbidden
@@ -142,6 +148,7 @@ activations:
     parameters: [{ $ref: ../openapi.yaml#/components/parameters/ResourceID }]
     responses:
       '200':
+        headers: { Cache-Control: { $ref: ../openapi.yaml#/components/headers/CacheControlNoStore } }
         description: Activated course.
         content:
           application/vnd.api+json:
@@ -167,6 +174,7 @@ deactivations:
     parameters: [{ $ref: ../openapi.yaml#/components/parameters/ResourceID }]
     responses:
       '200':
+        headers: { Cache-Control: { $ref: ../openapi.yaml#/components/headers/CacheControlNoStore } }
         description: Deactivated course.
         content:
           application/vnd.api+json:
@@ -195,6 +203,7 @@ supervisors:
       - { $ref: ../openapi.yaml#/components/parameters/PageOffset }
     responses:
       '200':
+        headers: { Cache-Control: { $ref: ../openapi.yaml#/components/headers/CacheControlNoStore } }
         description: Paginated supervisor identifiers.
         content:
           application/vnd.api+json:
@@ -222,7 +231,9 @@ supervisors:
         application/vnd.api+json:
           schema: { $ref: ../schemas/requests/requests.yaml#/SupervisorAssignmentRequestDocument }
     responses:
-      '204': { description: Supervisor assigned; an existing assignment is idempotent. }
+      '204':
+        $ref: ../responses/success.yaml#/NoContent
+        description: Supervisor assigned; an existing assignment is idempotent.
       '400': { $ref: ../responses/errors.yaml#/BadRequest }
       '401': { $ref: ../responses/errors.yaml#/Unauthorized }
       '403':
@@ -250,7 +261,9 @@ supervisor:
       - { $ref: ../openapi.yaml#/components/parameters/ResourceID }
       - { $ref: ../openapi.yaml#/components/parameters/UserID }
     responses:
-      '204': { description: Supervisor assignment removed. }
+      '204':
+        $ref: ../responses/success.yaml#/NoContent
+        description: Supervisor assignment removed.
       '401': { $ref: ../responses/errors.yaml#/Unauthorized }
       '403':
         $ref: ../responses/errors.yaml#/Forbidden
@@ -274,11 +287,12 @@ logo:
     parameters: [{ $ref: ../openapi.yaml#/components/parameters/ResourceID }]
     responses:
       '200':
-        description: Metadata-free PNG with ETag and private no-cache headers.
+        description: Metadata-free PNG protected by Cache-Control no-store without a validator-based cache exception.
+        headers:
+          Cache-Control: { $ref: ../openapi.yaml#/components/headers/CacheControlNoStore }
         content:
           image/png:
             schema: { $ref: ../schemas/json-api/documents.yaml#/BinaryPayload }
-      '304': { description: The If-None-Match validator matched. }
       '401': { $ref: ../responses/errors.yaml#/Unauthorized }
       '403':
         $ref: ../responses/errors.yaml#/Forbidden
@@ -300,7 +314,9 @@ logo:
         image/png:
           schema: { $ref: ../schemas/requests/requests.yaml#/ImageUploadRequest }
     responses:
-      '204': { description: Normalized PNG logo saved. }
+      '204':
+        $ref: ../responses/success.yaml#/NoContent
+        description: Normalized PNG logo saved.
       '401': { $ref: ../responses/errors.yaml#/Unauthorized }
       '403':
         $ref: ../responses/errors.yaml#/Forbidden
@@ -318,7 +334,9 @@ logo:
     security: [{ sessionCookie: [], csrfToken: [] }]
     parameters: [{ $ref: ../openapi.yaml#/components/parameters/ResourceID }]
     responses:
-      '204': { description: Logo deleted; absence is idempotent. }
+      '204':
+        $ref: ../responses/success.yaml#/NoContent
+        description: Logo deleted; absence is idempotent.
       '401': { $ref: ../responses/errors.yaml#/Unauthorized }
       '403':
         $ref: ../responses/errors.yaml#/Forbidden
@@ -340,6 +358,7 @@ students:
       - { $ref: ../openapi.yaml#/components/parameters/PageOffset }
     responses:
       '200':
+        headers: { Cache-Control: { $ref: ../openapi.yaml#/components/headers/CacheControlNoStore } }
         description: Paginated course-student memberships.
         content:
           application/vnd.api+json:
@@ -368,6 +387,7 @@ students:
           schema: { $ref: ../schemas/requests/requests.yaml#/CourseStudentRequestDocument }
     responses:
       '201':
+        headers: { Cache-Control: { $ref: ../openapi.yaml#/components/headers/CacheControlNoStore } }
         description: Created or existing membership.
         content:
           application/vnd.api+json:
@@ -400,7 +420,9 @@ student:
       - { $ref: ../openapi.yaml#/components/parameters/ResourceID }
       - { $ref: ../openapi.yaml#/components/parameters/UserID }
     responses:
-      '204': { description: Membership and student course-scoped data removed. }
+      '204':
+        $ref: ../responses/success.yaml#/NoContent
+        description: Membership and student course-scoped data removed.
       '401': { $ref: ../responses/errors.yaml#/Unauthorized }
       '403':
         $ref: ../responses/errors.yaml#/Forbidden
@@ -426,7 +448,9 @@ temporaryPasswords:
         application/vnd.api+json:
           schema: { $ref: ../schemas/requests/requests.yaml#/TemporaryPasswordRequestDocument }
     responses:
-      '204': { description: 'Temporary password set, sessions invalidated, and replacement required.' }
+      '204':
+        $ref: ../responses/success.yaml#/NoContent
+        description: Temporary password set, sessions invalidated, and replacement required.
       '400': { $ref: ../responses/errors.yaml#/BadRequest }
       '401': { $ref: ../responses/errors.yaml#/Unauthorized }
       '403':
@@ -450,7 +474,9 @@ bans:
     security: [{ sessionCookie: [], csrfToken: [] }]
     parameters: [{ $ref: ../openapi.yaml#/components/parameters/ResourceID }]
     responses:
-      '204': { description: Student banned and security artifacts invalidated. }
+      '204':
+        $ref: ../responses/success.yaml#/NoContent
+        description: Student banned and security artifacts invalidated.
       '401': { $ref: ../responses/errors.yaml#/Unauthorized }
       '403':
         $ref: ../responses/errors.yaml#/Forbidden
@@ -466,7 +492,9 @@ bans:
     security: [{ sessionCookie: [], csrfToken: [] }]
     parameters: [{ $ref: ../openapi.yaml#/components/parameters/ResourceID }]
     responses:
-      '204': { description: Student unbanned and security artifacts invalidated. }
+      '204':
+        $ref: ../responses/success.yaml#/NoContent
+        description: Student unbanned and security artifacts invalidated.
       '401': { $ref: ../responses/errors.yaml#/Unauthorized }
       '403':
         $ref: ../responses/errors.yaml#/Forbidden

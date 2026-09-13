@@ -1,0 +1,3 @@
+NoContent:
+  description: Successful operation with no response body.
+  headers: { Cache-Control: { $ref: ../openapi.yaml#/components/headers/CacheControlNoStore } }

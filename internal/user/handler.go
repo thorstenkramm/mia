@@ -270,11 +270,11 @@ func getAvatar(service *Service) echo.HandlerFunc {
 		if err != nil {
 			return err
 		}
-		data, etag, err := service.Avatar(c.Request().Context(), accountID)
+		data, err := service.Avatar(c.Request().Context(), accountID)
 		if err != nil {
 			return profileError(err)
 		}
-		return httpserver.PrivateAvatarPNG(c, data, etag)
+		return httpserver.PrivateAvatarPNG(c, data)
 	}
 }
 

@@ -52,7 +52,6 @@ func getHandler(service *Service) echo.HandlerFunc {
 			return speechError(err)
 		}
 		header := c.Response().Header()
-		header.Set("Cache-Control", "private, no-cache")
 		header.Set("Content-Disposition", fmt.Sprintf(`inline; filename="%s.mp3"`, audio.Speech.ID))
 		header.Set("X-Content-Type-Options", "nosniff")
 		return c.Blob(http.StatusOK, "audio/mpeg", audio.Data)

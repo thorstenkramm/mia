@@ -12,6 +12,7 @@ auditEvents:
       - { $ref: ../openapi.yaml#/components/parameters/PageOffset }
     responses:
       '200':
+        headers: { Cache-Control: { $ref: ../openapi.yaml#/components/headers/CacheControlNoStore } }
         description: Paginated audit events.
         content:
           application/vnd.api+json:

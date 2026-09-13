@@ -69,6 +69,8 @@ func TestMentoringRoutesUseSharedProtocolAndHideScope(t *testing.T) {
 	avatar := mentoringHTTP(server, http.MethodGet, profilePath+"/avatar", mentorCookie, "", "", nil)
 	assert.Equal(t, http.StatusOK, avatar.Code)
 	assert.Equal(t, "image/png", avatar.Header().Get("Content-Type"))
+	assert.Equal(t, "no-store", avatar.Header().Get("Cache-Control"))
+	assert.Empty(t, avatar.Header().Get("ETag"))
 	assert.Equal(t, "avatar-png", avatar.Body.String())
 	require.NoError(t, fixture.service.RemoveStudentMentor(context.Background(), fixture.course, fixture.student,
 		fixture.mentor, fixture.supervisor))

@@ -1,12 +1,20 @@
 package httpserver
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 	"strconv"
 	"strings"
 
 	"github.com/labstack/echo/v5"
+)
+
+const maxErrorBodyBytes = 64 << 10
+
+const (
+	genericErrorTitle  = "Request Failed"
+	genericErrorDetail = "The request could not be completed."
 )
 
 // Code identifies a registered, stable MIA domain error.
@@ -105,6 +113,17 @@ const (
 type definition struct {
 	status        int
 	title, detail string
+}
+
+type errorDocument struct {
+	Errors []errorObject `json:"errors"`
+}
+
+type errorObject struct {
+	Status string `json:"status"`
+	Code   string `json:"code"`
+	Title  string `json:"title"`
+	Detail string `json:"detail"`
 }
 
 var errorRegistry = map[Code]definition{
@@ -259,10 +278,43 @@ func errorHandler(c *echo.Context, err error) {
 		}
 		return
 	}
-	c.Response().Header().Set(echo.HeaderContentType, jsonAPI)
-	if writeErr := c.JSON(problem.status, map[string]any{"errors": []map[string]string{{"status": strconv.Itoa(problem.status), "code": string(code), "title": problem.title, "detail": problem.detail}}}); writeErr != nil {
+	body, marshalErr := boundedErrorDocument(code, problem)
+	if marshalErr != nil {
+		c.Logger().Error("encode HTTP error response", "request_id",
+			c.Response().Header().Get(echo.HeaderXRequestID), "code", string(code))
+		code = CodeInternalError
+		problem = errorRegistry[code]
+		body = []byte(`{"errors":[{"status":"500","code":"internal_error","title":"Request Failed","detail":"The request could not be completed."}]}`)
+	}
+	if writeErr := c.Blob(problem.status, jsonAPI, body); writeErr != nil {
 		c.Logger().Error("write HTTP error response", "error", writeErr)
 	}
+}
+
+// boundedErrorDocument serializes only registry-owned fields. It replaces an
+// oversized definition as a complete document rather than truncating JSON.
+func boundedErrorDocument(code Code, problem definition) ([]byte, error) {
+	body, err := marshalErrorDocument(code, problem)
+	if err != nil {
+		return nil, err
+	}
+	if len(body) <= maxErrorBodyBytes {
+		return body, nil
+	}
+	return marshalErrorDocument(code, definition{
+		status: problem.status,
+		title:  genericErrorTitle,
+		detail: genericErrorDetail,
+	})
+}
+
+func marshalErrorDocument(code Code, problem definition) ([]byte, error) {
+	return json.Marshal(errorDocument{Errors: []errorObject{{
+		Status: strconv.Itoa(problem.status),
+		Code:   string(code),
+		Title:  problem.title,
+		Detail: problem.detail,
+	}}})
 }
 
 func frameworkError(status int) (Code, int) {

@@ -277,12 +277,11 @@ func (service *Service) MentorStudentProfile(ctx context.Context, courseID, stud
 
 // MentorStudentAvatar returns the assigned student's avatar while the explicit assignment remains current.
 func (service *Service) MentorStudentAvatar(ctx context.Context, courseID, studentID,
-	mentorID string) ([]byte, string, error) {
+	mentorID string) ([]byte, error) {
 	if service.profiles == nil {
-		return nil, "", errors.New("mentor student profile service is not configured")
+		return nil, errors.New("mentor student profile service is not configured")
 	}
 	var data []byte
-	var etag string
 	err := miSQLite.WithTx(ctx, service.database, func(tx *sql.Tx) error {
 		assigned, err := studentMentorExists(ctx, tx, courseID, studentID, mentorID)
 		if err != nil {
@@ -291,14 +290,14 @@ func (service *Service) MentorStudentAvatar(ctx context.Context, courseID, stude
 		if !assigned {
 			return ErrNotFound
 		}
-		avatar, validator, err := service.profiles.Avatar(ctx, studentID)
+		avatar, err := service.profiles.Avatar(ctx, studentID)
 		if errors.Is(err, user.ErrAvatarNotFound) {
 			return ErrNotFound
 		}
-		data, etag = avatar, validator
+		data = avatar
 		return err
 	})
-	return data, etag, err
+	return data, err
 }
 
 func (service *Service) List(ctx context.Context, courseID, actorID string, input ListInput) (SessionListResult, error) {

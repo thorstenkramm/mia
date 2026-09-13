@@ -411,12 +411,12 @@ func mentorStudentAvatarHandler(service *Service) echo.HandlerFunc {
 		if err != nil {
 			return err
 		}
-		data, etag, err := service.MentorStudentAvatar(c.Request().Context(), c.Param("course_id"),
+		data, err := service.MentorStudentAvatar(c.Request().Context(), c.Param("course_id"),
 			c.Param("student_id"), mentorID)
 		if err != nil {
 			return mentoringError(err)
 		}
-		return httpserver.PrivateAvatarPNG(c, data, etag)
+		return httpserver.PrivateAvatarPNG(c, data)
 	}
 }
 

@@ -140,7 +140,7 @@ func TestAvatarHandlersNormalizeServeSafelyAndDeleteIdempotently(t *testing.T) {
 	}
 	download := profileRequest(t, server, http.MethodGet, "/api/v1/users/me/avatar", session, csrf, "", "")
 	if download.Code != http.StatusOK || download.Header().Get("Content-Type") != "image/png" ||
-		download.Header().Get("Cache-Control") != "private, no-cache" || download.Header().Get("ETag") == "" ||
+		download.Header().Get("Cache-Control") != "no-store" || download.Header().Get("ETag") != "" ||
 		download.Header().Get("X-Content-Type-Options") != "nosniff" {
 		t.Fatalf("avatar GET = %d headers=%v", download.Code, download.Header())
 	}
@@ -153,10 +153,10 @@ func TestAvatarHandlersNormalizeServeSafelyAndDeleteIdempotently(t *testing.T) {
 	}
 	conditionalRequest := httptest.NewRequest(http.MethodGet, "http://mia.test/api/v1/users/me/avatar", nil)
 	conditionalRequest.AddCookie(session)
-	conditionalRequest.Header.Set("If-None-Match", download.Header().Get("ETag"))
+	conditionalRequest.Header.Set("If-None-Match", `"stale-validator"`)
 	conditional := httptest.NewRecorder()
 	server.Echo.ServeHTTP(conditional, conditionalRequest)
-	if conditional.Code != http.StatusNotModified {
+	if conditional.Code != http.StatusOK || conditional.Header().Get("Cache-Control") != "no-store" {
 		t.Fatalf("conditional avatar status = %d", conditional.Code)
 	}
 	for range 2 {

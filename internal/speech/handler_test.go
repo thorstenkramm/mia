@@ -63,6 +63,7 @@ func TestSpeechRoutesShareGenerationServeMP3AndHideOwnership(t *testing.T) {
 	audio := speechHTTP(server, http.MethodGet, path, studentCookie, "")
 	assert.Equal(t, http.StatusOK, audio.Code)
 	assert.Equal(t, "audio/mpeg", audio.Header().Get("Content-Type"))
+	assert.Equal(t, "no-store", audio.Header().Get("Cache-Control"))
 	assert.Equal(t, "nosniff", audio.Header().Get("X-Content-Type-Options"))
 	assert.Equal(t, "ID3audio", audio.Body.String())
 

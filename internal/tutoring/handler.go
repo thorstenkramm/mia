@@ -273,7 +273,6 @@ func eventsHandler(manager *Manager) echo.HandlerFunc {
 		}
 		response := c.Response()
 		response.Header().Set(echo.HeaderContentType, "text/event-stream")
-		response.Header().Set(echo.HeaderCacheControl, "no-store")
 		response.Header().Set("X-Accel-Buffering", "no")
 		response.WriteHeader(http.StatusOK)
 		if err := writeSSE(response, snapshot); err != nil {

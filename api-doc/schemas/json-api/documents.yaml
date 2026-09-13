@@ -1,5 +1,8 @@
 ErrorDocument:
-  description: JSON:API error document produced by the central error registry.
+  description: >-
+    Complete UTF-8 JSON:API error document produced only from the safe central registry. The encoded document is no
+    larger than 65,536 bytes; an oversized registry definition is replaced atomically with bounded generic text while
+    preserving status and stable code.
   type: object
   required: [errors]
   properties:
@@ -13,14 +16,18 @@ ErrorDocument:
           status:
             type: string
             description: HTTP status as a string.
+            maxLength: 3
           code:
             type: string
             description: Stable registered MIA error code.
+            maxLength: 128
           title:
             type: string
+            maxLength: 1024
           detail:
             type: string
             description: Neutral detail that never reveals resource existence.
+            maxLength: 65536
 PageMeta:
   description: Pagination metadata attached to every paginated collection.
   type: object

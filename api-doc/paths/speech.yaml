@@ -7,11 +7,13 @@ tutorResponseSpeech:
     parameters: [{ $ref: ../openapi.yaml#/components/parameters/ResourceID }]
     responses:
       '200':
+        headers: { Cache-Control: { $ref: ../openapi.yaml#/components/headers/CacheControlNoStore } }
         description: Existing available speech cache state.
         content:
           application/vnd.api+json:
             schema: { $ref: ../schemas/resources/resources.yaml#/GeneratedSpeechDocument }
       '202':
+        headers: { Cache-Control: { $ref: ../openapi.yaml#/components/headers/CacheControlNoStore } }
         description: Shared generation is pending after a new request or explicit retry.
         content:
           application/vnd.api+json:
@@ -39,8 +41,7 @@ tutorResponseSpeech:
         description: Current generating/failed state or the available MP3.
         headers:
           Cache-Control:
-            description: Present only for an MP3 response; always `private, no-cache`.
-            schema: { type: string, const: 'private, no-cache' }
+            $ref: ../openapi.yaml#/components/headers/CacheControlNoStore
           Content-Disposition:
             description: Present only for an MP3 response; an inline filename derived from the generated-speech ID.
             schema: { type: string, pattern: '^inline; filename="sp_[a-f0-9-]+\.mp3"$' }

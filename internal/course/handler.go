@@ -517,25 +517,20 @@ func putLogoHandler(service *Service) echo.HandlerFunc {
 
 func logoHandler(service *Service) echo.HandlerFunc {
 	// jscpd:ignore-start
-	// Course logos and staff avatars have separate authorization and cache ownership.
+	// Course logos and staff avatars have separate authorization and response ownership.
 	return func(c *echo.Context) error {
 		actorID, err := actor(c)
 		if err != nil {
 			return err
 		}
-		data, etag, err := service.Logo(c.Request().Context(), c.Param("id"), actorID)
+		data, err := service.Logo(c.Request().Context(), c.Param("id"), actorID)
 		if err != nil {
 			return courseError(err)
 		}
 		header := c.Response().Header()
 		header.Set(echo.HeaderContentType, "image/png")
-		header.Set("Cache-Control", "private, no-cache")
 		header.Set("Content-Disposition", `inline; filename="course-logo.png"`)
-		header.Set("ETag", etag)
 		header.Set("X-Content-Type-Options", "nosniff")
-		if c.Request().Header.Get("If-None-Match") == etag {
-			return c.NoContent(http.StatusNotModified)
-		}
 		return c.Blob(http.StatusOK, "image/png", data)
 	}
 	// jscpd:ignore-end

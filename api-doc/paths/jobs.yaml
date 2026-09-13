@@ -9,6 +9,7 @@ jobs:
       - { $ref: ../openapi.yaml#/components/parameters/PageOffset }
     responses:
       '200':
+        headers: { Cache-Control: { $ref: ../openapi.yaml#/components/headers/CacheControlNoStore } }
         description: Paginated administrator diagnostic job collection.
         content:
           application/vnd.api+json:
@@ -31,6 +32,7 @@ job:
     parameters: [{ $ref: ../openapi.yaml#/components/parameters/ResourceID }]
     responses:
       '200':
+        headers: { Cache-Control: { $ref: ../openapi.yaml#/components/headers/CacheControlNoStore } }
         description: Administrator diagnostic job.
         content:
           application/vnd.api+json:

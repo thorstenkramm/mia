@@ -35,7 +35,9 @@ logout:
     summary: Logout
     security: [{ sessionCookie: [], csrfToken: [] }]
     responses:
-      '204': { description: Session cleared. }
+      '204':
+        $ref: ../responses/success.yaml#/NoContent
+        description: Session cleared.
       '401': { $ref: ../responses/errors.yaml#/Unauthorized }
       '403':
         $ref: ../responses/errors.yaml#/Forbidden
@@ -82,7 +84,9 @@ passwordRecoveryRequests:
         application/vnd.api+json:
           schema: { $ref: ../schemas/requests/requests.yaml#/PasswordRecoveryRequestDocument }
     responses:
-      '204': { description: Uniform existence-hiding acceptance or throttling suppression. }
+      '204':
+        $ref: ../responses/success.yaml#/NoContent
+        description: Uniform existence-hiding acceptance or throttling suppression.
       '400': { $ref: ../responses/errors.yaml#/BadRequest }
       '403':
         $ref: ../responses/errors.yaml#/Forbidden
@@ -107,7 +111,9 @@ passwordResets:
         application/vnd.api+json:
           schema: { $ref: ../schemas/requests/requests.yaml#/PasswordResetRequestDocument }
     responses:
-      '204': { description: Reset complete without creating a session. }
+      '204':
+        $ref: ../responses/success.yaml#/NoContent
+        description: Reset complete without creating a session.
       '400': { $ref: ../responses/errors.yaml#/BadRequest }
       '403':
         $ref: ../responses/errors.yaml#/Forbidden
@@ -190,7 +196,9 @@ mfaChallengeResends:
     security: [{ sessionCookie: [], csrfToken: [] }]
     parameters: [{ $ref: ../openapi.yaml#/components/parameters/ResourceID }]
     responses:
-      '204': { description: Existing SMS code sent without extending expiry. }
+      '204':
+        $ref: ../responses/success.yaml#/NoContent
+        description: Existing SMS code sent without extending expiry.
       '401': { $ref: ../responses/errors.yaml#/Unauthorized }
       '403':
         $ref: ../responses/errors.yaml#/Forbidden
@@ -216,6 +224,7 @@ mfaManagementProofs:
           schema: { $ref: ../schemas/requests/requests.yaml#/MFAManagementProofRequestDocument }
     responses:
       '201':
+        headers: { Cache-Control: { $ref: ../openapi.yaml#/components/headers/CacheControlNoStore } }
         description: Single-use proof resource.
         content:
           application/vnd.api+json:
@@ -248,6 +257,7 @@ mfaEnrollments:
           schema: { $ref: ../schemas/requests/requests.yaml#/MFAEnrollmentRequestDocument }
     responses:
       '201':
+        headers: { Cache-Control: { $ref: ../openapi.yaml#/components/headers/CacheControlNoStore } }
         description: Pending enrollment; TOTP responses also include a provisioning URI.
         content:
           application/vnd.api+json:
@@ -279,6 +289,7 @@ mfaEnrollmentVerifications:
           schema: { $ref: ../schemas/requests/requests.yaml#/MFAEnrollmentVerificationRequestDocument }
     responses:
       '200':
+        headers: { Cache-Control: { $ref: ../openapi.yaml#/components/headers/CacheControlNoStore } }
         description: One-time recovery codes issued by successful activation.
         content:
           application/vnd.api+json:
@@ -306,7 +317,9 @@ mfaEnrollmentResends:
     security: [{ sessionCookie: [], csrfToken: [] }]
     parameters: [{ $ref: ../openapi.yaml#/components/parameters/ResourceID }]
     responses:
-      '204': { description: Existing SMS code sent without extending expiry. }
+      '204':
+        $ref: ../responses/success.yaml#/NoContent
+        description: Existing SMS code sent without extending expiry.
       '401': { $ref: ../responses/errors.yaml#/Unauthorized }
       '403':
         $ref: ../responses/errors.yaml#/Forbidden
@@ -329,7 +342,9 @@ mfaEnrollment:
       - { $ref: ../openapi.yaml#/components/parameters/ResourceID }
       - { $ref: ../openapi.yaml#/components/parameters/MFAProof }
     responses:
-      '204': { description: Pending enrollment cancelled or active factor disabled. }
+      '204':
+        $ref: ../responses/success.yaml#/NoContent
+        description: Pending enrollment cancelled or active factor disabled.
       '401': { $ref: ../responses/errors.yaml#/Unauthorized }
       '403':
         $ref: ../responses/errors.yaml#/Forbidden
@@ -341,6 +356,7 @@ mfaEnrollment:
 
 Session:
   description: Current singleton auth-sessions resource.
+  headers: { Cache-Control: { $ref: ../openapi.yaml#/components/headers/CacheControlNoStore } }
   content:
     application/vnd.api+json:
       schema: { $ref: ../schemas/resources/resources.yaml#/AuthSessionDocument }

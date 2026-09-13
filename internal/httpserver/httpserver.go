@@ -187,17 +187,12 @@ func (server *Server) SessionCookieName() string { return server.cookiePolicy.Se
 // CSRFCookieName returns this server's immutable CSRF cookie name.
 func (server *Server) CSRFCookieName() string { return server.cookiePolicy.CSRFName }
 
-// PrivateAvatarPNG writes a normalized private avatar with shared cache and download-safety headers.
-func PrivateAvatarPNG(c *echo.Context, data []byte, etag string) error {
+// PrivateAvatarPNG writes a normalized private avatar with shared download-safety headers.
+func PrivateAvatarPNG(c *echo.Context, data []byte) error {
 	header := c.Response().Header()
 	header.Set(echo.HeaderContentType, "image/png")
-	header.Set("Cache-Control", "private, no-cache")
 	header.Set("Content-Disposition", `inline; filename="avatar.png"`)
-	header.Set("ETag", etag)
 	header.Set("X-Content-Type-Options", "nosniff")
-	if c.Request().Header.Get("If-None-Match") == etag {
-		return c.NoContent(http.StatusNotModified)
-	}
 	return c.Blob(http.StatusOK, "image/png", data)
 }
 
@@ -434,8 +429,55 @@ func New(options Options) (*Server, AuthRouteRegistrar, error) {
 		return nil, AuthRouteRegistrar{}, err
 	}
 	server := &Server{Echo: application, Sessions: store, limiter: limiter, resolver: resolver, routes: make(map[string]routeRegistration), cookiePolicy: policy}
-	application.Use(recoverMiddleware(logger), requestMiddleware(logger), securityHeaders, server.rateLimitMiddleware, server.csrfMiddleware, server.acceptMiddleware)
+	application.Use(apiResponsePolicy, recoverMiddleware(logger), requestMiddleware(logger), securityHeaders,
+		server.rateLimitMiddleware, server.csrfMiddleware, server.acceptMiddleware)
 	return server, AuthRouteRegistrar{server: server}, nil
+}
+
+// apiResponseWriter enforces the protected-response policy at the transport
+// boundary, after Echo has run every Before callback.
+type apiResponseWriter struct {
+	http.ResponseWriter
+}
+
+func (writer *apiResponseWriter) WriteHeader(statusCode int) {
+	writer.protect()
+	writer.ResponseWriter.WriteHeader(statusCode)
+}
+
+func (writer *apiResponseWriter) Write(body []byte) (int, error) {
+	writer.protect()
+	return writer.ResponseWriter.Write(body)
+}
+
+func (writer *apiResponseWriter) FlushError() error {
+	writer.protect()
+	return http.NewResponseController(writer.ResponseWriter).Flush()
+}
+
+func (writer *apiResponseWriter) Unwrap() http.ResponseWriter {
+	return writer.ResponseWriter
+}
+
+func (writer *apiResponseWriter) protect() {
+	writer.Header().Set(echo.HeaderCacheControl, "no-store")
+}
+
+// apiResponsePolicy installs the protected-response writer before any API
+// handler or error mapper can commit headers.
+func apiResponsePolicy(next echo.HandlerFunc) echo.HandlerFunc {
+	return func(c *echo.Context) error {
+		if !isAPIPath(c.Request().URL.Path) {
+			return next(c)
+		}
+		response, err := echo.UnwrapResponse(c.Response())
+		if err != nil {
+			return fmt.Errorf("unwrap API response: %w", err)
+		}
+		response.Header().Set(echo.HeaderCacheControl, "no-store")
+		response.ResponseWriter = &apiResponseWriter{ResponseWriter: response.ResponseWriter}
+		return next(c)
+	}
 }
 
 func resolveCookiePolicy(policy CookiePolicy) (CookiePolicy, error) {

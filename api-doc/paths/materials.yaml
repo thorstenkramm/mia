@@ -10,6 +10,7 @@ courseMaterials:
       - { $ref: ../openapi.yaml#/components/parameters/PageOffset }
     responses:
       '200':
+        headers: { Cache-Control: { $ref: ../openapi.yaml#/components/headers/CacheControlNoStore } }
         description: Paginated materials visible to the caller.
         content:
           application/vnd.api+json:
@@ -38,6 +39,7 @@ courseMaterials:
           schema: { $ref: ../schemas/requests/requests.yaml#/MaterialCreateRequestDocument }
     responses:
       '201':
+        headers: { Cache-Control: { $ref: ../openapi.yaml#/components/headers/CacheControlNoStore } }
         description: Created draft material.
         content:
           application/vnd.api+json:
@@ -69,6 +71,7 @@ material:
     parameters: [{ $ref: ../openapi.yaml#/components/parameters/ResourceID }]
     responses:
       '200':
+        headers: { Cache-Control: { $ref: ../openapi.yaml#/components/headers/CacheControlNoStore } }
         description: Material visible to the caller.
         content:
           application/vnd.api+json:
@@ -94,6 +97,7 @@ material:
           schema: { $ref: ../schemas/requests/requests.yaml#/MaterialBriefUpdateRequestDocument }
     responses:
       '200':
+        headers: { Cache-Control: { $ref: ../openapi.yaml#/components/headers/CacheControlNoStore } }
         description: Updated material; changed approved content has approval revoked.
         content:
           application/vnd.api+json:
@@ -122,7 +126,9 @@ material:
     security: [{ sessionCookie: [], csrfToken: [] }]
     parameters: [{ $ref: ../openapi.yaml#/components/parameters/ResourceID }]
     responses:
-      '204': { description: 'Material source, generated brief, and retrievable files deleted.' }
+      '204':
+        $ref: ../responses/success.yaml#/NoContent
+        description: Material source, generated brief, and retrievable files deleted.
       '401': { $ref: ../responses/errors.yaml#/Unauthorized }
       '403':
         $ref: ../responses/errors.yaml#/Forbidden
@@ -144,6 +150,7 @@ materialFinalizations:
     parameters: [{ $ref: ../openapi.yaml#/components/parameters/ResourceID }]
     responses:
       '200':
+        headers: { Cache-Control: { $ref: ../openapi.yaml#/components/headers/CacheControlNoStore } }
         description: Ready link material or processing file-backed material.
         content:
           application/vnd.api+json:
@@ -172,6 +179,7 @@ materialApprovals:
     parameters: [{ $ref: ../openapi.yaml#/components/parameters/ResourceID }]
     responses:
       '200':
+        headers: { Cache-Control: { $ref: ../openapi.yaml#/components/headers/CacheControlNoStore } }
         description: Approved course-wide ready material.
         content:
           application/vnd.api+json:
@@ -195,6 +203,7 @@ materialApprovals:
     parameters: [{ $ref: ../openapi.yaml#/components/parameters/ResourceID }]
     responses:
       '200':
+        headers: { Cache-Control: { $ref: ../openapi.yaml#/components/headers/CacheControlNoStore } }
         description: Course-wide ready material with approval revoked.
         content:
           application/vnd.api+json:
@@ -221,6 +230,7 @@ materialFiles:
     parameters: [{ $ref: ../openapi.yaml#/components/parameters/ResourceID }]
     responses:
       '200':
+        headers: { Cache-Control: { $ref: ../openapi.yaml#/components/headers/CacheControlNoStore } }
         description: Bounded material-file collection.
         content:
           application/vnd.api+json:
@@ -249,6 +259,7 @@ materialFiles:
           schema: { $ref: ../schemas/requests/requests.yaml#/MaterialFileUploadRequest }
     responses:
       '201':
+        headers: { Cache-Control: { $ref: ../openapi.yaml#/components/headers/CacheControlNoStore } }
         description: Uploaded draft material file.
         content:
           application/vnd.api+json:
@@ -276,6 +287,7 @@ materialFile:
     parameters: [{ $ref: ../openapi.yaml#/components/parameters/ResourceID }]
     responses:
       '200':
+        headers: { Cache-Control: { $ref: ../openapi.yaml#/components/headers/CacheControlNoStore } }
         description: Material-file metadata visible to the caller.
         content:
           application/vnd.api+json:
@@ -295,7 +307,9 @@ materialFile:
     security: [{ sessionCookie: [], csrfToken: [] }]
     parameters: [{ $ref: ../openapi.yaml#/components/parameters/ResourceID }]
     responses:
-      '204': { description: 'File, normalized content, and file jobs deleted.' }
+      '204':
+        $ref: ../responses/success.yaml#/NoContent
+        description: File, normalized content, and file jobs deleted.
       '401': { $ref: ../responses/errors.yaml#/Unauthorized }
       '403':
         $ref: ../responses/errors.yaml#/Forbidden
@@ -317,6 +331,7 @@ materialFileDownload:
     parameters: [{ $ref: ../openapi.yaml#/components/parameters/ResourceID }]
     responses:
       '200':
+        headers: { Cache-Control: { $ref: ../openapi.yaml#/components/headers/CacheControlNoStore } }
         description: Source bytes with stored media type and safe attachment disposition.
         content:
           application/pdf: { schema: { $ref: ../schemas/json-api/documents.yaml#/BinaryPayload } }
@@ -343,6 +358,7 @@ materialFileContent:
     parameters: [{ $ref: ../openapi.yaml#/components/parameters/ResourceID }]
     responses:
       '200':
+        headers: { Cache-Control: { $ref: ../openapi.yaml#/components/headers/CacheControlNoStore } }
         description: Normalized content segments as NDJSON.
         content:
           application/x-ndjson:
@@ -367,6 +383,7 @@ materialJobs:
       - { $ref: ../openapi.yaml#/components/parameters/PageOffset }
     responses:
       '200':
+        headers: { Cache-Control: { $ref: ../openapi.yaml#/components/headers/CacheControlNoStore } }
         description: Paginated subject-scoped jobs without provider diagnostics.
         content:
           application/vnd.api+json:

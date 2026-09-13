@@ -1459,6 +1459,17 @@ required by its workload.
 - The configured base data directory must exist. MIA creates missing required
   subdirectories at startup.
 - HTTPS through a reverse proxy is mandatory.
+- Every public and authenticated API response uses `Cache-Control: no-store`,
+  including JSON, errors, bodyless responses, images, downloads, audio,
+  normalized-content streams, and SSE. Authenticated images have no cache or
+  validator exception. Reverse proxies must preserve or strengthen this policy,
+  disable API storage and replay, and avoid buffering SSE.
+- API error bodies are complete valid UTF-8 JSON:API documents no larger than
+  65,536 bytes. They contain only stable safe registry fields and never expose
+  secrets, credentials, cookies, personal data, internal paths, prompts, message
+  bodies, or provider payloads. An oversized error is replaced with bounded
+  generic text while preserving its mapped status, stable code, and
+  existence-hiding behavior; MIA never byte-truncates an error document.
 
 ## Data lifecycle
 

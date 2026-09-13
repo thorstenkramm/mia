@@ -10,6 +10,7 @@ courseTutoringSessions:
       - { $ref: ../openapi.yaml#/components/parameters/PageOffset }
     responses:
       '200':
+        headers: { Cache-Control: { $ref: ../openapi.yaml#/components/headers/CacheControlNoStore } }
         description: Paginated owner or assigned-supervisor session collection.
         content:
           application/vnd.api+json:
@@ -34,11 +35,13 @@ courseTutoringSessions:
           schema: { $ref: ../schemas/requests/requests.yaml#/TutoringSessionCreateRequestDocument }
     responses:
       '200':
+        headers: { Cache-Control: { $ref: ../openapi.yaml#/components/headers/CacheControlNoStore } }
         description: Existing active session returned for an identical request replay.
         content:
           application/vnd.api+json:
             schema: { $ref: ../schemas/resources/resources.yaml#/TutoringSessionDocument }
       '201':
+        headers: { Cache-Control: { $ref: ../openapi.yaml#/components/headers/CacheControlNoStore } }
         description: New active tutoring session.
         content:
           application/vnd.api+json:
@@ -70,6 +73,7 @@ tutoringSession:
     parameters: [{ $ref: ../openapi.yaml#/components/parameters/ResourceID }]
     responses:
       '200':
+        headers: { Cache-Control: { $ref: ../openapi.yaml#/components/headers/CacheControlNoStore } }
         description: Session status or completed-session review.
         content:
           application/vnd.api+json:
@@ -91,6 +95,7 @@ tutoringSession:
           schema: { $ref: ../schemas/requests/requests.yaml#/TutoringSessionSummaryUpdateRequestDocument }
     responses:
       '200':
+        headers: { Cache-Control: { $ref: ../openapi.yaml#/components/headers/CacheControlNoStore } }
         description: Supervisor-attributed corrected summary.
         content:
           application/vnd.api+json:
@@ -118,6 +123,7 @@ tutoringSessionCompletion:
     parameters: [{ $ref: ../openapi.yaml#/components/parameters/ResourceID }]
     responses:
       '200':
+        headers: { Cache-Control: { $ref: ../openapi.yaml#/components/headers/CacheControlNoStore } }
         description: Completed session with summary generation queued atomically.
         content:
           application/vnd.api+json:
@@ -138,7 +144,9 @@ tutoringSessionSummaryGenerations:
     security: [{ sessionCookie: [], csrfToken: [] }]
     parameters: [{ $ref: ../openapi.yaml#/components/parameters/ResourceID }]
     responses:
-      '204': { description: Summary generation queued. }
+      '204':
+        $ref: ../responses/success.yaml#/NoContent
+        description: Summary generation queued.
       '401': { $ref: ../responses/errors.yaml#/Unauthorized }
       '403': { $ref: ../responses/errors.yaml#/Forbidden }
       '404': { $ref: ../responses/errors.yaml#/NotFound }
@@ -159,6 +167,7 @@ tutoringSessionMessages:
       - { $ref: ../openapi.yaml#/components/parameters/PageOffset }
     responses:
       '200':
+        headers: { Cache-Control: { $ref: ../openapi.yaml#/components/headers/CacheControlNoStore } }
         description: Owner transcript, or assigned-supervisor transcript after completion.
         content:
           application/vnd.api+json:
@@ -183,11 +192,13 @@ tutoringSessionMessages:
           schema: { $ref: ../schemas/requests/requests.yaml#/StudentMessageCreateRequestDocument }
     responses:
       '200':
+        headers: { Cache-Control: { $ref: ../openapi.yaml#/components/headers/CacheControlNoStore } }
         description: Existing message and initial response returned for an identical replay.
         content:
           application/vnd.api+json:
             schema: { $ref: ../schemas/resources/resources.yaml#/StudentMessageDocument }
       '201':
+        headers: { Cache-Control: { $ref: ../openapi.yaml#/components/headers/CacheControlNoStore } }
         description: New student message and queued tutor response.
         content:
           application/vnd.api+json:
@@ -220,6 +231,7 @@ tutoringSessionMaterials:
       - { $ref: ../openapi.yaml#/components/parameters/PageOffset }
     responses:
       '200':
+        headers: { Cache-Control: { $ref: ../openapi.yaml#/components/headers/CacheControlNoStore } }
         description: Used material visible to the owner, or to an assigned supervisor after completion.
         content:
           application/vnd.api+json:
@@ -241,6 +253,7 @@ studentMessageResponseRetries:
     parameters: [{ $ref: ../openapi.yaml#/components/parameters/ResourceID }]
     responses:
       '201':
+        headers: { Cache-Control: { $ref: ../openapi.yaml#/components/headers/CacheControlNoStore } }
         description: Linked queued retry response.
         content:
           application/vnd.api+json:
@@ -261,7 +274,9 @@ tutorResponseInterruptions:
     security: [{ sessionCookie: [], csrfToken: [] }]
     parameters: [{ $ref: ../openapi.yaml#/components/parameters/ResourceID }]
     responses:
-      '204': { description: Response interrupted; retained partial content is unchanged. }
+      '204':
+        $ref: ../responses/success.yaml#/NoContent
+        description: Response interrupted; retained partial content is unchanged.
       '401': { $ref: ../responses/errors.yaml#/Unauthorized }
       '403': { $ref: ../responses/errors.yaml#/Forbidden }
       '404': { $ref: ../responses/errors.yaml#/NotFound }
@@ -279,6 +294,7 @@ tutorResponseEvents:
     parameters: [{ $ref: ../openapi.yaml#/components/parameters/ResourceID }]
     responses:
       '200':
+        headers: { Cache-Control: { $ref: ../openapi.yaml#/components/headers/CacheControlNoStore } }
         description: SSE snapshot followed by sanitized MIA delta and state events.
         content:
           text/event-stream:

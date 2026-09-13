@@ -2,36 +2,47 @@ BadRequest:
   description: >-
     Malformed JSON:API structure, including duplicate or unknown members, malformed JSON, or malformed Unicode
     (`malformed_request`).
+  headers: { Cache-Control: { $ref: ../openapi.yaml#/components/headers/CacheControlNoStore } }
   content: { application/vnd.api+json: { schema: { $ref: ../schemas/json-api/documents.yaml#/ErrorDocument } } }
 NotAcceptable:
   description: Parameterized-only JSON:API Accept header (`not_acceptable`).
+  headers: { Cache-Control: { $ref: ../openapi.yaml#/components/headers/CacheControlNoStore } }
   content: { application/vnd.api+json: { schema: { $ref: ../schemas/json-api/documents.yaml#/ErrorDocument } } }
 RequestTooLarge:
   description: JSON request exceeds 1 MiB (`request_too_large`).
+  headers: { Cache-Control: { $ref: ../openapi.yaml#/components/headers/CacheControlNoStore } }
   content: { application/vnd.api+json: { schema: { $ref: ../schemas/json-api/documents.yaml#/ErrorDocument } } }
 UnsupportedMediaType:
   description: JSON request content type is not exactly application/vnd.api+json (`unsupported_media_type`).
+  headers: { Cache-Control: { $ref: ../openapi.yaml#/components/headers/CacheControlNoStore } }
   content: { application/vnd.api+json: { schema: { $ref: ../schemas/json-api/documents.yaml#/ErrorDocument } } }
 Unauthorized:
   description: Authentication failed (`auth_unauthenticated` or endpoint-specific credentials code).
+  headers: { Cache-Control: { $ref: ../openapi.yaml#/components/headers/CacheControlNoStore } }
   content: { application/vnd.api+json: { schema: { $ref: ../schemas/json-api/documents.yaml#/ErrorDocument } } }
 Forbidden:
   description: CSRF, stage, role, or scope authorization failed.
+  headers: { Cache-Control: { $ref: ../openapi.yaml#/components/headers/CacheControlNoStore } }
   content: { application/vnd.api+json: { schema: { $ref: ../schemas/json-api/documents.yaml#/ErrorDocument } } }
 NotFound:
   description: Resource not found or hidden from this caller.
+  headers: { Cache-Control: { $ref: ../openapi.yaml#/components/headers/CacheControlNoStore } }
   content: { application/vnd.api+json: { schema: { $ref: ../schemas/json-api/documents.yaml#/ErrorDocument } } }
 Conflict:
   description: Current resource state conflicts with the operation.
+  headers: { Cache-Control: { $ref: ../openapi.yaml#/components/headers/CacheControlNoStore } }
   content: { application/vnd.api+json: { schema: { $ref: ../schemas/json-api/documents.yaml#/ErrorDocument } } }
 Unprocessable:
   description: Valid request document has invalid resource data or domain state.
+  headers: { Cache-Control: { $ref: ../openapi.yaml#/components/headers/CacheControlNoStore } }
   content: { application/vnd.api+json: { schema: { $ref: ../schemas/json-api/documents.yaml#/ErrorDocument } } }
 RateLimited:
   description: Request rate limited (`rate_limited` or `auth_login_throttled`).
   headers:
+    Cache-Control: { $ref: ../openapi.yaml#/components/headers/CacheControlNoStore }
     Retry-After: { schema: { type: integer, minimum: 1 } }
   content: { application/vnd.api+json: { schema: { $ref: ../schemas/json-api/documents.yaml#/ErrorDocument } } }
 ServiceUnavailable:
   description: A configured optional service required for the operation is unavailable.
+  headers: { Cache-Control: { $ref: ../openapi.yaml#/components/headers/CacheControlNoStore } }
   content: { application/vnd.api+json: { schema: { $ref: ../schemas/json-api/documents.yaml#/ErrorDocument } } }

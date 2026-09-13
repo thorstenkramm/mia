@@ -9,6 +9,7 @@ invitations:
       - { $ref: ../openapi.yaml#/components/parameters/PageOffset }
     responses:
       '200':
+        headers: { Cache-Control: { $ref: ../openapi.yaml#/components/headers/CacheControlNoStore } }
         description: Paginated invitations with unified `meta.has_more` and navigation links.
         content:
           application/vnd.api+json:
@@ -35,6 +36,7 @@ invitations:
           schema: { $ref: ../schemas/requests/requests.yaml#/InvitationCreateRequestDocument }
     responses:
       '201':
+        headers: { Cache-Control: { $ref: ../openapi.yaml#/components/headers/CacheControlNoStore } }
         description: Created invitation.
         content:
           application/vnd.api+json:
@@ -65,6 +67,7 @@ invitation:
     parameters: [{ $ref: ../openapi.yaml#/components/parameters/ResourceID }]
     responses:
       '200':
+        headers: { Cache-Control: { $ref: ../openapi.yaml#/components/headers/CacheControlNoStore } }
         description: Invitation visible to the caller.
         content:
           application/vnd.api+json:
@@ -84,7 +87,9 @@ invitation:
     security: [{ sessionCookie: [], csrfToken: [] }]
     parameters: [{ $ref: ../openapi.yaml#/components/parameters/ResourceID }]
     responses:
-      '204': { description: Pending invitation revoked or faulty invitation deleted. }
+      '204':
+        $ref: ../responses/success.yaml#/NoContent
+        description: Pending invitation revoked or faulty invitation deleted.
       '401': { $ref: ../responses/errors.yaml#/Unauthorized }
       '403':
         $ref: ../responses/errors.yaml#/Forbidden
@@ -105,7 +110,9 @@ invitationResends:
     security: [{ sessionCookie: [], csrfToken: [] }]
     parameters: [{ $ref: ../openapi.yaml#/components/parameters/ResourceID }]
     responses:
-      '204': { description: Pending invitation token rotated and delivery admitted. }
+      '204':
+        $ref: ../responses/success.yaml#/NoContent
+        description: Pending invitation token rotated and delivery admitted.
       '401': { $ref: ../responses/errors.yaml#/Unauthorized }
       '403':
         $ref: ../responses/errors.yaml#/Forbidden
@@ -131,6 +138,7 @@ invitationPreviews:
           schema: { $ref: ../schemas/requests/requests.yaml#/InvitationPreviewRequestDocument }
     responses:
       '200':
+        headers: { Cache-Control: { $ref: ../openapi.yaml#/components/headers/CacheControlNoStore } }
         description: Platform and role for a valid pending invitation.
         content:
           application/vnd.api+json:
@@ -160,6 +168,7 @@ invitationAcceptances:
           schema: { $ref: ../schemas/requests/requests.yaml#/InvitationAcceptanceRequestDocument }
     responses:
       '201':
+        headers: { Cache-Control: { $ref: ../openapi.yaml#/components/headers/CacheControlNoStore } }
         description: Identity-only user created; the account signs in through normal login.
         content:
           application/vnd.api+json:

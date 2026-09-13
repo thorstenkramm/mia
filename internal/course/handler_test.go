@@ -245,7 +245,7 @@ func TestCourseLogoHandlersNormalizeAuthorizeAndDelete(t *testing.T) {
 	}
 	downloaded := courseHTTP(t, server, http.MethodGet, "/api/v1/courses/"+created.ID+"/logo", session, csrf, "", nil)
 	if downloaded.Code != http.StatusOK || downloaded.Header().Get("Content-Type") != "image/png" ||
-		downloaded.Header().Get("ETag") == "" || downloaded.Header().Get("Cache-Control") != "private, no-cache" {
+		downloaded.Header().Get("ETag") != "" || downloaded.Header().Get("Cache-Control") != "no-store" {
 		t.Fatalf("logo download = %d headers=%v", downloaded.Code, downloaded.Header())
 	}
 	configuration, err := png.DecodeConfig(bytes.NewReader(downloaded.Body.Bytes()))

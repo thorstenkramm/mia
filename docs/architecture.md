@@ -230,6 +230,12 @@ attributes, writable fields, relationships, filters, ordering, status codes,
 stable errors, authorization, redaction, idempotency, and field-level bounds. The
 authentication and session family is the first complete vertical slice.
 
+The HTTP kernel installs `Cache-Control: no-store` for every `/api` response at
+the final header-commit boundary, so feature handlers cannot weaken the policy.
+The central error mapper serializes only registry-owned fields, measures the
+complete encoded JSON:API document, and substitutes a fixed generic definition
+instead of truncating any document that would exceed 65,536 bytes.
+
 ## Startup Storage Integrity
 
 Validated source uploads are atomically renamed to their deterministic path

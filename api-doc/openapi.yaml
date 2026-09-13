@@ -9,7 +9,9 @@ info:
     Transport contract for the implemented MIA API. JSON documents use JSON:API 1.1.
     API routes have no trailing-slash variant. Unknown routes and unsupported methods reach ordinary JSON:API 404/405
     handling before Accept negotiation. Raw image uploads, multipart uploads, binary downloads, and NDJSON streams are
-    exempt from JSON:API Accept negotiation.
+    exempt from JSON:API Accept negotiation. Every API response, including bodyless, binary, streaming, and error
+    responses, carries `Cache-Control: no-store`; reverse proxies must preserve or strengthen that policy. JSON:API
+    error bodies are complete valid UTF-8 documents no larger than 65,536 bytes and contain only safe registry fields.
 servers:
   - url: /
 tags:
@@ -174,6 +176,10 @@ paths:
   /api/v1/audit-events:
     $ref: paths/audit.yaml#/auditEvents
 components:
+  headers:
+    CacheControlNoStore:
+      description: Prohibits browsers and intermediaries from storing or replaying the API response.
+      schema: { type: string, const: no-store }
   securitySchemes:
     sessionCookie:
       type: apiKey

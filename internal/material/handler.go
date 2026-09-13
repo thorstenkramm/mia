@@ -304,7 +304,6 @@ func downloadHandler(service *Service, content bool) echo.HandlerFunc {
 		}()
 		header := c.Response().Header()
 		header.Set("X-Content-Type-Options", "nosniff")
-		header.Set("Cache-Control", "private, no-store")
 		if content {
 			header.Set("Content-Disposition", `attachment; filename="content.jsonl"`)
 			return c.Stream(http.StatusOK, "application/x-ndjson", opened)

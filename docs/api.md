@@ -35,6 +35,15 @@ audio, and tutor-response event streams use their operation-specific media
 types. Unknown routes and unsupported methods reach ordinary API `404` or `405`
 handling before JSON:API `Accept` negotiation.
 
+Every public or authenticated API response carries `Cache-Control: no-store`,
+including JSON, errors, bodyless success, images, downloads, generated audio,
+normalized-content streams, and SSE. Authenticated images have no validator or
+`304` caching exception. API error bodies use the JSON:API media type, contain
+only stable safe registry fields, and are emitted as complete valid UTF-8 JSON no
+larger than 65,536 bytes. Oversized definitions are replaced with generic safe
+text while preserving the mapped status and stable code; responses are never
+byte-truncated.
+
 ### Identifiers and time
 
 - Resource IDs are opaque and clients never derive authorization from them.
@@ -330,7 +339,7 @@ changing its aspect ratio, and stores PNG.
 Avatar download is represented by an authorized URL in the user resource; it
 never exposes an internal filesystem path. Download authorization is identical
 to profile-view authorization for that user and responses use `image/png`, safe
-content headers, a strong content ETag, and `Cache-Control: private, no-cache`.
+content headers, and `Cache-Control: no-store` without validators or `304` reuse.
 
 Current-profile responses deliberately omit the mobile number. Mobile challenge
 responses never return the destination or verification code. Raw avatar upload
@@ -437,8 +446,8 @@ results follow the shared zero-row stale-result rule.
 
 An administrator or assigned supervisor may mutate the course logo. GET uses the
 same authorization as viewing the course and returns the normalized PNG with a
-strong content ETag and `Cache-Control: private, no-cache`. Upload limits and
-normalization match avatars.
+`Cache-Control: no-store` policy and no validator-based caching exception. Upload
+limits and normalization match avatars.
 
 Mentor removal drops affected student assignments and returns open mentoring work
 to supervisor triage in one transaction. Course deletion remains restricted to

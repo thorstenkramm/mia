@@ -3,7 +3,6 @@ package user
 import (
 	"context"
 	"crypto/rand"
-	"crypto/sha256"
 	"crypto/subtle"
 	"database/sql"
 	"errors"
@@ -456,25 +455,24 @@ func (service *Service) PutAvatar(ctx context.Context, accountID string, pngData
 	return change.Finish(true)
 }
 
-func (service *Service) Avatar(ctx context.Context, accountID string) ([]byte, string, error) {
+func (service *Service) Avatar(ctx context.Context, accountID string) ([]byte, error) {
 	service.avatarMu.RLock()
 	defer service.avatarMu.RUnlock()
 	if _, err := service.GetSelf(ctx, accountID); err != nil {
-		return nil, "", err
+		return nil, err
 	}
 	path, err := service.avatarPath(accountID)
 	if err != nil {
-		return nil, "", err
+		return nil, err
 	}
 	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
-		return nil, "", ErrAvatarNotFound
+		return nil, ErrAvatarNotFound
 	}
 	if err != nil {
-		return nil, "", fmt.Errorf("read avatar: %w", err)
+		return nil, fmt.Errorf("read avatar: %w", err)
 	}
-	digest := sha256.Sum256(data)
-	return data, fmt.Sprintf("\"%x\"", digest), nil
+	return data, nil
 }
 
 func (service *Service) DeleteAvatar(ctx context.Context, accountID string) error {

@@ -51,8 +51,8 @@ development_status:
   1-13-account-deletion-and-audit-log-api: done
   epic-1-retrospective: optional
 
-  epic-2: backlog
-  2-1-protect-browser-responses-and-bound-error-disclosure: backlog
+  epic-2: in-progress
+  2-1-protect-browser-responses-and-bound-error-disclosure: done
   2-2-discover-and-extend-browser-sessions-safely: backlog
   2-3-manage-invitations-through-delivery-ambiguity: backlog
   2-4-discover-account-capabilities-and-administration-targets: backlog
