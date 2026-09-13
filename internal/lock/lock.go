@@ -9,7 +9,10 @@ import (
 	"syscall"
 )
 
-var ErrHeld = errors.New("data directory is locked")
+// ErrHeld reports that another process already holds the data-directory lock.
+// Errors returned for that condition name the directory and wrap this sentinel,
+// so callers keep matching it with errors.Is.
+var ErrHeld = errors.New("locked by another mia process")
 
 // Lock holds an exclusive, non-blocking data-directory lock.
 type Lock struct {
@@ -34,7 +37,11 @@ func Acquire(dataDir string) (*Lock, error) {
 			return nil, errors.Join(fmt.Errorf("acquire lock: %w", err), fmt.Errorf("close lock file: %w", closeErr))
 		}
 		if errors.Is(err, syscall.EWOULDBLOCK) {
-			return nil, ErrHeld
+			// The lock lives on the open descriptor, not the file name, so the
+			// message must not invite an operator to delete a seemingly stale
+			// mia.lock. Removing it would let a second process lock a new inode
+			// while the first still runs.
+			return nil, fmt.Errorf("data directory %s is %w; stop that process before running this command", dataDir, ErrHeld)
 		}
 		return nil, fmt.Errorf("acquire lock: %w", err)
 	}
