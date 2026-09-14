@@ -24,12 +24,14 @@ func Register(server *httpserver.Server, service *Service) {
 	server.AuthenticatedPOST("/api/v1/courses/:id/deactivations", deactivateHandler(service))
 	server.AuthenticatedGET("/api/v1/courses/:id/supervisors", supervisorsHandler(service))
 	server.AuthenticatedPOST("/api/v1/courses/:id/supervisors", assignSupervisorHandler(service))
+	server.AuthenticatedGET("/api/v1/courses/:id/supervisors/:user_id", supervisorHandler(service))
 	server.AuthenticatedDELETE("/api/v1/courses/:id/supervisors/:user_id", removeSupervisorHandler(service))
 	server.AuthenticatedRoute(http.MethodGet, "/api/v1/courses/:id/logo", httpserver.RepresentationBinary, logoHandler(service))
 	server.AuthenticatedRoute(http.MethodPut, "/api/v1/courses/:id/logo", httpserver.RepresentationImageUpload, putLogoHandler(service))
 	server.AuthenticatedDELETE("/api/v1/courses/:id/logo", deleteLogoHandler(service))
 	server.AuthenticatedGET("/api/v1/courses/:id/students", listStudentsHandler(service))
 	server.AuthenticatedPOST("/api/v1/courses/:id/students", addStudentHandler(service))
+	server.AuthenticatedGET("/api/v1/courses/:id/students/:user_id", studentHandler(service))
 	server.AuthenticatedDELETE("/api/v1/courses/:id/students/:user_id", removeStudentHandler(service))
 	server.AuthenticatedPOST("/api/v1/users/:id/temporary-passwords", temporaryPasswordHandler(service))
 	server.AuthenticatedPOST("/api/v1/users/:id/bans", banStudentHandler(service))
@@ -180,6 +182,7 @@ func getHandler(service *Service) echo.HandlerFunc {
 			return courseError(err)
 		}
 		// jscpd:ignore-end
+		c.Response().Header().Set("ETag", value.ETag)
 		return courseResponse(c, http.StatusOK, value)
 	}
 }
@@ -252,7 +255,8 @@ func deleteHandler(service *Service) echo.HandlerFunc {
 		if err != nil {
 			return err
 		}
-		if err := service.Delete(c.Request().Context(), c.Param("id"), actorID); err != nil {
+		if err := service.DeleteReviewed(c.Request().Context(), c.Param("id"), actorID,
+			c.Request().Header.Get("If-Match")); err != nil {
 			return mutationError(c, service, actorID, err)
 		}
 		return c.NoContent(http.StatusNoContent)
@@ -310,10 +314,32 @@ func removeSupervisorHandler(service *Service) echo.HandlerFunc {
 		if err != nil {
 			return err
 		}
-		if err := service.RemoveSupervisor(c.Request().Context(), c.Param("id"), c.Param("user_id"), actorID); err != nil {
+		if err := service.RemoveSupervisorReviewed(c.Request().Context(), c.Param("id"), c.Param("user_id"), actorID,
+			c.Request().Header.Get("If-Match")); err != nil {
 			return mutationError(c, service, actorID, err)
 		}
 		return c.NoContent(http.StatusNoContent)
+	}
+}
+
+func supervisorHandler(service *Service) echo.HandlerFunc {
+	return func(c *echo.Context) error {
+		actorID, err := actor(c)
+		if err != nil {
+			return err
+		}
+		value, err := service.SupervisorAssignment(c.Request().Context(), c.Param("id"), c.Param("user_id"), actorID)
+		if err != nil {
+			return courseError(err)
+		}
+		c.Response().Header().Set("ETag", value.ETag)
+		resource := map[string]any{"type": "course-supervisor-assignments", "id": value.CourseID + ":" + value.SupervisorID,
+			"attributes": map[string]any{"remove": actionResource(value.Action)},
+			"relationships": map[string]any{
+				"course":     map[string]any{"data": map[string]string{"type": "courses", "id": value.CourseID}},
+				"supervisor": map[string]any{"data": map[string]string{"type": "users", "id": value.SupervisorID}},
+			}}
+		return jsonAPI(c, http.StatusOK, map[string]any{"data": resource})
 	}
 }
 
@@ -399,10 +425,26 @@ func removeStudentHandler(service *Service) echo.HandlerFunc {
 		if err != nil {
 			return err
 		}
-		if err := service.RemoveStudent(c.Request().Context(), c.Param("id"), c.Param("user_id"), actorID); err != nil {
+		if err := service.RemoveStudentReviewed(c.Request().Context(), c.Param("id"), c.Param("user_id"), actorID,
+			c.Request().Header.Get("If-Match")); err != nil {
 			return mutationError(c, service, actorID, err)
 		}
 		return c.NoContent(http.StatusNoContent)
+	}
+}
+
+func studentHandler(service *Service) echo.HandlerFunc {
+	return func(c *echo.Context) error {
+		actorID, err := actor(c)
+		if err != nil {
+			return err
+		}
+		value, err := service.StudentMembership(c.Request().Context(), c.Param("id"), c.Param("user_id"), actorID)
+		if err != nil {
+			return courseError(err)
+		}
+		c.Response().Header().Set("ETag", value.ETag)
+		return jsonAPI(c, http.StatusOK, map[string]any{"data": membershipReviewResource(value)})
 	}
 }
 
@@ -633,26 +675,66 @@ func courseResource(value Course) map[string]any {
 		"activated_at":   httpserver.FormatOptionalInstant(value.ActivatedAt),
 		"deactivated_at": httpserver.FormatOptionalInstant(value.DeactivatedAt),
 		"updated_at":     httpserver.FormatOptionalInstant(value.UpdatedAt), "logo_url": nil,
+		"readiness": map[string]any{
+			"state":       value.Readiness.State,
+			"activation":  actionResource(value.Readiness.Activation),
+			"new_session": actionResource(value.Readiness.NewSession),
+			"blockers":    readinessBlockers(value.Readiness.VisibleBlockers),
+		},
+		"delete": actionResource(value.DeleteAction),
 	}
 	if value.HasLogo {
 		attributes["logo_url"] = "/api/v1/courses/" + value.ID + "/logo"
 	}
-	supervisors := make([]map[string]string, len(value.SupervisorIDs))
-	for index, id := range value.SupervisorIDs {
-		supervisors[index] = map[string]string{"type": "users", "id": id}
+	supervisors := make([]map[string]string, 0, len(value.SupervisorIDs))
+	if value.ViewerIsStudent && !value.ViewerIsSupervisor && !value.ViewerIsAdministrator {
+		attributes["description"] = nil
+		attributes["curriculum"] = nil
+		attributes["learning_goals"] = nil
+		attributes["ai_tutor_instructions"] = nil
+		attributes["language"] = nil
+	}
+	for _, id := range value.SupervisorIDs {
+		if !value.ViewerIsStudent || value.ViewerIsSupervisor || value.ViewerIsAdministrator {
+			supervisors = append(supervisors, map[string]string{"type": "users", "id": id})
+		}
 	}
 	return map[string]any{"type": "courses", "id": value.ID, "attributes": attributes,
 		"relationships": map[string]any{"supervisors": map[string]any{"data": supervisors}}}
 }
 
+func actionResource(value ActionEligibility) map[string]any {
+	return map[string]any{"eligible": value.Eligible, "blockers": value.Blockers, "consequences": value.Consequences}
+}
+
+func readinessBlockers(values []ReadinessBlocker) []map[string]any {
+	result := make([]map[string]any, 0, len(values))
+	for _, value := range values {
+		result = append(result, map[string]any{"id": value.ID, "link": value.Link})
+	}
+	return result
+}
+
 func membershipResource(value Membership) map[string]any {
+	return membershipResourceWithAction(value, nil)
+}
+
+func membershipReviewResource(value MembershipReview) map[string]any {
+	return membershipResourceWithAction(value.Membership, &value.Action)
+}
+
+func membershipResourceWithAction(value Membership, removal *ActionEligibility) map[string]any {
+	attributes := map[string]any{
+		"username":  value.Username,
+		"joined_at": httpserver.FormatInstant(value.JoinedAt),
+	}
+	if removal != nil {
+		attributes["remove"] = actionResource(*removal)
+	}
 	return map[string]any{
-		"type": "course-students",
-		"id":   value.ID,
-		"attributes": map[string]any{
-			"username":  value.Username,
-			"joined_at": httpserver.FormatInstant(value.JoinedAt),
-		},
+		"type":       "course-students",
+		"id":         value.ID,
+		"attributes": attributes,
 		"relationships": map[string]any{
 			"course":  map[string]any{"data": map[string]string{"type": "courses", "id": value.CourseID}},
 			"student": map[string]any{"data": map[string]string{"type": "users", "id": value.StudentID}},
@@ -692,6 +774,12 @@ func courseError(err error) error {
 		return httpserver.NewError(httpserver.CodeCourseStudentNotFound)
 	case errors.Is(err, ErrStudentInvalid):
 		return httpserver.NewError(httpserver.CodeCourseStudentInvalid)
+	case errors.Is(err, ErrPreconditionRequired):
+		return httpserver.NewError(httpserver.CodeCoursePreconditionRequired)
+	case errors.Is(err, ErrPreconditionFailed):
+		return httpserver.NewError(httpserver.CodeCoursePreconditionFailed)
+	case errors.Is(err, ErrReadinessUnavailable):
+		return httpserver.NewError(httpserver.CodeCourseReadinessUnavailable)
 	case errors.Is(err, user.ErrUsernameTaken):
 		return httpserver.NewError(httpserver.CodeUsernameTaken)
 	default:
@@ -730,6 +818,12 @@ func mutationOutcome(err error) string {
 		return "course_student_not_found"
 	case errors.Is(err, ErrStudentInvalid):
 		return "course_student_invalid"
+	case errors.Is(err, ErrPreconditionRequired):
+		return "course_precondition_required"
+	case errors.Is(err, ErrPreconditionFailed):
+		return "course_precondition_failed"
+	case errors.Is(err, ErrReadinessUnavailable):
+		return "course_readiness_unavailable"
 	case errors.Is(err, user.ErrUsernameTaken):
 		return "username_taken"
 	default:

@@ -142,38 +142,57 @@ func TestCourseHandlersCreateAndBlockActivationUntilMaterialOwnerIsWired(t *test
 	if activated.Code != http.StatusOK {
 		t.Fatalf("course activation = %d %s", activated.Code, activated.Body.String())
 	}
+	studentSession, _ := courseSession(t, server, student)
+	studentCourse := courseHTTP(t, server, http.MethodGet, "/api/v1/courses/"+document.Data.ID,
+		studentSession, "", "", nil)
+	if studentCourse.Code != http.StatusOK ||
+		!bytes.Contains(studentCourse.Body.Bytes(), []byte(`"state":"active_accepting"`)) ||
+		bytes.Contains(studentCourse.Body.Bytes(), []byte(`"learning_goals":"Learn"`)) ||
+		bytes.Contains(studentCourse.Body.Bytes(), []byte(supervisor)) {
+		t.Fatalf("student course disclosure = %d %s", studentCourse.Code, studentCourse.Body.String())
+	}
 	alreadyActive := courseHTTP(t, server, http.MethodPost, "/api/v1/courses/"+document.Data.ID+"/activations",
 		supervisorSession, supervisorCSRF, "", nil)
 	assertCourseError(t, alreadyActive, http.StatusConflict, "course_invalid_state")
-	activeDeletion := courseHTTP(t, server, http.MethodDelete, "/api/v1/courses/"+document.Data.ID,
-		adminSession, adminCSRF, "", nil)
+	activeReview := courseHTTP(t, server, http.MethodGet, "/api/v1/courses/"+document.Data.ID,
+		adminSession, "", "", nil)
+	activeDeletion := courseHTTPWithETag(t, server, http.MethodDelete, "/api/v1/courses/"+document.Data.ID,
+		adminSession, adminCSRF, activeReview.Header().Get("ETag"))
 	assertCourseError(t, activeDeletion, http.StatusConflict, "course_invalid_state")
 	deactivated := courseHTTP(t, server, http.MethodPost, "/api/v1/courses/"+document.Data.ID+"/deactivations",
 		supervisorSession, supervisorCSRF, "", nil)
 	if deactivated.Code != http.StatusOK {
 		t.Fatalf("course deactivation = %d %s", deactivated.Code, deactivated.Body.String())
 	}
+	missingPrecondition := courseHTTP(t, server, http.MethodDelete, "/api/v1/courses/"+document.Data.ID,
+		adminSession, adminCSRF, "", nil)
+	assertCourseError(t, missingPrecondition, http.StatusPreconditionRequired, "course_precondition_required")
 	denied := courseHTTP(t, server, http.MethodPost, "/api/v1/courses", supervisorSession, supervisorCSRF,
 		"application/vnd.api+json", body)
 	assertCourseError(t, denied, http.StatusForbidden, "course_unauthorized")
-	lastSupervisor := courseHTTP(t, server, http.MethodDelete,
-		"/api/v1/courses/"+document.Data.ID+"/supervisors/"+supervisor, adminSession, adminCSRF, "", nil)
+	supervisorReview := courseHTTP(t, server, http.MethodGet,
+		"/api/v1/courses/"+document.Data.ID+"/supervisors/"+supervisor, adminSession, "", "", nil)
+	lastSupervisor := courseHTTPWithETag(t, server, http.MethodDelete,
+		"/api/v1/courses/"+document.Data.ID+"/supervisors/"+supervisor, adminSession, adminCSRF,
+		supervisorReview.Header().Get("ETag"))
 	assertCourseError(t, lastSupervisor, http.StatusConflict, "course_last_supervisor")
 	var audits int
-	if err := database.QueryRow(`SELECT COUNT(*) FROM audit_events WHERE action = 'course.mutation.denied'`).Scan(&audits); err != nil || audits != 7 {
+	if err := database.QueryRow(`SELECT COUNT(*) FROM audit_events WHERE action = 'course.mutation.denied'`).Scan(&audits); err != nil || audits != 8 {
 		t.Fatalf("denied mutation audits = %d, %v", audits, err)
 	}
 	for outcome, expected := range map[string]int{
 		"course_unauthorized": 2, "course_activation_unavailable": 1, "course_invalid_state": 2,
-		"course_last_supervisor": 1, "course_student_not_found": 1,
+		"course_last_supervisor": 1, "course_student_not_found": 1, "course_precondition_required": 1,
 	} {
 		if err := database.QueryRow(`SELECT COUNT(*) FROM audit_events WHERE action = 'course.mutation.denied'
 			AND json_extract(metadata, '$.outcome_code') = ?`, outcome).Scan(&audits); err != nil || audits != expected {
 			t.Fatalf("denied mutation outcome %q count = %d, %v", outcome, audits, err)
 		}
 	}
-	deleted := courseHTTP(t, server, http.MethodDelete, "/api/v1/courses/"+document.Data.ID,
-		adminSession, adminCSRF, "", nil)
+	deleteReview := courseHTTP(t, server, http.MethodGet, "/api/v1/courses/"+document.Data.ID,
+		adminSession, "", "", nil)
+	deleted := courseHTTPWithETag(t, server, http.MethodDelete, "/api/v1/courses/"+document.Data.ID,
+		adminSession, adminCSRF, deleteReview.Header().Get("ETag"))
 	if deleted.Code != http.StatusNoContent {
 		t.Fatalf("course delete = %d %s", deleted.Code, deleted.Body.String())
 	}
@@ -233,6 +252,121 @@ func TestReviewedAccountDeletionRejectsNewSoleSupervisorAssignment(t *testing.T)
 	}
 	if accountCount != 1 || assignmentCount != 1 {
 		t.Fatalf("stale deletion mutated account or assignment: account=%d assignment=%d", accountCount, assignmentCount)
+	}
+}
+
+func TestCourseReviewRoutesProtectDestructiveActions(t *testing.T) {
+	server, database, dataDir := courseServerFixture(t)
+	admin := createAccount(t, database, "route-review-admin", user.Administrator)
+	first := createAccount(t, database, "route-review-first", user.Supervisor)
+	second := createAccount(t, database, "route-review-second", user.Supervisor)
+	third := createAccount(t, database, "route-review-third", user.Supervisor)
+	unrelated := createAccount(t, database, "route-review-unrelated", user.Supervisor)
+	student := createAccount(t, database, "route-review-student", user.Student)
+	studentActive := false
+	service := NewService(database, dataDir, nil, nil, nil,
+		func(context.Context, miSQLite.Querier, string, string) (bool, error) { return studentActive, nil }, nil, nil)
+	created, err := service.Create(context.Background(), CreateInput{ActorID: admin,
+		SupervisorIDs: []string{first, second}, Fields: preparedFields("Route reviews")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`INSERT INTO course_students
+		(id, course_id, student_user_id, joined_at) VALUES ('cst_route_review', ?, ?, ?)`, created.ID, student,
+		instant(time.Now())); err != nil {
+		t.Fatal(err)
+	}
+	Register(server, service)
+	adminSession, adminCSRF := courseSession(t, server, admin)
+	firstSession, firstCSRF := courseSession(t, server, first)
+	unrelatedSession, unrelatedCSRF := courseSession(t, server, unrelated)
+
+	courseReview := courseHTTP(t, server, http.MethodGet, "/api/v1/courses/"+created.ID,
+		adminSession, "", "", nil)
+	assertReviewHeaders(t, courseReview)
+	missing := courseHTTP(t, server, http.MethodDelete, "/api/v1/courses/"+created.ID,
+		adminSession, adminCSRF, "", nil)
+	conformance.Error(t, missing, http.StatusPreconditionRequired, "course_precondition_required")
+
+	supervisorPath := "/api/v1/courses/" + created.ID + "/supervisors/" + first
+	supervisorReview := courseHTTP(t, server, http.MethodGet, supervisorPath, adminSession, "", "", nil)
+	assertReviewHeaders(t, supervisorReview)
+	deniedSupervisor := courseHTTP(t, server, http.MethodGet, supervisorPath, firstSession, "", "", nil)
+	conformance.Error(t, deniedSupervisor, http.StatusForbidden, "course_unauthorized")
+	missingSupervisor := courseHTTP(t, server, http.MethodDelete, supervisorPath, adminSession, adminCSRF, "", nil)
+	conformance.Error(t, missingSupervisor, http.StatusPreconditionRequired, "course_precondition_required")
+	deniedSupervisorDelete := courseHTTPWithETag(t, server, http.MethodDelete, supervisorPath, firstSession, firstCSRF,
+		supervisorReview.Header().Get("ETag"))
+	conformance.Error(t, deniedSupervisorDelete, http.StatusForbidden, "course_unauthorized")
+	if err := service.AssignSupervisor(context.Background(), created.ID, third, admin); err != nil {
+		t.Fatal(err)
+	}
+	staleSupervisor := courseHTTPWithETag(t, server, http.MethodDelete, supervisorPath, adminSession, adminCSRF,
+		supervisorReview.Header().Get("ETag"))
+	conformance.Error(t, staleSupervisor, http.StatusPreconditionFailed, "course_precondition_failed")
+
+	membershipPath := "/api/v1/courses/" + created.ID + "/students/" + student
+	membershipReview := courseHTTP(t, server, http.MethodGet, membershipPath, firstSession, "", "", nil)
+	assertReviewHeaders(t, membershipReview)
+	document := conformance.Document(t, membershipReview)
+	resource := conformance.Resource(t, document["data"], "course-students")
+	attributes, ok := resource["attributes"].(map[string]any)
+	if !ok {
+		t.Fatalf("membership review attributes are invalid: %s", membershipReview.Body.String())
+	}
+	if _, exists := attributes["remove"]; !exists {
+		t.Fatalf("membership review lacks remove action: %s", membershipReview.Body.String())
+	}
+	deniedMembership := courseHTTP(t, server, http.MethodGet, membershipPath,
+		unrelatedSession, unrelatedCSRF, "", nil)
+	conformance.Error(t, deniedMembership, http.StatusNotFound, "course_not_found")
+	missingMembership := courseHTTP(t, server, http.MethodDelete, membershipPath, firstSession, firstCSRF, "", nil)
+	conformance.Error(t, missingMembership, http.StatusPreconditionRequired, "course_precondition_required")
+	deniedMembershipDelete := courseHTTPWithETag(t, server, http.MethodDelete, membershipPath,
+		unrelatedSession, unrelatedCSRF, membershipReview.Header().Get("ETag"))
+	conformance.Error(t, deniedMembershipDelete, http.StatusNotFound, "course_not_found")
+	studentActive = true
+	staleMembership := courseHTTPWithETag(t, server, http.MethodDelete, membershipPath, firstSession, firstCSRF,
+		membershipReview.Header().Get("ETag"))
+	conformance.Error(t, staleMembership, http.StatusPreconditionFailed, "course_precondition_failed")
+	studentActive = false
+	deniedCourseDelete := courseHTTPWithETag(t, server, http.MethodDelete, "/api/v1/courses/"+created.ID,
+		firstSession, firstCSRF, courseReview.Header().Get("ETag"))
+	conformance.Error(t, deniedCourseDelete, http.StatusForbidden, "course_unauthorized")
+
+	description := "Changed after course review"
+	if _, err := service.Update(context.Background(), created.ID, first,
+		Fields{Description: OptionalString{Set: true, Value: &description}}); err != nil {
+		t.Fatal(err)
+	}
+	staleCourse := courseHTTPWithETag(t, server, http.MethodDelete, "/api/v1/courses/"+created.ID,
+		adminSession, adminCSRF, courseReview.Header().Get("ETag"))
+	conformance.Error(t, staleCourse, http.StatusPreconditionFailed, "course_precondition_failed")
+
+	var courseCount, firstAssignment, membershipCount int
+	if err := database.QueryRow("SELECT COUNT(*) FROM courses WHERE id = ?", created.ID).Scan(&courseCount); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.QueryRow(`SELECT COUNT(*) FROM course_supervisors
+		WHERE course_id = ? AND supervisor_user_id = ?`, created.ID, first).Scan(&firstAssignment); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.QueryRow(`SELECT COUNT(*) FROM course_students
+		WHERE course_id = ? AND student_user_id = ?`, created.ID, student).Scan(&membershipCount); err != nil {
+		t.Fatal(err)
+	}
+	if courseCount != 1 || firstAssignment != 1 || membershipCount != 1 {
+		t.Fatalf("review-route no-op counts course=%d supervisor=%d membership=%d",
+			courseCount, firstAssignment, membershipCount)
+	}
+}
+
+func assertReviewHeaders(t *testing.T, response *httptest.ResponseRecorder) {
+	t.Helper()
+	if response.Code != http.StatusOK || response.Header().Get("ETag") == "" ||
+		response.Header().Get("Cache-Control") != "no-store" ||
+		response.Header().Get("Content-Type") != "application/vnd.api+json" {
+		t.Fatalf("review response = %d headers=%v body=%s", response.Code, response.Header(), response.Body.String())
 	}
 }
 
@@ -684,6 +818,21 @@ func courseHTTP(t *testing.T, server *httpserver.Server, method, path string, se
 	if contentType != "" {
 		request.Header.Set("Content-Type", contentType)
 	}
+	response := httptest.NewRecorder()
+	server.Echo.ServeHTTP(response, request)
+	return response
+}
+
+func courseHTTPWithETag(t *testing.T, server *httpserver.Server, method, path string, session []*http.Cookie, csrf,
+	etag string) *httptest.ResponseRecorder {
+	t.Helper()
+	request := httptest.NewRequest(method, "http://mia.test"+path, nil)
+	for _, cookie := range session {
+		request.AddCookie(cookie)
+	}
+	request.AddCookie(&http.Cookie{Name: server.CSRFCookieName(), Value: csrf})
+	request.Header.Set("X-CSRF-Token", csrf)
+	request.Header.Set("If-Match", etag)
 	response := httptest.NewRecorder()
 	server.Echo.ServeHTTP(response, request)
 	return response

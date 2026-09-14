@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/thorstenkramm/mia/internal/auth"
@@ -91,6 +92,251 @@ func TestActivationRequiresMaterialAndAssignedSupervisor(t *testing.T) {
 	deactivated, err := ready.Deactivate(context.Background(), created.ID, supervisor)
 	if err != nil || deactivated.Active {
 		t.Fatalf("deactivation = %#v, %v", deactivated, err)
+	}
+}
+
+func TestCourseReadinessIsCurrentAndViewerSafe(t *testing.T) {
+	database := courseDatabase(t)
+	admin := createAccount(t, database, "readiness-admin", user.Administrator)
+	supervisor := createAccount(t, database, "readiness-supervisor", user.Supervisor)
+	student := createAccount(t, database, "readiness-student", user.Student)
+	materialReady := false
+	studentActive := false
+	service := NewService(database, t.TempDir(), nil,
+		func(context.Context, miSQLite.Querier, string) (bool, error) { return materialReady, nil },
+		func(context.Context, miSQLite.Querier, string) (bool, error) { return true, nil }, nil, nil, nil)
+	service.SetStudentAnyActiveSessionCheck(func(context.Context, miSQLite.Querier, string) (bool, error) {
+		return studentActive, nil
+	})
+	created, err := service.Create(context.Background(), CreateInput{ActorID: admin, SupervisorIDs: []string{supervisor},
+		Fields: preparedFields("Readiness")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	incomplete, err := service.Get(context.Background(), created.ID, supervisor)
+	if err != nil || incomplete.Readiness.State != ReadinessInactiveIncomplete ||
+		incomplete.Readiness.Activation.Eligible || len(incomplete.Readiness.VisibleBlockers) != 1 ||
+		incomplete.Readiness.VisibleBlockers[0].ID != "qualifying_material" {
+		t.Fatalf("incomplete readiness = %#v, %v", incomplete.Readiness, err)
+	}
+	materialReady = true
+	activatable, err := service.Get(context.Background(), created.ID, supervisor)
+	if err != nil || activatable.Readiness.State != ReadinessInactiveActivatable ||
+		!activatable.Readiness.Activation.Eligible {
+		t.Fatalf("activatable readiness = %#v, %v", activatable.Readiness, err)
+	}
+	if _, err := service.Activate(context.Background(), created.ID, supervisor); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`INSERT INTO course_students
+		(id, course_id, student_user_id, joined_at) VALUES (?, ?, ?, ?)`, "cst_readiness", created.ID, student,
+		instant(time.Now())); err != nil {
+		t.Fatal(err)
+	}
+	studentView, err := service.Get(context.Background(), created.ID, student)
+	if err != nil || studentView.Readiness.State != ReadinessActiveAccepting ||
+		!studentView.Readiness.NewSession.Eligible || len(studentView.Readiness.VisibleBlockers) != 0 ||
+		!studentView.ViewerIsStudent || studentView.ViewerIsSupervisor {
+		t.Fatalf("student readiness = %#v, viewer=%#v, %v", studentView.Readiness, studentView, err)
+	}
+	studentActive = true
+	studentBusy, err := service.Get(context.Background(), created.ID, student)
+	if err != nil || studentBusy.Readiness.NewSession.Eligible ||
+		len(studentBusy.Readiness.NewSession.Blockers) != 1 ||
+		studentBusy.Readiness.NewSession.Blockers[0] != "active_tutoring_session" {
+		t.Fatalf("busy student readiness = %#v, %v", studentBusy.Readiness, err)
+	}
+	studentActive = false
+	materialReady = false
+	blocked, err := service.Get(context.Background(), created.ID, student)
+	if err != nil || blocked.Readiness.State != ReadinessActiveNotAccepting ||
+		blocked.Readiness.NewSession.Eligible || !blocked.Active {
+		t.Fatalf("active blocked readiness = %#v active=%t, %v", blocked.Readiness, blocked.Active, err)
+	}
+}
+
+func TestReviewedCourseDestructionRejectsChangedStateWithoutMutation(t *testing.T) {
+	database := courseDatabase(t)
+	admin := createAccount(t, database, "review-admin", user.Administrator)
+	first := createAccount(t, database, "review-first", user.Supervisor)
+	second := createAccount(t, database, "review-second", user.Supervisor)
+	third := createAccount(t, database, "review-third", user.Supervisor)
+	student := createAccount(t, database, "review-student", user.Student)
+	studentActive := false
+	service := NewService(database, t.TempDir(), nil, nil, nil,
+		func(context.Context, miSQLite.Querier, string, string) (bool, error) { return studentActive, nil }, nil, nil)
+	created, err := service.Create(context.Background(), CreateInput{ActorID: admin,
+		SupervisorIDs: []string{first, second}, Fields: preparedFields("Reviewed destruction")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assignment, err := service.SupervisorAssignment(context.Background(), created.ID, first, admin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.AssignSupervisor(context.Background(), created.ID, third, admin); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.RemoveSupervisorReviewed(context.Background(), created.ID, first, admin,
+		assignment.ETag); !errors.Is(err, ErrPreconditionFailed) {
+		t.Fatalf("stale supervisor removal error = %v", err)
+	}
+	if _, err := database.Exec(`INSERT INTO course_students
+		(id, course_id, student_user_id, joined_at) VALUES (?, ?, ?, ?)`, "cst_review", created.ID, student,
+		instant(time.Now())); err != nil {
+		t.Fatal(err)
+	}
+	membership, err := service.StudentMembership(context.Background(), created.ID, student, first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	studentActive = true
+	if err := service.RemoveStudentReviewed(context.Background(), created.ID, student, first,
+		membership.ETag); !errors.Is(err, ErrPreconditionFailed) {
+		t.Fatalf("stale membership removal error = %v", err)
+	}
+	member, err := StudentMembership(context.Background(), database, created.ID, student)
+	if err != nil || !member {
+		t.Fatalf("membership after stale removal = %t, %v", member, err)
+	}
+	courseReview, err := service.Get(context.Background(), created.ID, admin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.RemoveSupervisor(context.Background(), created.ID, third, admin); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.DeleteReviewed(context.Background(), created.ID, admin,
+		courseReview.ETag); !errors.Is(err, ErrPreconditionFailed) {
+		t.Fatalf("stale course deletion error = %v", err)
+	}
+	if _, err := service.Get(context.Background(), created.ID, admin); err != nil {
+		t.Fatalf("course missing after stale deletion: %v", err)
+	}
+}
+
+func TestCourseDeletionReviewDetectsVisibleFieldAndCascadeChanges(t *testing.T) {
+	database := courseDatabase(t)
+	admin := createAccount(t, database, "impact-admin", user.Administrator)
+	supervisor := createAccount(t, database, "impact-supervisor", user.Supervisor)
+	student := createAccount(t, database, "impact-student", user.Student)
+	service := NewService(database, t.TempDir(), nil, nil, nil, nil, nil, nil)
+	created, err := service.Create(context.Background(), CreateInput{ActorID: admin,
+		SupervisorIDs: []string{supervisor}, Fields: preparedFields("Impact review")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fieldReview, err := service.Get(context.Background(), created.ID, admin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	description := "Changed reviewed description"
+	if _, err := service.Update(context.Background(), created.ID, supervisor,
+		Fields{Description: OptionalString{Set: true, Value: &description}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.DeleteReviewed(context.Background(), created.ID, admin,
+		fieldReview.ETag); !errors.Is(err, ErrPreconditionFailed) {
+		t.Fatalf("visible-field stale deletion error = %v", err)
+	}
+	cascadeReview, err := service.Get(context.Background(), created.ID, admin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`INSERT INTO course_students
+		(id, course_id, student_user_id, joined_at) VALUES ('cst_impact', ?, ?, ?)`, created.ID, student,
+		instant(time.Now())); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.DeleteReviewed(context.Background(), created.ID, admin,
+		cascadeReview.ETag); !errors.Is(err, ErrPreconditionFailed) {
+		t.Fatalf("cascade stale deletion error = %v", err)
+	}
+	if _, err := service.Get(context.Background(), created.ID, admin); err != nil {
+		t.Fatalf("course changed by stale deletion: %v", err)
+	}
+}
+
+func TestMembershipReviewDetectsConcurrentRemovableData(t *testing.T) {
+	database := courseDatabase(t)
+	admin := createAccount(t, database, "member-impact-admin", user.Administrator)
+	supervisor := createAccount(t, database, "member-impact-supervisor", user.Supervisor)
+	student := createAccount(t, database, "member-impact-student", user.Student)
+	if _, err := database.Exec(`CREATE TABLE removable_student_data (
+		id TEXT PRIMARY KEY, course_id TEXT NOT NULL, student_id TEXT NOT NULL)`); err != nil {
+		t.Fatal(err)
+	}
+	registry := &lifecycle.Registry{}
+	registry.RegisterStudentCourse(removableDataOwner{})
+	service := NewService(database, t.TempDir(), registry, nil, nil, nil, nil, nil)
+	created, err := service.Create(context.Background(), CreateInput{ActorID: admin,
+		SupervisorIDs: []string{supervisor}, Fields: preparedFields("Membership impact")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`INSERT INTO course_students
+		(id, course_id, student_user_id, joined_at) VALUES ('cst_member_impact', ?, ?, ?)`, created.ID, student,
+		instant(time.Now())); err != nil {
+		t.Fatal(err)
+	}
+	review, err := service.StudentMembership(context.Background(), created.ID, student, supervisor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`INSERT INTO removable_student_data (id, course_id, student_id)
+		VALUES ('private-material-impact', ?, ?)`, created.ID, student); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.RemoveStudentReviewed(context.Background(), created.ID, student, supervisor,
+		review.ETag); !errors.Is(err, ErrPreconditionFailed) {
+		t.Fatalf("removable-data stale membership error = %v", err)
+	}
+	member, err := StudentMembership(context.Background(), database, created.ID, student)
+	if err != nil || !member {
+		t.Fatalf("membership after stale removable-data review = %t, %v", member, err)
+	}
+	var impactCount int
+	if err := database.QueryRow("SELECT COUNT(*) FROM removable_student_data").Scan(&impactCount); err != nil || impactCount != 1 {
+		t.Fatalf("removable data after stale review = %d, %v", impactCount, err)
+	}
+}
+
+type removableDataOwner struct{}
+
+func (removableDataOwner) DeleteStudentCourseData(ctx context.Context, query miSQLite.Querier, courseID,
+	studentID string) error {
+	_, err := query.ExecContext(ctx, "DELETE FROM removable_student_data WHERE course_id = ? AND student_id = ?",
+		courseID, studentID)
+	return err
+}
+
+func (removableDataOwner) StudentCourseDeletionImpact(ctx context.Context, query miSQLite.Querier, courseID,
+	studentID string) ([]string, error) {
+	rows, err := query.QueryContext(ctx, `SELECT id FROM removable_student_data
+		WHERE course_id = ? AND student_id = ? ORDER BY id`, courseID, studentID)
+	if err != nil {
+		return nil, err
+	}
+	return miSQLite.ScanStrings(rows)
+}
+
+func TestCourseReadinessDependencyFailureIsUnavailable(t *testing.T) {
+	database := courseDatabase(t)
+	admin := createAccount(t, database, "unavailable-admin", user.Administrator)
+	supervisor := createAccount(t, database, "unavailable-supervisor", user.Supervisor)
+	service := NewService(database, t.TempDir(), nil, nil, nil, nil, nil, nil)
+	created, err := service.Create(context.Background(), CreateInput{ActorID: admin, SupervisorIDs: []string{supervisor},
+		Fields: preparedFields("Unavailable readiness")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	unavailable := NewService(database, t.TempDir(), nil,
+		func(context.Context, miSQLite.Querier, string) (bool, error) {
+			return false, errors.New("storage failed")
+		},
+		nil, nil, nil, nil)
+	if _, err := unavailable.Get(context.Background(), created.ID, supervisor); !errors.Is(err, ErrReadinessUnavailable) {
+		t.Fatalf("readiness error = %v", err)
 	}
 }
 

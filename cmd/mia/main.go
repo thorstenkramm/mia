@@ -616,6 +616,7 @@ func newServeCommand() *cobra.Command {
 		courseService := course.NewService(database, configuration.Main.DataDir, lifecycleRegistry,
 			material.MaterialReady, tutoringService.ActiveInCourse,
 			tutoringService.StudentActiveInCourse, auth.InvalidateSecurityArtifacts, logger.Slog())
+		courseService.SetStudentAnyActiveSessionCheck(tutoringService.StudentActive)
 		lifecycleRegistry.RegisterAccount(courseService)
 		auth.RegisterMFARecovery(server, database, course.AuthorizeStudentMFAReset)
 		deletionService := user.NewDeletionService(database, configuration.Main.DataDir, lifecycleRegistry, logger.Slog())

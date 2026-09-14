@@ -793,6 +793,17 @@ activated.
 - An assigned supervisor can reactivate the course only when the activation
   requirements are satisfied.
 
+### Browser readiness and destructive confirmation
+
+- An authorized course read derives current readiness from source records rather than a maintained counter and separately
+  reports activation and new-session eligibility.
+- Assigned supervisors receive stable prerequisite blockers and only links they are authorized to follow. Students receive
+  no preparation details, supervisor identities, or preparation links.
+- Before course deletion, supervisor removal, or membership removal, the authorized actor reviews the exact target and its
+  server-authored eligibility and consequences. The mutation requires that representation's strong ETag.
+- The mutation atomically rechecks authorization, lifecycle guards, and the validator. A missing or stale validator changes
+  no course data and requires the actor to review current state again.
+
 ### Course relationships
 
 - Every existing course has at least one assigned supervisor.

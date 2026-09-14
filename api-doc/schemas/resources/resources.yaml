@@ -535,6 +535,8 @@ Course:
         - deactivated_at
         - updated_at
         - logo_url
+        - readiness
+        - delete
       properties:
         name:
           type: string
@@ -566,6 +568,10 @@ Course:
         logo_url:
           type: [string, 'null']
           description: Relative logo download URL, or null without a logo.
+        readiness:
+          $ref: '#/CourseReadiness'
+        delete:
+          $ref: '#/CourseDeletionEligibility'
     relationships:
       type: object
       required: [supervisors]
@@ -603,6 +609,170 @@ CourseStudent:
           $ref: '#/ToOneCourse'
         student:
           $ref: '#/ToOneUser'
+CourseStudentReview:
+  allOf:
+    - $ref: '#/CourseStudent'
+    - type: object
+      properties:
+        attributes:
+          type: object
+          required: [remove]
+          properties:
+            remove:
+              $ref: '#/CourseMembershipRemovalEligibility'
+CourseActivationEligibility:
+  type: object
+  additionalProperties: false
+  required: [eligible, blockers, consequences]
+  properties:
+    eligible: { type: boolean }
+    blockers:
+      type: array
+      uniqueItems: true
+      items:
+        type: string
+        enum:
+          - learning_goals
+          - ai_tutor_instructions
+          - language
+          - supervisor_presence
+          - qualifying_material
+          - course_already_active
+          - assigned_supervisor_required
+    consequences:
+      type: array
+      enum:
+        - [activate_course]
+      items:
+        type: string
+        enum: [activate_course]
+CourseNewSessionEligibility:
+  type: object
+  additionalProperties: false
+  required: [eligible, blockers, consequences]
+  properties:
+    eligible: { type: boolean }
+    blockers:
+      type: array
+      uniqueItems: true
+      items:
+        type: string
+        enum:
+          - learning_goals
+          - ai_tutor_instructions
+          - language
+          - supervisor_presence
+          - qualifying_material
+          - course_inactive
+          - course_not_ready
+          - course_membership_required
+          - active_tutoring_session
+    consequences:
+      type: array
+      enum:
+        - [start_tutoring_session]
+      items:
+        type: string
+        enum: [start_tutoring_session]
+CourseDeletionEligibility:
+  type: object
+  additionalProperties: false
+  required: [eligible, blockers, consequences]
+  properties:
+    eligible: { type: boolean }
+    blockers:
+      type: array
+      uniqueItems: true
+      items:
+        type: string
+        enum: [administrator_required, course_active, active_tutoring_session]
+    consequences:
+      type: array
+      enum:
+        - [delete_course_scoped_data, preserve_accounts]
+      items:
+        type: string
+        enum: [delete_course_scoped_data, preserve_accounts]
+CourseSupervisorRemovalEligibility:
+  type: object
+  additionalProperties: false
+  required: [eligible, blockers, consequences]
+  properties:
+    eligible: { type: boolean }
+    blockers:
+      type: array
+      uniqueItems: true
+      items:
+        type: string
+        enum: [last_supervisor]
+    consequences:
+      type: array
+      enum:
+        - [remove_supervisor_assignment]
+      items:
+        type: string
+        enum: [remove_supervisor_assignment]
+CourseMembershipRemovalEligibility:
+  type: object
+  additionalProperties: false
+  required: [eligible, blockers, consequences]
+  properties:
+    eligible: { type: boolean }
+    blockers:
+      type: array
+      uniqueItems: true
+      items:
+        type: string
+        enum: [active_tutoring_session]
+    consequences:
+      type: array
+      enum:
+        - [delete_student_course_data, preserve_account, preserve_other_course_data]
+      items:
+        type: string
+        enum: [delete_student_course_data, preserve_account, preserve_other_course_data]
+CourseReadiness:
+  type: object
+  additionalProperties: false
+  required: [state, activation, new_session, blockers]
+  properties:
+    state:
+      type: string
+      enum: [inactive_incomplete, inactive_activatable, active_accepting, active_not_accepting]
+    activation: { $ref: '#/CourseActivationEligibility' }
+    new_session: { $ref: '#/CourseNewSessionEligibility' }
+    blockers:
+      type: array
+      description: Preparation blockers visible only to an assigned supervisor; other viewers receive an empty array.
+      items:
+        type: object
+        additionalProperties: false
+        required: [id, link]
+        properties:
+          id:
+            type: string
+            enum: [learning_goals, ai_tutor_instructions, language, supervisor_presence, qualifying_material]
+          link: { type: [string, 'null'] }
+CourseSupervisorAssignment:
+  type: object
+  additionalProperties: false
+  required: [type, id, attributes, relationships]
+  properties:
+    type: { const: course-supervisor-assignments }
+    id: { type: string }
+    attributes:
+      type: object
+      additionalProperties: false
+      required: [remove]
+      properties:
+        remove: { $ref: '#/CourseSupervisorRemovalEligibility' }
+    relationships:
+      type: object
+      additionalProperties: false
+      required: [course, supervisor]
+      properties:
+        course: { $ref: '#/ToOneCourse' }
+        supervisor: { $ref: '#/ToOneUser' }
 Material:
   type: object
   required: [type, id, attributes, relationships]
@@ -1526,6 +1696,18 @@ CourseStudentDocument:
   properties:
     data:
       $ref: '#/CourseStudent'
+CourseStudentReviewDocument:
+  type: object
+  required: [data]
+  properties:
+    data:
+      $ref: '#/CourseStudentReview'
+CourseSupervisorAssignmentDocument:
+  type: object
+  required: [data]
+  properties:
+    data:
+      $ref: '#/CourseSupervisorAssignment'
 CourseStudentCollectionDocument:
   type: object
   required: [data, meta]

@@ -39,6 +39,9 @@ var (
 	ErrLogoNotFound          = errors.New("course logo not found")
 	ErrStudentNotFound       = errors.New("course student not found")
 	ErrStudentInvalid        = errors.New("invalid course student")
+	ErrPreconditionRequired  = errors.New("course precondition required")
+	ErrPreconditionFailed    = errors.New("course precondition failed")
+	ErrReadinessUnavailable  = errors.New("course readiness unavailable")
 )
 
 const (
@@ -58,6 +61,9 @@ type ActiveSessionCheck func(context.Context, miSQLite.Querier, string) (bool, e
 
 // StudentActiveSessionCheck is the tutoring owner's membership-removal gate.
 type StudentActiveSessionCheck func(context.Context, miSQLite.Querier, string, string) (bool, error)
+
+// StudentAnyActiveSessionCheck is the tutoring owner's cross-course session-start gate.
+type StudentAnyActiveSessionCheck func(context.Context, miSQLite.Querier, string) (bool, error)
 
 // SecurityArtifactsInvalidator is the auth owner's transaction-aware cleanup
 // for challenges and proofs invalidated by password and ban-state changes.
@@ -150,6 +156,13 @@ type Course struct {
 	CreatedAt                              time.Time
 	ActivatedAt, DeactivatedAt, UpdatedAt  *time.Time
 	SupervisorIDs                          []string
+	Readiness                              Readiness
+	DeleteAction                           ActionEligibility
+	ETag                                   string
+	ViewerIsAdministrator                  bool
+	ViewerIsSupervisor                     bool
+	ViewerIsStudent                        bool
+	ViewerID                               string
 }
 
 // TutorContext is the course-owned context visible to a joined student tutor session.
@@ -237,9 +250,16 @@ type Service struct {
 	materialReady         MaterialReadiness
 	activeSessions        ActiveSessionCheck
 	studentActiveSessions StudentActiveSessionCheck
+	studentAnyActive      StudentAnyActiveSessionCheck
 	invalidateSecurity    SecurityArtifactsInvalidator
 	logger                *slog.Logger
 	logoMu                sync.RWMutex
+}
+
+// SetStudentAnyActiveSessionCheck installs the tutoring owner's cross-course one-active-session check.
+// It must be called during process wiring before the service is used concurrently.
+func (service *Service) SetStudentAnyActiveSessionCheck(check StudentAnyActiveSessionCheck) {
+	service.studentAnyActive = check
 }
 
 func NewService(database *sql.DB, dataDir string, registry *lifecycle.Registry, readiness MaterialReadiness,
@@ -323,15 +343,16 @@ func (service *Service) Create(ctx context.Context, input CreateInput) (Course, 
 }
 
 func (service *Service) Get(ctx context.Context, courseID, actorID string) (Course, error) {
-	course, err := loadScoped(ctx, service.database, courseID, actorID, false)
+	var course Course
+	err := miSQLite.WithTx(ctx, service.database, func(tx *sql.Tx) error {
+		var err error
+		course, err = service.courseSnapshot(ctx, tx, courseID, actorID)
+		return err
+	})
 	if err != nil {
 		return Course{}, err
 	}
-	course.SupervisorIDs, err = supervisorIDs(ctx, service.database, courseID)
-	if err == nil {
-		course.HasLogo = service.logoExists(courseID)
-	}
-	return course, err
+	return course, nil
 }
 
 // Supervisors returns one page of supervisor user IDs for the course plus
@@ -371,8 +392,10 @@ func (service *Service) List(ctx context.Context, actorID string, input ListInpu
 	query := `SELECT c.id, c.name, c.description, c.curriculum, c.learning_goals, c.llm_instructions, c.language,
 		c.is_active, c.created_at, c.activated_at, c.deactivated_at, c.updated_at FROM courses c
 		WHERE EXISTS(SELECT 1 FROM course_supervisors cs WHERE cs.course_id = c.id AND cs.supervisor_user_id = ?)
+		OR (c.is_active = 1 AND EXISTS(SELECT 1 FROM course_students student
+			WHERE student.course_id = c.id AND student.student_user_id = ?))
 		ORDER BY c.name_normalized, c.id LIMIT ? OFFSET ?`
-	args := []any{actorID, input.Limit + 1, input.Offset}
+	args := []any{actorID, actorID, input.Limit + 1, input.Offset}
 	if administrator {
 		query = `SELECT c.id, c.name, c.description, c.curriculum, c.learning_goals, c.llm_instructions, c.language,
 			c.is_active, c.created_at, c.activated_at, c.deactivated_at, c.updated_at FROM courses c
@@ -402,11 +425,10 @@ func (service *Service) List(ctx context.Context, actorID string, input ListInpu
 		courses = courses[:input.Limit]
 	}
 	for index := range courses {
-		courses[index].SupervisorIDs, err = supervisorIDs(ctx, service.database, courses[index].ID)
+		courses[index], err = service.Get(ctx, courses[index].ID, actorID)
 		if err != nil {
 			return ListResult{}, err
 		}
-		courses[index].HasLogo = service.logoExists(courses[index].ID)
 	}
 	return ListResult{Courses: courses, HasMore: hasMore}, nil
 }
@@ -573,12 +595,16 @@ func (service *Service) RemoveStudent(ctx context.Context, courseID, studentID, 
 		return nil
 	})
 	if err == nil {
-		if cleanupErr := service.lifecycle.CleanupStudentCourseData(ctx, courseID, studentID); cleanupErr != nil {
-			service.logger.WarnContext(ctx, "clean removed student course files", "course_id", courseID,
-				"student_id", studentID, "error", cleanupErr)
-		}
+		service.cleanupStudentCourseData(ctx, courseID, studentID)
 	}
 	return err
+}
+
+func (service *Service) cleanupStudentCourseData(ctx context.Context, courseID, studentID string) {
+	if err := service.lifecycle.CleanupStudentCourseData(ctx, courseID, studentID); err != nil {
+		service.logger.WarnContext(ctx, "clean removed student course files", "course_id", courseID,
+			"student_id", studentID, "error", err)
+	}
 }
 
 func (service *Service) SetTemporaryPassword(ctx context.Context, studentID, actorID, password string) error {
@@ -959,6 +985,11 @@ func loadScoped(ctx context.Context, query miSQLite.Querier, courseID, actorID s
 	condition := `EXISTS(SELECT 1 FROM course_supervisors cs
 		WHERE cs.course_id = c.id AND cs.supervisor_user_id = ?)`
 	args := []any{courseID, actorID}
+	if !supervisorOnly {
+		condition += ` OR (c.is_active = 1 AND EXISTS(SELECT 1 FROM course_students student
+			WHERE student.course_id = c.id AND student.student_user_id = ?))`
+		args = append(args, actorID)
+	}
 	if administrator {
 		condition = "1 = 1"
 		args = []any{courseID}

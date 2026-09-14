@@ -559,6 +559,48 @@ func (service *Service) DeleteStudentCourseData(ctx context.Context, query miSQL
 	return err
 }
 
+func (service *Service) CourseDeletionImpact(ctx context.Context, query miSQLite.Querier,
+	courseID string) ([]string, error) {
+	return mentoringDeletionImpact(ctx, query, courseID, "", false)
+}
+
+func (service *Service) StudentCourseDeletionImpact(ctx context.Context, query miSQLite.Querier, courseID,
+	studentID string) ([]string, error) {
+	return mentoringDeletionImpact(ctx, query, courseID, studentID, true)
+}
+
+func mentoringDeletionImpact(ctx context.Context, query miSQLite.Querier, courseID, studentID string,
+	studentOnly bool) ([]string, error) {
+	condition, args := "course_id = ?", []any{courseID}
+	if studentOnly {
+		condition, args = "course_id = ? AND student_user_id = ?", []any{courseID, studentID}
+	}
+	statements := []struct{ prefix, query string }{
+		{"session:", "SELECT id FROM mentoring_sessions WHERE " + condition + " ORDER BY id"},
+		{"assignment:", "SELECT course_id || ':' || student_user_id || ':' || mentor_user_id FROM mentor_assignments WHERE " +
+			condition + " ORDER BY course_id, student_user_id, mentor_user_id"},
+	}
+	if !studentOnly {
+		statements = append(statements, struct{ prefix, query string }{"course-mentor:",
+			"SELECT course_id || ':' || mentor_user_id FROM course_mentors WHERE course_id = ? ORDER BY mentor_user_id"})
+	}
+	var result []string
+	for _, statement := range statements {
+		rows, err := query.QueryContext(ctx, statement.query, args...)
+		if err != nil {
+			return nil, fmt.Errorf("list mentoring deletion impact: %w", err)
+		}
+		ids, err := miSQLite.ScanStrings(rows)
+		if err != nil {
+			return nil, err
+		}
+		for _, id := range ids {
+			result = append(result, statement.prefix+id)
+		}
+	}
+	return result, nil
+}
+
 func (service *Service) DeleteAccountData(ctx context.Context, query miSQLite.Querier, accountID string) error {
 	if _, err := triage(ctx, query, "mentor_user_id = ?", accountID); err != nil {
 		return err

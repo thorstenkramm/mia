@@ -513,6 +513,12 @@ curriculum, learning goals, and AI tutor instructions are each limited to 16,000
 code points and 64 KiB. Non-null language values are canonical BCP 47 tags.
 `logo_url` is null unless the fixed course-logo path currently contains a logo.
 
+Course detail is the authoritative readiness reconciliation read. It derives one of
+`inactive_incomplete`, `inactive_activatable`, `active_accepting`, or `active_not_accepting` directly from current course,
+assignment, material, and session-owner state. Activation and new-session eligibility are separate. Assigned supervisors
+receive stable preparation blockers and authorized preparation links. Joined students can read their active courses but
+receive neither preparation fields, supervisor identities, nor preparation-blocker links.
+
 Adding a student accepts either an existing student relationship or the fields
 needed for supervisor provisioning. It requires an active course and is not a
 public registration workflow.
@@ -529,7 +535,9 @@ The students collection is visible only to assigned course supervisors and uses
 the standard `page[limit]` and `page[offset]` pagination. Membership resources
 carry their own `cst_` ID, username and join instant, plus course and student
 relationships. Removal addresses the student user ID in the route and returns
-204 on success.
+204 on success. A supervisor first reviews the exact membership through its element GET; the returned strong ETag covers
+membership, active-session removal state, and every relevant deterministic cascade-impact fact. Those facts invalidate a
+stale review when removable course data changes without disclosing affected resource identities to the browser.
 
 Temporary-password and ban operations treat missing, staff, and out-of-scope
 targets uniformly. Ban creation and deletion are idempotent.
@@ -540,6 +548,13 @@ student has no active tutoring session in the course. Removal atomically deletes
 all data owned by that student in the course while preserving the account and
 other-course data. It does not wait for running workers or provider calls; late
 results follow the shared zero-row stale-result rule.
+
+Course deletion, supervisor removal, and membership removal require `If-Match` from the corresponding authorized detail
+GET. The strong validator binds the actor, current blockers, action consequences, and every relevant non-disclosed,
+deterministic cascade-impact fact for that action. It changes when the reviewed deletion set changes without exposing
+affected resource identities. Missing validators return 428; changed validators return 412 without cleanup or audit
+mutation. Authorization and lifecycle guards are rechecked in the same transaction, and clients never replay these
+destructive operations automatically.
 
 An administrator or assigned supervisor may mutate the course logo. GET uses the
 same authorization as viewing the course and returns the normalized PNG with a

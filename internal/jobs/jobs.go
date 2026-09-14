@@ -513,6 +513,31 @@ func DeleteSubjects(ctx context.Context, query miSQLite.Querier, subjectIDs []st
 	return err
 }
 
+// DeletionImpact returns deterministic job identifiers deleted with the supplied owner subjects.
+func DeletionImpact(ctx context.Context, query miSQLite.Querier, subjectIDs []string) ([]string, error) {
+	if len(subjectIDs) == 0 {
+		return []string{}, nil
+	}
+	placeholders := make([]string, len(subjectIDs))
+	args := make([]any, len(subjectIDs))
+	for index, id := range subjectIDs {
+		placeholders[index], args[index] = "?", id
+	}
+	rows, err := query.QueryContext(ctx, "SELECT id FROM jobs WHERE subject_id IN ("+
+		strings.Join(placeholders, ",")+") ORDER BY id", args...)
+	if err != nil {
+		return nil, fmt.Errorf("list deletion-impact jobs: %w", err)
+	}
+	ids, err := miSQLite.ScanStrings(rows)
+	if err != nil {
+		return nil, err
+	}
+	for index := range ids {
+		ids[index] = "job:" + ids[index]
+	}
+	return ids, nil
+}
+
 func nullable(value string) any {
 	if value == "" {
 		return nil

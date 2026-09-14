@@ -3,6 +3,7 @@ package audit
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -306,6 +307,37 @@ func ReplaceStudentCourseHistoryWithRemoval(
 	}
 	return WriteWithMetadata(ctx, query, ActionCourseStudentRemoved, actorID, studentID,
 		Metadata{CourseID: courseID})
+}
+
+// CourseDeletionImpact returns deterministic audit-event facts removed by course deletion.
+func CourseDeletionImpact(ctx context.Context, query miSQLite.Querier, courseID string) ([]string, error) {
+	rows, err := query.QueryContext(ctx, "SELECT id FROM audit_events WHERE course_id = ? ORDER BY id", courseID)
+	if err != nil {
+		return nil, fmt.Errorf("list course deletion audit impact: %w", err)
+	}
+	return scanImpactIDs(rows, "audit:")
+}
+
+// StudentCourseDeletionImpact returns deterministic audit-event facts replaced by membership removal.
+func StudentCourseDeletionImpact(ctx context.Context, query miSQLite.Querier, courseID,
+	studentID string) ([]string, error) {
+	rows, err := query.QueryContext(ctx, `SELECT id FROM audit_events WHERE course_id = ?
+		AND (subject_user_id = ? OR actor_user_id = ?) ORDER BY id`, courseID, studentID, studentID)
+	if err != nil {
+		return nil, fmt.Errorf("list membership removal audit impact: %w", err)
+	}
+	return scanImpactIDs(rows, "audit:")
+}
+
+func scanImpactIDs(rows *sql.Rows, prefix string) ([]string, error) {
+	values, err := miSQLite.ScanStrings(rows)
+	if err != nil {
+		return nil, err
+	}
+	for index := range values {
+		values[index] = prefix + values[index]
+	}
+	return values, nil
 }
 
 // ReplaceAccountHistoryWithDeletion de-identifies every retained reference to

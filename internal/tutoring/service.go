@@ -549,6 +549,16 @@ func (service *Service) StudentActiveInCourse(ctx context.Context, query miSQLit
 	return active != 0, err
 }
 
+// StudentActive reports whether the student has an active tutoring session in any course.
+func (service *Service) StudentActive(ctx context.Context, query miSQLite.Querier, studentID string) (bool, error) {
+	var active int
+	if err := query.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM tutoring_sessions
+		WHERE student_user_id = ? AND state = 'active')`, studentID).Scan(&active); err != nil {
+		return false, fmt.Errorf("check active tutoring session for student: %w", err)
+	}
+	return active != 0, nil
+}
+
 func (service *Service) MaterialSelectedByActive(ctx context.Context, query miSQLite.Querier,
 	materialID string) (bool, error) {
 	var selected int
@@ -606,6 +616,54 @@ func (service *Service) DeleteCourseData(ctx context.Context, query miSQLite.Que
 func (service *Service) DeleteStudentCourseData(ctx context.Context, query miSQLite.Querier, courseID,
 	studentID string) error {
 	return service.deleteSessions(ctx, query, "course_id = ? AND student_user_id = ?", courseID, studentID)
+}
+
+func (service *Service) CourseDeletionImpact(ctx context.Context, query miSQLite.Querier,
+	courseID string) ([]string, error) {
+	return tutoringDeletionImpact(ctx, query, "s.course_id = ?", courseID)
+}
+
+func (service *Service) StudentCourseDeletionImpact(ctx context.Context, query miSQLite.Querier, courseID,
+	studentID string) ([]string, error) {
+	return tutoringDeletionImpact(ctx, query, "s.course_id = ? AND s.student_user_id = ?", courseID, studentID)
+}
+
+func tutoringDeletionImpact(ctx context.Context, query miSQLite.Querier, condition string,
+	args ...any) ([]string, error) {
+	statements := []struct {
+		prefix, query string
+	}{
+		{"session:", "SELECT s.id FROM tutoring_sessions s WHERE " + condition + " ORDER BY s.id"},
+		{"selection:", `SELECT sm.tutoring_session_id || ':' || sm.material_id FROM session_material_selections sm
+			JOIN tutoring_sessions s ON s.id = sm.tutoring_session_id WHERE ` + condition +
+			" ORDER BY sm.tutoring_session_id, sm.material_id"},
+		{"message:", `SELECT m.id FROM student_messages m JOIN tutoring_sessions s ON s.id = m.tutoring_session_id
+			WHERE ` + condition + " ORDER BY m.id"},
+		{"response:", `SELECT r.id FROM tutor_responses r JOIN tutoring_sessions s ON s.id = r.session_id
+			WHERE ` + condition + " ORDER BY r.id"},
+	}
+	var result, sessionIDs []string
+	for index, statement := range statements {
+		rows, err := query.QueryContext(ctx, statement.query, args...)
+		if err != nil {
+			return nil, fmt.Errorf("list tutoring deletion impact: %w", err)
+		}
+		ids, err := miSQLite.ScanStrings(rows)
+		if err != nil {
+			return nil, err
+		}
+		if index == 0 {
+			sessionIDs = append(sessionIDs, ids...)
+		}
+		for _, id := range ids {
+			result = append(result, statement.prefix+id)
+		}
+	}
+	jobImpact, err := jobs.DeletionImpact(ctx, query, sessionIDs)
+	if err != nil {
+		return nil, err
+	}
+	return append(result, jobImpact...), nil
 }
 func (service *Service) DeleteAccountData(ctx context.Context, query miSQLite.Querier, accountID string) error {
 	return service.deleteSessions(ctx, query, "student_user_id = ?", accountID)

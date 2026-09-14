@@ -537,6 +537,34 @@ func (service *Service) DeleteStudentCourseData(ctx context.Context, query miSQL
 	return service.deleteResponses(ctx, query, ids)
 }
 
+func (service *Service) CourseDeletionImpact(ctx context.Context, query miSQLite.Querier,
+	courseID string) ([]string, error) {
+	return speechDeletionImpact(ctx, query, "s.course_id = ?", courseID)
+}
+
+func (service *Service) StudentCourseDeletionImpact(ctx context.Context, query miSQLite.Querier, courseID,
+	studentID string) ([]string, error) {
+	return speechDeletionImpact(ctx, query, "s.course_id = ? AND s.student_user_id = ?", courseID, studentID)
+}
+
+func speechDeletionImpact(ctx context.Context, query miSQLite.Querier, condition string,
+	args ...any) ([]string, error) {
+	rows, err := query.QueryContext(ctx, `SELECT speech.id FROM generated_speech speech
+		JOIN tutor_responses response ON response.id = speech.tutor_response_id
+		JOIN tutoring_sessions s ON s.id = response.session_id WHERE `+condition+" ORDER BY speech.id", args...)
+	if err != nil {
+		return nil, fmt.Errorf("list speech deletion impact: %w", err)
+	}
+	ids, err := miSQLite.ScanStrings(rows)
+	if err != nil {
+		return nil, err
+	}
+	for index := range ids {
+		ids[index] = "speech:" + ids[index]
+	}
+	return ids, nil
+}
+
 func (service *Service) DeleteAccountData(ctx context.Context, query miSQLite.Querier, accountID string) error {
 	ids, err := tutoring.ResponseIDsForAccount(ctx, query, accountID)
 	if err != nil {

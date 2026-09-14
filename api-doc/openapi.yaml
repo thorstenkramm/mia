@@ -195,7 +195,7 @@ components:
       description: Prohibits browsers and intermediaries from storing or replaying the API response.
       schema: { type: string, const: no-store }
     StrongETag:
-      description: Strong validator for the current invitation representation and state-dependent DELETE effect.
+      description: Strong validator for a current reviewed representation and its state-dependent mutation effect.
       schema: { type: string, pattern: '^"[0-9a-f]{64}"$' }
     SessionIdleExpiresAt:
       description: Authoritative idle deadline, unchanged except after Continue working.

@@ -91,6 +91,9 @@ const (
 	CodeCourseLogoInvalid           Code = "course_logo_invalid"
 	CodeCourseStudentNotFound       Code = "course_student_not_found"
 	CodeCourseStudentInvalid        Code = "course_student_invalid"
+	CodeCoursePreconditionRequired  Code = "course_precondition_required"
+	CodeCoursePreconditionFailed    Code = "course_precondition_failed"
+	CodeCourseReadinessUnavailable  Code = "course_readiness_unavailable"
 
 	CodeMaterialNotFound         Code = "material_not_found"
 	CodeMaterialInvalid          Code = "material_invalid"
@@ -206,6 +209,9 @@ var errorRegistry = map[Code]definition{
 	CodeCourseLogoInvalid:           {http.StatusUnprocessableEntity, "Invalid Course Logo", "The request could not be completed."},
 	CodeCourseStudentNotFound:       {http.StatusNotFound, "Not Found", "The requested resource was not found."},
 	CodeCourseStudentInvalid:        {http.StatusUnprocessableEntity, "Invalid Student", "The request could not be completed."},
+	CodeCoursePreconditionRequired:  {http.StatusPreconditionRequired, "Precondition Required", "Review the current course action before trying again."},
+	CodeCoursePreconditionFailed:    {http.StatusPreconditionFailed, "Precondition Failed", "The course action changed. Review it before trying again."},
+	CodeCourseReadinessUnavailable:  {http.StatusServiceUnavailable, "Course Readiness Unavailable", "The request could not be completed."},
 	CodeMaterialNotFound:            {http.StatusNotFound, "Not Found", "The requested resource was not found."},
 	CodeMaterialInvalid:             {http.StatusUnprocessableEntity, "Invalid Material", "The request could not be completed."},
 	CodeMaterialNameTaken:           {http.StatusConflict, "Material Name Taken", "The request could not be completed."},

@@ -4,6 +4,7 @@ package lifecycle
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	miSQLite "github.com/thorstenkramm/mia/internal/sqlite"
 )
@@ -15,6 +16,7 @@ var ErrAccountDeletionBlocked = errors.New("account deletion blocked by required
 // CourseDeleter removes one feature's course-scoped data in the caller's transaction.
 type CourseDeleter interface {
 	DeleteCourseData(context.Context, miSQLite.Querier, string) error
+	CourseDeletionImpact(context.Context, miSQLite.Querier, string) ([]string, error)
 }
 
 // AccountDeleter removes or de-identifies one feature's account-scoped data in the caller's transaction.
@@ -25,6 +27,7 @@ type AccountDeleter interface {
 // StudentCourseDeleter removes one feature's data for one student in one course.
 type StudentCourseDeleter interface {
 	DeleteStudentCourseData(context.Context, miSQLite.Querier, string, string) error
+	StudentCourseDeletionImpact(context.Context, miSQLite.Querier, string, string) ([]string, error)
 }
 
 type CourseCleaner interface {
@@ -143,6 +146,37 @@ func (registry *Registry) DeleteStudentCourseData(
 	return nil
 }
 
+// CourseDeletionImpact collects owner-scoped facts in deterministic registration order.
+func (registry *Registry) CourseDeletionImpact(ctx context.Context, query miSQLite.Querier, courseID string) ([]string, error) {
+	var result []string
+	for index, deleter := range registry.course {
+		facts, err := deleter.CourseDeletionImpact(ctx, query, courseID)
+		if err != nil {
+			return nil, err
+		}
+		for _, fact := range facts {
+			result = append(result, fmt.Sprintf("%d:%s", index, fact))
+		}
+	}
+	return result, nil
+}
+
+// StudentCourseDeletionImpact collects owner-scoped membership-removal facts in registration order.
+func (registry *Registry) StudentCourseDeletionImpact(ctx context.Context, query miSQLite.Querier, courseID,
+	studentID string) ([]string, error) {
+	var result []string
+	for index, deleter := range registry.studentCourse {
+		facts, err := deleter.StudentCourseDeletionImpact(ctx, query, courseID, studentID)
+		if err != nil {
+			return nil, err
+		}
+		for _, fact := range facts {
+			result = append(result, fmt.Sprintf("%d:%s", index, fact))
+		}
+	}
+	return result, nil
+}
+
 // CourseFunc adapts a function to CourseDeleter.
 type CourseFunc func(context.Context, miSQLite.Querier, string) error
 
@@ -151,6 +185,10 @@ func (function CourseFunc) DeleteCourseData(ctx context.Context, query miSQLite.
 		return errors.New("nil course lifecycle function")
 	}
 	return function(ctx, query, id)
+}
+
+func (function CourseFunc) CourseDeletionImpact(context.Context, miSQLite.Querier, string) ([]string, error) {
+	return []string{}, nil
 }
 
 // AccountFunc adapts a function to AccountDeleter.
@@ -176,4 +214,9 @@ func (function StudentCourseFunc) DeleteStudentCourseData(
 		return errors.New("nil student-course lifecycle function")
 	}
 	return function(ctx, query, courseID, studentID)
+}
+
+func (function StudentCourseFunc) StudentCourseDeletionImpact(context.Context, miSQLite.Querier, string,
+	string) ([]string, error) {
+	return []string{}, nil
 }

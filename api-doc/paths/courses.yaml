@@ -65,8 +65,12 @@ course:
     parameters: [{ $ref: ../openapi.yaml#/components/parameters/ResourceID }]
     responses:
       '200':
-        headers: { Cache-Control: { $ref: ../openapi.yaml#/components/headers/CacheControlNoStore } }
-        description: Visible course.
+        headers:
+          Cache-Control: { $ref: ../openapi.yaml#/components/headers/CacheControlNoStore }
+          ETag: { $ref: ../openapi.yaml#/components/headers/StrongETag }
+        description: >-
+          Viewer-safe course and authoritative readiness. Joined students receive no preparation fields, supervisor
+          identities, or preparation-blocker links.
         content:
           application/vnd.api+json:
             schema: { $ref: ../schemas/resources/resources.yaml#/CourseDocument }
@@ -78,6 +82,9 @@ course:
         $ref: ../responses/errors.yaml#/NotFound
         description: Missing or out-of-scope course (`course_not_found`).
       '406': { $ref: ../responses/errors.yaml#/NotAcceptable }
+      '503':
+        $ref: ../responses/errors.yaml#/ServiceUnavailable
+        description: Current readiness could not be evaluated safely (`course_readiness_unavailable`).
   patch:
     tags: [Courses]
     operationId: updateCourse
@@ -120,7 +127,9 @@ course:
     operationId: deleteCourse
     summary: Delete course
     security: [{ sessionCookie: [], csrfToken: [] }]
-    parameters: [{ $ref: ../openapi.yaml#/components/parameters/ResourceID }]
+    parameters:
+      - { $ref: ../openapi.yaml#/components/parameters/ResourceID }
+      - { $ref: ../openapi.yaml#/components/parameters/IfMatch }
     responses:
       '204':
         $ref: ../responses/success.yaml#/NoContent
@@ -138,6 +147,15 @@ course:
       '409':
         $ref: ../responses/errors.yaml#/Conflict
         description: Active course or tutoring session (`course_invalid_state`).
+      '412':
+        $ref: ../responses/errors.yaml#/PreconditionFailed
+        description: Reviewed course state, blockers, or cascade conditions changed (`course_precondition_failed`).
+      '428':
+        $ref: ../responses/errors.yaml#/PreconditionRequired
+        description: A current reviewed course ETag is required (`course_precondition_required`).
+      '503':
+        $ref: ../responses/errors.yaml#/ServiceUnavailable
+        description: Current readiness could not be evaluated safely (`course_readiness_unavailable`).
 
 activations:
   post:
@@ -252,6 +270,29 @@ supervisors:
         description: Invalid or ineligible supervisor identifier (`course_supervisor_invalid`).
 
 supervisor:
+  get:
+    tags: [Courses]
+    operationId: getCourseSupervisorAssignment
+    summary: Review course supervisor removal
+    security: [{ sessionCookie: [] }]
+    parameters:
+      - { $ref: ../openapi.yaml#/components/parameters/ResourceID }
+      - { $ref: ../openapi.yaml#/components/parameters/UserID }
+    responses:
+      '200':
+        description: Current assignment, removal eligibility, consequences, and effect-complete validator.
+        headers:
+          Cache-Control: { $ref: ../openapi.yaml#/components/headers/CacheControlNoStore }
+          ETag: { $ref: ../openapi.yaml#/components/headers/StrongETag }
+        content:
+          application/vnd.api+json:
+            schema: { $ref: ../schemas/resources/resources.yaml#/CourseSupervisorAssignmentDocument }
+      '401': { $ref: ../responses/errors.yaml#/Unauthorized }
+      '403': { $ref: ../responses/errors.yaml#/Forbidden }
+      '404':
+        $ref: ../responses/errors.yaml#/NotFound
+        description: Missing or out-of-scope assignment (`course_not_found`).
+      '406': { $ref: ../responses/errors.yaml#/NotAcceptable }
   delete:
     tags: [Courses]
     operationId: removeCourseSupervisor
@@ -260,6 +301,7 @@ supervisor:
     parameters:
       - { $ref: ../openapi.yaml#/components/parameters/ResourceID }
       - { $ref: ../openapi.yaml#/components/parameters/UserID }
+      - { $ref: ../openapi.yaml#/components/parameters/IfMatch }
     responses:
       '204':
         $ref: ../responses/success.yaml#/NoContent
@@ -277,6 +319,12 @@ supervisor:
       '409':
         $ref: ../responses/errors.yaml#/Conflict
         description: Assignment is the course's last supervisor (`course_last_supervisor`).
+      '412':
+        $ref: ../responses/errors.yaml#/PreconditionFailed
+        description: Assignment or last-supervisor state changed (`course_precondition_failed`).
+      '428':
+        $ref: ../responses/errors.yaml#/PreconditionRequired
+        description: A current assignment-review ETag is required (`course_precondition_required`).
 
 logo:
   get:
@@ -411,6 +459,32 @@ students:
         description: Invalid mode, credentials, or profile (`course_student_invalid`).
 
 student:
+  get:
+    tags: [Courses]
+    operationId: getCourseStudentMembership
+    summary: Review course membership removal
+    security: [{ sessionCookie: [] }]
+    parameters:
+      - { $ref: ../openapi.yaml#/components/parameters/ResourceID }
+      - { $ref: ../openapi.yaml#/components/parameters/UserID }
+    responses:
+      '200':
+        description: Current membership, removal eligibility, consequences, and effect-complete validator.
+        headers:
+          Cache-Control: { $ref: ../openapi.yaml#/components/headers/CacheControlNoStore }
+          ETag: { $ref: ../openapi.yaml#/components/headers/StrongETag }
+        content:
+          application/vnd.api+json:
+            schema: { $ref: ../schemas/resources/resources.yaml#/CourseStudentReviewDocument }
+      '401': { $ref: ../responses/errors.yaml#/Unauthorized }
+      '403': { $ref: ../responses/errors.yaml#/Forbidden }
+      '404':
+        $ref: ../responses/errors.yaml#/NotFound
+        description: Missing or out-of-scope membership (`course_student_not_found`).
+      '406': { $ref: ../responses/errors.yaml#/NotAcceptable }
+      '503':
+        $ref: ../responses/errors.yaml#/ServiceUnavailable
+        description: Current active-session guard could not be evaluated (`course_readiness_unavailable`).
   delete:
     tags: [Courses]
     operationId: removeCourseStudent
@@ -419,6 +493,7 @@ student:
     parameters:
       - { $ref: ../openapi.yaml#/components/parameters/ResourceID }
       - { $ref: ../openapi.yaml#/components/parameters/UserID }
+      - { $ref: ../openapi.yaml#/components/parameters/IfMatch }
     responses:
       '204':
         $ref: ../responses/success.yaml#/NoContent
@@ -434,6 +509,15 @@ student:
       '409':
         $ref: ../responses/errors.yaml#/Conflict
         description: Student has an active tutoring session (`course_invalid_state`).
+      '412':
+        $ref: ../responses/errors.yaml#/PreconditionFailed
+        description: Membership or active-session state changed (`course_precondition_failed`).
+      '428':
+        $ref: ../responses/errors.yaml#/PreconditionRequired
+        description: A current membership-review ETag is required (`course_precondition_required`).
+      '503':
+        $ref: ../responses/errors.yaml#/ServiceUnavailable
+        description: Current active-session guard could not be evaluated (`course_readiness_unavailable`).
 
 temporaryPasswords:
   post:

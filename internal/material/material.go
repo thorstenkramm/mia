@@ -568,6 +568,45 @@ func (service *Service) DeleteStudentCourseData(ctx context.Context, query miSQL
 	return deleteMaterials(ctx, query, "course_id = ? AND owner_user_id = ?", courseID, studentID)
 }
 
+func (service *Service) CourseDeletionImpact(ctx context.Context, query miSQLite.Querier,
+	courseID string) ([]string, error) {
+	return materialDeletionImpact(ctx, query, "course_id = ?", courseID)
+}
+
+func (service *Service) StudentCourseDeletionImpact(ctx context.Context, query miSQLite.Querier, courseID,
+	studentID string) ([]string, error) {
+	return materialDeletionImpact(ctx, query, "course_id = ? AND owner_user_id = ?", courseID, studentID)
+}
+
+func materialDeletionImpact(ctx context.Context, query miSQLite.Querier, condition string, args ...any) ([]string, error) {
+	rows, err := query.QueryContext(ctx, "SELECT id FROM materials WHERE "+condition+" ORDER BY id", args...)
+	if err != nil {
+		return nil, fmt.Errorf("list deletion-impact materials: %w", err)
+	}
+	materialIDs, err := miSQLite.ScanStrings(rows)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]string, 0, len(materialIDs))
+	var subjects []string
+	for _, materialID := range materialIDs {
+		result = append(result, "material:"+materialID)
+		ids, impactErr := materialSubjectIDs(ctx, query, materialID)
+		if impactErr != nil {
+			return nil, impactErr
+		}
+		subjects = append(subjects, ids...)
+		for _, id := range ids[1:] {
+			result = append(result, "file:"+id)
+		}
+	}
+	jobImpact, err := jobs.DeletionImpact(ctx, query, subjects)
+	if err != nil {
+		return nil, err
+	}
+	return append(result, jobImpact...), nil
+}
+
 func (service *Service) DeleteAccountData(ctx context.Context, query miSQLite.Querier, accountID string) error {
 	return deleteMaterials(ctx, query, "owner_user_id = ?", accountID)
 }
