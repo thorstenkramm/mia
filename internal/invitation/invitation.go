@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/thorstenkramm/mia/internal/audit"
+	"github.com/thorstenkramm/mia/internal/httpserver"
 	"github.com/thorstenkramm/mia/internal/identity"
 	miSQLite "github.com/thorstenkramm/mia/internal/sqlite"
 	"github.com/thorstenkramm/mia/internal/user"
@@ -26,6 +28,24 @@ const (
 	StatusAccepted Status = "accepted"
 	StatusRevoked  Status = "revoked"
 	StatusFaulty   Status = "faulty"
+)
+
+// DeliveryState is the latest admitted SMTP attempt's authoritative state.
+type DeliveryState string
+
+const (
+	DeliveryQueued    DeliveryState = "queued"
+	DeliveryDelivered DeliveryState = "delivered"
+	DeliveryAmbiguous DeliveryState = "ambiguous"
+	DeliveryFailed    DeliveryState = "failed"
+)
+
+// DeleteEffect identifies the state-dependent effect committed by DELETE.
+type DeleteEffect string
+
+const (
+	DeleteEffectRevoked DeleteEffect = "revoked"
+	DeleteEffectDeleted DeleteEffect = "deleted"
 )
 
 // Role is the staff role granted by invitation acceptance.
@@ -46,26 +66,32 @@ var (
 	ErrInvitationUnauthorized     = errors.New("unauthorized to manage invitation")
 	ErrInvitationRoleInvalid      = errors.New("invalid invitation role for actor")
 	ErrInvitationListUnauthorized = errors.New("unauthorized to list invitations")
+	ErrPreconditionRequired       = errors.New("invitation precondition required")
+	ErrPreconditionFailed         = errors.New("invitation precondition failed")
 )
 
 // Invitation is the persisted invitation record.
 type Invitation struct {
-	ID              string
-	Email           string
-	EmailNormalized string
-	Role            Role
-	Status          Status
-	TokenGeneration int
-	FailureCode     *string
-	InviterID       *string
-	AcceptedBy      *string
-	RevokedBy       *string
-	CreatedAt       time.Time
-	UpdatedAt       time.Time
-	SentAt          *time.Time
-	AcceptedAt      *time.Time
-	RevokedAt       *time.Time
-	FaultAt         *time.Time
+	ID                  string
+	Email               string
+	EmailNormalized     string
+	Role                Role
+	Status              Status
+	TokenGeneration     int
+	Version             int64
+	FailureCode         *string
+	DeliveryState       DeliveryState
+	DeliveryCode        *string
+	InviterID           *string
+	AcceptedBy          *string
+	RevokedBy           *string
+	CreatedAt           time.Time
+	UpdatedAt           time.Time
+	SentAt              *time.Time
+	AcceptedAt          *time.Time
+	RevokedAt           *time.Time
+	FaultAt             *time.Time
+	DeliveryAttemptedAt *time.Time
 }
 
 // CreateInput contains validated fields for a new invitation.
@@ -171,6 +197,8 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (Invitation, st
 			Role:            input.Role,
 			Status:          StatusPending,
 			TokenGeneration: 1,
+			Version:         1,
+			DeliveryState:   DeliveryQueued,
 			InviterID:       &inviterID,
 			CreatedAt:       now,
 			UpdatedAt:       now,
@@ -235,12 +263,14 @@ func (s *Service) List(ctx context.Context, actorID string, input ListInput) (Li
 		var args []any
 		if isAdmin {
 			// Administrators can view all invitations.
-			query = `SELECT id, email, email_normalized, role, token_generation, status, failure_code, inviter_id, created_at, updated_at
+			query = `SELECT id, email, email_normalized, role, token_generation, version, status, failure_code,
+				delivery_state, delivery_code, delivery_attempted_at, inviter_id, created_at, updated_at
 				FROM invitations ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?`
 			args = []any{fetchLimit, input.Offset}
 		} else {
 			// Supervisors see only their own mentor invitations.
-			query = `SELECT id, email, email_normalized, role, token_generation, status, failure_code, inviter_id, created_at, updated_at
+			query = `SELECT id, email, email_normalized, role, token_generation, version, status, failure_code,
+				delivery_state, delivery_code, delivery_attempted_at, inviter_id, created_at, updated_at
 				FROM invitations WHERE role = 'mentor' AND inviter_id = ? ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?`
 			args = []any{actorID, fetchLimit, input.Offset}
 		}
@@ -263,13 +293,21 @@ func (s *Service) List(ctx context.Context, actorID string, input ListInput) (Li
 	return result, err
 }
 
-// Delete revokes a pending invitation or physically deletes a faulty one.
+// Delete revokes a pending invitation or physically deletes a faulty one when
+// its strong validator exactly matches the authorized row reviewed by the actor.
 // Uses authorization-scoped fetch to avoid loading sensitive data before authorization.
-func (s *Service) Delete(ctx context.Context, id, actorID string) error {
-	return miSQLite.WithTx(ctx, s.database, func(tx *sql.Tx) error {
+func (s *Service) Delete(ctx context.Context, id, actorID, expectedETag string) (DeleteEffect, error) {
+	var effect DeleteEffect
+	err := miSQLite.WithTx(ctx, s.database, func(tx *sql.Tx) error {
 		inv, err := loadInvitationScoped(ctx, tx, id, actorID, scopeManage)
 		if err != nil {
 			return err
+		}
+		if expectedETag == "" {
+			return ErrPreconditionRequired
+		}
+		if expectedETag != ETag(inv) {
+			return ErrPreconditionFailed
 		}
 		if inv.Status == StatusAccepted || inv.Status == StatusRevoked {
 			return ErrInvitationNotPending
@@ -278,17 +316,20 @@ func (s *Service) Delete(ctx context.Context, id, actorID string) error {
 			if _, err := tx.ExecContext(ctx, "DELETE FROM invitations WHERE id = ?", id); err != nil {
 				return fmt.Errorf("delete faulty invitation: %w", err)
 			}
+			effect = DeleteEffectDeleted
 			return audit.WriteWithMetadata(ctx, tx, audit.ActionInvitationInvitationFaultyDeleted, actorID, "", audit.Metadata{InvitationID: id})
 		}
 		now := time.Now()
 		nowStr := instant(now)
-		_, err = tx.ExecContext(ctx, "UPDATE invitations SET status = 'revoked', token_digest = NULL, updated_at = ?, revoked_at = ?, revoked_by = ? WHERE id = ?",
+		_, err = tx.ExecContext(ctx, "UPDATE invitations SET status = 'revoked', token_digest = NULL, version = version + 1, updated_at = ?, revoked_at = ?, revoked_by = ? WHERE id = ?",
 			nowStr, nowStr, actorID, id)
 		if err != nil {
 			return fmt.Errorf("revoke invitation: %w", err)
 		}
+		effect = DeleteEffectRevoked
 		return audit.WriteWithMetadata(ctx, tx, audit.ActionInvitationInvitationRevoked, actorID, "", audit.Metadata{InvitationID: id})
 	})
+	return effect, err
 }
 
 // Resend rotates the token for a pending invitation and returns the new token.
@@ -308,13 +349,18 @@ func (s *Service) Resend(ctx context.Context, id, actorID string) (Invitation, s
 		}
 		now := time.Now().UTC()
 		newGeneration := inv.TokenGeneration + 1
-		_, err = tx.ExecContext(ctx, "UPDATE invitations SET token_digest = ?, token_generation = ?, updated_at = ? WHERE id = ?",
+		_, err = tx.ExecContext(ctx, `UPDATE invitations SET token_digest = ?, token_generation = ?, version = version + 1,
+			delivery_state = 'queued', delivery_code = NULL, delivery_attempted_at = NULL, updated_at = ? WHERE id = ?`,
 			digest[:], newGeneration, instant(now), id)
 		if err != nil {
 			return fmt.Errorf("rotate invitation token: %w", err)
 		}
 		inv.UpdatedAt = now
 		inv.TokenGeneration = newGeneration
+		inv.Version++
+		inv.DeliveryState = DeliveryQueued
+		inv.DeliveryCode = nil
+		inv.DeliveryAttemptedAt = nil
 		return audit.WriteWithMetadata(ctx, tx, audit.ActionInvitationInvitationResent, actorID, "", audit.Metadata{InvitationID: inv.ID})
 	})
 	return inv, token, err
@@ -413,7 +459,7 @@ func (s *Service) Accept(ctx context.Context, input AcceptInput) (user.Account, 
 		now := time.Now()
 		nowStr := instant(now)
 		result, err := tx.ExecContext(ctx,
-			"UPDATE invitations SET status = 'accepted', token_digest = NULL, updated_at = ?, accepted_at = ?, accepted_by = ? WHERE id = ? AND status = 'pending'",
+			"UPDATE invitations SET status = 'accepted', token_digest = NULL, version = version + 1, updated_at = ?, accepted_at = ?, accepted_by = ? WHERE id = ? AND status = 'pending'",
 			nowStr, nowStr, account.ID, id)
 		if err != nil {
 			return fmt.Errorf("mark invitation accepted: %w", err)
@@ -436,8 +482,10 @@ func (s *Service) MarkFaulty(ctx context.Context, id, failureCode string) error 
 		now := time.Now()
 		nowStr := instant(now)
 		result, err := tx.ExecContext(ctx,
-			"UPDATE invitations SET status = 'faulty', token_digest = NULL, failure_code = ?, updated_at = ?, fault_at = ? WHERE id = ? AND status = 'pending'",
-			failureCode, nowStr, nowStr, id)
+			`UPDATE invitations SET status = 'faulty', token_digest = NULL, failure_code = ?, version = version + 1,
+			 delivery_state = 'failed', delivery_code = NULL, delivery_attempted_at = ?, updated_at = ?, fault_at = ?
+			 WHERE id = ? AND status = 'pending'`,
+			failureCode, nowStr, nowStr, nowStr, id)
 		if err != nil {
 			return fmt.Errorf("mark invitation faulty: %w", err)
 		}
@@ -454,14 +502,17 @@ func (s *Service) MarkFaulty(ctx context.Context, id, failureCode string) error 
 
 // MarkFaultyIfGeneration marks an invitation as faulty only if its generation matches.
 // This prevents stale delivery workers from marking a resent invitation faulty.
-func (s *Service) MarkFaultyIfGeneration(ctx context.Context, id, failureCode string, generation int) error {
+func (s *Service) MarkFaultyIfGeneration(
+	ctx context.Context, id, failureCode string, generation int, attemptedAt time.Time,
+) error {
 	return miSQLite.WithTx(ctx, s.database, func(tx *sql.Tx) error {
 		now := time.Now()
 		nowStr := instant(now)
 		result, err := tx.ExecContext(ctx,
-			`UPDATE invitations SET status = 'faulty', token_digest = NULL, failure_code = ?, updated_at = ?, fault_at = ?
+			`UPDATE invitations SET status = 'faulty', token_digest = NULL, failure_code = ?, version = version + 1,
+			delivery_state = 'failed', delivery_code = NULL, delivery_attempted_at = ?, updated_at = ?, fault_at = ?
 			WHERE id = ? AND status = 'pending' AND token_generation = ?`,
-			failureCode, nowStr, nowStr, id, generation)
+			failureCode, instant(attemptedAt), nowStr, nowStr, id, generation)
 		if err != nil {
 			return fmt.Errorf("mark invitation faulty: %w", err)
 		}
@@ -479,14 +530,15 @@ func (s *Service) MarkFaultyIfGeneration(ctx context.Context, id, failureCode st
 
 // MarkSentIfGeneration updates sent_at for a pending invitation only if generation matches.
 // Used by the delivery manager to record successful delivery.
-func (s *Service) MarkSentIfGeneration(ctx context.Context, id string, generation int) error {
+func (s *Service) MarkSentIfGeneration(ctx context.Context, id string, generation int, attemptedAt time.Time) error {
 	return miSQLite.WithTx(ctx, s.database, func(tx *sql.Tx) error {
 		now := time.Now()
 		nowStr := instant(now)
 		result, err := tx.ExecContext(ctx,
-			`UPDATE invitations SET sent_at = ?, updated_at = ?
+			`UPDATE invitations SET sent_at = ?, version = version + 1, delivery_state = 'delivered',
+			delivery_code = NULL, delivery_attempted_at = ?, updated_at = ?
 			WHERE id = ? AND status = 'pending' AND token_generation = ?`,
-			nowStr, nowStr, id, generation)
+			nowStr, instant(attemptedAt), nowStr, id, generation)
 		if err != nil {
 			return fmt.Errorf("mark invitation sent: %w", err)
 		}
@@ -499,6 +551,36 @@ func (s *Service) MarkSentIfGeneration(ctx context.Context, id string, generatio
 			return nil
 		}
 		return audit.WriteWithMetadata(ctx, tx, audit.ActionInvitationInvitationDelivered, "", "", audit.Metadata{InvitationID: id})
+	})
+}
+
+// MarkAmbiguousIfGeneration records uncertainty without invalidating the
+// current token and never changes a newer or terminal invitation.
+func (s *Service) MarkAmbiguousIfGeneration(
+	ctx context.Context, id, deliveryCode string, generation int, attemptedAt time.Time,
+) error {
+	return miSQLite.WithTx(ctx, s.database, func(tx *sql.Tx) error {
+		nowStr := instant(time.Now())
+		result, err := tx.ExecContext(ctx, `UPDATE invitations SET version = version + 1,
+			delivery_state = 'ambiguous', delivery_code = ?, delivery_attempted_at = ?, updated_at = ?
+			WHERE id = ? AND status = 'pending' AND token_generation = ?`,
+			deliveryCode, instant(attemptedAt), nowStr, id, generation)
+		if err != nil {
+			return fmt.Errorf("mark invitation delivery ambiguous: %w", err)
+		}
+		rows, err := result.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("count ambiguous delivery update: %w", err)
+		}
+		if rows != 1 {
+			return nil
+		}
+		action := audit.ActionInvitationInvitationDeliveryAmbiguous
+		if deliveryCode == httpserver.StableCode(httpserver.CodeInvitationDeliveryTimeout) {
+			action = audit.ActionInvitationInvitationDeliveryTimeout
+		}
+		return audit.WriteWithMetadata(ctx, tx, action, "", "",
+			audit.Metadata{InvitationID: id, OutcomeCode: deliveryCode})
 	})
 }
 
@@ -526,7 +608,8 @@ func loadInvitationScoped(ctx context.Context, tx *sql.Tx, id, actorID string, s
 	switch scope {
 	case scopeView:
 		// View scope: administrator sees all, inviter sees own, supervisor sees mentor invitations from others
-		query = `SELECT i.id, i.email, i.email_normalized, i.role, i.token_generation, i.status, i.failure_code, i.inviter_id, i.created_at, i.updated_at
+		query = `SELECT i.id, i.email, i.email_normalized, i.role, i.token_generation, i.version, i.status,
+			i.failure_code, i.delivery_state, i.delivery_code, i.delivery_attempted_at, i.inviter_id, i.created_at, i.updated_at
 			FROM invitations i
 			WHERE i.id = ?
 			AND (
@@ -535,7 +618,8 @@ func loadInvitationScoped(ctx context.Context, tx *sql.Tx, id, actorID string, s
 			)`
 	case scopeManage:
 		// Manage scope: only inviter or administrator
-		query = `SELECT i.id, i.email, i.email_normalized, i.role, i.token_generation, i.status, i.failure_code, i.inviter_id, i.created_at, i.updated_at
+		query = `SELECT i.id, i.email, i.email_normalized, i.role, i.token_generation, i.version, i.status,
+			i.failure_code, i.delivery_state, i.delivery_code, i.delivery_attempted_at, i.inviter_id, i.created_at, i.updated_at
 			FROM invitations i
 			WHERE i.id = ?
 			AND (
@@ -577,19 +661,29 @@ type invitationRow interface {
 
 func scanInvitationValues(row invitationRow) (Invitation, error) {
 	var inv Invitation
-	var roleStr, statusStr string
-	var failureCode, inviterID sql.NullString
+	var roleStr, statusStr, deliveryStateStr string
+	var failureCode, deliveryCode, deliveryAttemptedAt, inviterID sql.NullString
 	var createdAt, updatedAt string
-	if err := row.Scan(&inv.ID, &inv.Email, &inv.EmailNormalized, &roleStr, &inv.TokenGeneration, &statusStr, &failureCode, &inviterID, &createdAt, &updatedAt); err != nil {
+	if err := row.Scan(&inv.ID, &inv.Email, &inv.EmailNormalized, &roleStr, &inv.TokenGeneration, &inv.Version,
+		&statusStr, &failureCode, &deliveryStateStr, &deliveryCode, &deliveryAttemptedAt, &inviterID,
+		&createdAt, &updatedAt); err != nil {
 		return Invitation{}, fmt.Errorf("scan invitation: %w", err)
 	}
 	inv.Role = Role(roleStr)
 	inv.Status = Status(statusStr)
+	inv.DeliveryState = DeliveryState(deliveryStateStr)
 	if failureCode.Valid {
 		inv.FailureCode = &failureCode.String
 	}
 	if inviterID.Valid {
 		inv.InviterID = &inviterID.String
+	}
+	if deliveryCode.Valid {
+		inv.DeliveryCode = &deliveryCode.String
+	}
+	if inv.DeliveryState == DeliveryFailed {
+		code := httpserver.StableCode(httpserver.CodeInvitationDeliveryRejected)
+		inv.DeliveryCode = &code
 	}
 	var err error
 	inv.CreatedAt, err = time.Parse("2006-01-02T15:04:05.000000Z", createdAt)
@@ -600,7 +694,21 @@ func scanInvitationValues(row invitationRow) (Invitation, error) {
 	if err != nil {
 		return Invitation{}, fmt.Errorf("parse invitation updated_at: %w", err)
 	}
+	if deliveryAttemptedAt.Valid {
+		attemptedAt, parseErr := time.Parse("2006-01-02T15:04:05.000000Z", deliveryAttemptedAt.String)
+		if parseErr != nil {
+			return Invitation{}, fmt.Errorf("parse invitation delivery_attempted_at: %w", parseErr)
+		}
+		inv.DeliveryAttemptedAt = &attemptedAt
+	}
 	return inv, nil
+}
+
+// ETag returns a strong resource-specific validator for every mutable field.
+// Every invitation mutation increments Version in the same SQL statement.
+func ETag(inv Invitation) string {
+	digest := sha256.Sum256([]byte(inv.ID + "\x00" + fmt.Sprint(inv.Version)))
+	return `"` + hex.EncodeToString(digest[:]) + `"`
 }
 
 func scanInvitationRow(row *sql.Row) (Invitation, error) {
@@ -648,6 +756,10 @@ func validToken(token string) bool {
 
 func invitationID() string {
 	return "inv_" + uuid.NewString()
+}
+
+func deletionID() string {
+	return "invd_" + uuid.NewString()
 }
 
 func instant(value time.Time) string {

@@ -4,13 +4,12 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"fmt"
 	"log/slog"
 	"sync"
+	"time"
 
-	"github.com/thorstenkramm/mia/internal/audit"
+	"github.com/thorstenkramm/mia/internal/httpserver"
 	"github.com/thorstenkramm/mia/internal/provider/smtp"
-	miSQLite "github.com/thorstenkramm/mia/internal/sqlite"
 )
 
 // invitationMailer sends invitation emails.
@@ -21,16 +20,15 @@ type invitationMailer interface {
 // DeliveryManager owns bounded invitation-email delivery work. Close stops new
 // work and waits for accepted deliveries to record their terminal effects.
 type DeliveryManager struct {
-	service  *Service
-	database *sql.DB
-	mailer   invitationMailer
-	logger   *slog.Logger
-	mu       sync.Mutex
-	closed   bool
-	jobs     chan delivery
-	done     chan struct{}
-	wg       sync.WaitGroup
-	workers  sync.WaitGroup
+	service *Service
+	mailer  invitationMailer
+	logger  *slog.Logger
+	mu      sync.Mutex
+	closed  bool
+	jobs    chan delivery
+	done    chan struct{}
+	wg      sync.WaitGroup
+	workers sync.WaitGroup
 }
 
 type delivery struct {
@@ -40,11 +38,11 @@ type delivery struct {
 }
 
 // NewDeliveryManager creates the async invitation email delivery manager.
-func NewDeliveryManager(service *Service, database *sql.DB, mailer invitationMailer, logger *slog.Logger) *DeliveryManager {
+func NewDeliveryManager(service *Service, _ *sql.DB, mailer invitationMailer, logger *slog.Logger) *DeliveryManager {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	manager := &DeliveryManager{service: service, database: database, mailer: mailer, logger: logger, jobs: make(chan delivery, 16), done: make(chan struct{})}
+	manager := &DeliveryManager{service: service, mailer: mailer, logger: logger, jobs: make(chan delivery, 16), done: make(chan struct{})}
 	for range 4 {
 		manager.workers.Add(1)
 		go func() {
@@ -102,22 +100,28 @@ func (manager *DeliveryManager) Close() {
 }
 
 func (manager *DeliveryManager) deliver(ctx context.Context, invitationID, email, role, link string, generation int) {
+	attemptedAt := time.Now().UTC()
 	err := manager.mailer.SendInvitation(ctx, email, role, link)
 	if err == nil {
-		// Success: update sent_at and audit delivery (Finding 2).
-		if markErr := manager.service.MarkSentIfGeneration(ctx, invitationID, generation); markErr != nil {
+		if markErr := manager.service.MarkSentIfGeneration(ctx, invitationID, generation, attemptedAt); markErr != nil {
 			manager.logger.Error("mark invitation sent", "invitation_id", invitationID, "error", markErr)
 		}
 		return
 	}
 	if errors.Is(err, smtp.ErrTimeout) {
 		manager.logger.Warn("invitation email timed out", "invitation_id", invitationID)
-		manager.auditDeliveryOutcomeIfGeneration(ctx, audit.ActionInvitationInvitationDeliveryTimeout, invitationID, "timeout", generation)
+		if markErr := manager.service.MarkAmbiguousIfGeneration(
+			ctx, invitationID, httpserver.StableCode(httpserver.CodeInvitationDeliveryTimeout), generation, attemptedAt,
+		); markErr != nil {
+			manager.logger.Error("record invitation delivery timeout", "invitation_id", invitationID, "error", markErr)
+		}
 		return
 	}
 	if errors.Is(err, smtp.ErrRejected) {
 		// Rejected is audited via MarkFaultyIfGeneration which writes its own audit record.
-		if markErr := manager.service.MarkFaultyIfGeneration(ctx, invitationID, "smtp_rejected", generation); markErr != nil {
+		if markErr := manager.service.MarkFaultyIfGeneration(
+			ctx, invitationID, httpserver.StableCode(httpserver.CodeInvitationDeliveryRejected), generation, attemptedAt,
+		); markErr != nil {
 			manager.logger.Error("mark invitation faulty", "invitation_id", invitationID, "error", markErr)
 		}
 		return
@@ -125,39 +129,9 @@ func (manager *DeliveryManager) deliver(ctx context.Context, invitationID, email
 	// All other errors (including ErrAmbiguous and any unclassified errors) are treated as ambiguous.
 	// This is the safest default - we don't know if the message was delivered or not.
 	manager.logger.Warn("invitation email delivery outcome ambiguous", "invitation_id", invitationID, "error", err)
-	manager.auditDeliveryOutcomeIfGeneration(ctx, audit.ActionInvitationInvitationDeliveryAmbiguous, invitationID, "ambiguous", generation)
-}
-
-// auditDeliveryOutcomeIfGeneration audits a delivery outcome only if the invitation's
-// current generation matches AND status is still pending, preventing stale deliveries
-// from auditing against newer tokens or terminal invitations.
-func (manager *DeliveryManager) auditDeliveryOutcomeIfGeneration(ctx context.Context, action audit.Action, invitationID, outcomeCode string, generation int) {
-	if manager.database == nil {
-		return
-	}
-	if err := miSQLite.WithTx(ctx, manager.database, func(tx *sql.Tx) error {
-		// Check if the invitation still has the same generation AND is still pending before auditing.
-		// This prevents stale deliveries from auditing against terminal invitations (accepted/revoked/faulty).
-		var currentGeneration int
-		var status string
-		err := tx.QueryRowContext(ctx, "SELECT token_generation, status FROM invitations WHERE id = ?", invitationID).Scan(&currentGeneration, &status)
-		if errors.Is(err, sql.ErrNoRows) {
-			// Invitation was deleted - skip audit.
-			return nil
-		}
-		if err != nil {
-			return fmt.Errorf("check invitation generation: %w", err)
-		}
-		if currentGeneration != generation {
-			// Stale delivery - a resend has occurred, skip audit for this old generation.
-			return nil
-		}
-		if status != "pending" {
-			// Invitation became terminal during delivery - skip audit.
-			return nil
-		}
-		return audit.WriteWithMetadata(ctx, tx, action, "", "", audit.Metadata{InvitationID: invitationID, OutcomeCode: outcomeCode})
-	}); err != nil {
-		manager.logger.Error("audit delivery outcome", "action", action, "error", err)
+	if markErr := manager.service.MarkAmbiguousIfGeneration(
+		ctx, invitationID, httpserver.StableCode(httpserver.CodeInvitationDeliveryAmbiguous), generation, attemptedAt,
+	); markErr != nil {
+		manager.logger.Error("record ambiguous invitation delivery", "invitation_id", invitationID, "error", markErr)
 	}
 }

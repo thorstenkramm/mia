@@ -47,11 +47,16 @@ const (
 	CodeMFAProofRequired            Code = "auth_mfa_proof_required"
 	CodeMFAUnavailable              Code = "auth_mfa_unavailable"
 
-	CodeInvitationNotFound         Code = "invitation_not_found"
-	CodeInvitationInvalid          Code = "invitation_invalid"
-	CodeInvitationEmailRegistered  Code = "invitation_email_registered"
-	CodeInvitationAlreadyAccepted  Code = "invitation_already_accepted"
-	CodeInvitationRoleUnauthorized Code = "invitation_role_unauthorized"
+	CodeInvitationNotFound             Code = "invitation_not_found"
+	CodeInvitationInvalid              Code = "invitation_invalid"
+	CodeInvitationEmailRegistered      Code = "invitation_email_registered"
+	CodeInvitationAlreadyAccepted      Code = "invitation_already_accepted"
+	CodeInvitationRoleUnauthorized     Code = "invitation_role_unauthorized"
+	CodeInvitationPreconditionRequired Code = "invitation_precondition_required"
+	CodeInvitationPreconditionFailed   Code = "invitation_precondition_failed"
+	CodeInvitationDeliveryTimeout      Code = "invitation_delivery_timeout"
+	CodeInvitationDeliveryAmbiguous    Code = "invitation_delivery_ambiguous"
+	CodeInvitationDeliveryRejected     Code = "invitation_delivery_rejected"
 
 	CodeUserRoleUnauthorized       Code = "user_role_unauthorized"
 	CodeUserNotFound               Code = "user_not_found"
@@ -151,11 +156,16 @@ var errorRegistry = map[Code]definition{
 	CodeMFAProofRequired:            {http.StatusUnprocessableEntity, "MFA Proof Required", "The request could not be completed."},
 	CodeMFAUnavailable:              {http.StatusUnprocessableEntity, "MFA Unavailable", "The request could not be completed."},
 
-	CodeInvitationNotFound:         {http.StatusNotFound, "Not Found", "The requested resource was not found."},
-	CodeInvitationInvalid:          {http.StatusUnprocessableEntity, "Invalid Invitation", "The request could not be completed."},
-	CodeInvitationEmailRegistered:  {http.StatusConflict, "Email Already Registered", "The request could not be completed."},
-	CodeInvitationAlreadyAccepted:  {http.StatusUnprocessableEntity, "Invitation Already Accepted", "The request could not be completed."},
-	CodeInvitationRoleUnauthorized: {http.StatusForbidden, "Unauthorized", "The request could not be completed."},
+	CodeInvitationNotFound:             {http.StatusNotFound, "Not Found", "The requested resource was not found."},
+	CodeInvitationInvalid:              {http.StatusUnprocessableEntity, "Invalid Invitation", "The request could not be completed."},
+	CodeInvitationEmailRegistered:      {http.StatusConflict, "Email Already Registered", "The request could not be completed."},
+	CodeInvitationAlreadyAccepted:      {http.StatusUnprocessableEntity, "Invitation Already Accepted", "The request could not be completed."},
+	CodeInvitationRoleUnauthorized:     {http.StatusForbidden, "Unauthorized", "The request could not be completed."},
+	CodeInvitationPreconditionRequired: {http.StatusPreconditionRequired, "Precondition Required", "Review the current invitation before trying again."},
+	CodeInvitationPreconditionFailed:   {http.StatusPreconditionFailed, "Precondition Failed", "The invitation changed. Review it before trying again."},
+	CodeInvitationDeliveryTimeout:      {},
+	CodeInvitationDeliveryAmbiguous:    {},
+	CodeInvitationDeliveryRejected:     {},
 
 	CodeUserRoleUnauthorized:       {http.StatusForbidden, "Unauthorized", "The request could not be completed."},
 	CodeUserNotFound:               {http.StatusNotFound, "Not Found", "The requested resource was not found."},

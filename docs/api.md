@@ -309,7 +309,13 @@ Administrator, supervisor, and mentor invitations are single-use, do not expire,
 and normally remain pending until accepted or revoked. Definite initial SMTP
 failure makes one faulty and unusable; an SMTP timeout leaves it pending and
 usable, logs a sanitized error, and is not retried. Authorized reads expose the
-state and sanitized failure code. Faulty invitations can only be deleted. To
+lifecycle state, latest delivery state, sanitized delivery code, and authoritative
+UTC attempt time. `queued` means delivery was admitted but has not produced a
+recorded result; `delivered` is confirmed SMTP acceptance; `ambiguous` with
+`invitation_delivery_timeout` or `invitation_delivery_ambiguous` does not claim
+delivery; and `failed` with `invitation_delivery_rejected` accompanies the
+terminal faulty state. Faulty invitations can
+only be deleted. To
 token holders, preview and acceptance treat revoked, faulty, accepted, and
 unknown tokens identically with one generic invalid-invitation response. Links
 use `/invitation#token=<uuid>` and the frontend removes the fragment before its
@@ -322,12 +328,22 @@ supervisor or an administrator may view, resend, revoke, or delete it.
 Supervisor invitation acceptance atomically creates both supervisor and student
 roles.
 
-`DELETE /invitations/{id}` is state-dependent. For a pending invitation it
+`GET /invitations/{id}` returns a strong resource-specific `ETag`. The
+state-dependent `DELETE /invitations/{id}` requires that exact value in
+`If-Match`. A missing precondition returns `428 invitation_precondition_required`;
+a malformed, wrong-resource, or stale value returns
+`412 invitation_precondition_failed`. Both leave the invitation unchanged and
+require a fresh read and confirmation.
+
+For a pending invitation DELETE
 atomically revokes the invitation, clears its token, records revocation
 attribution, and writes the revocation audit event. For a faulty invitation it
 physically deletes the row and writes a content-free deletion audit event.
 Accepted and already revoked invitations reject DELETE without changing state.
 The same actor authorization governs pending revocation and faulty deletion.
+Success returns an `invitation-deletions` command result whose `effect` is
+`revoked` or `deleted`, so a confirmed revoke can never silently become physical
+deletion and a confirmed faulty deletion can never become revocation.
 
 ## Current user and MFA
 

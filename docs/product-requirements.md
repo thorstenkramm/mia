@@ -386,6 +386,15 @@ profile operations.
 - Resending a pending invitation invalidates its previous token, creates a new
   token, and sends it to the same intended email address.
 - Token replacement is audited. Every earlier link becomes unusable immediately.
+- Authorized invitation reads expose the latest delivery as queued, delivered,
+  ambiguous, or failed, with a nullable sanitized outcome code and authoritative
+  UTC attempt time. Timeout and other uncertainty never claim delivery and never
+  trigger automatic retry.
+- An authorized invitation detail read returns a strong resource-specific ETag.
+  State-dependent DELETE requires the reviewed value in `If-Match`; missing or
+  stale preconditions change nothing and require a fresh read and confirmation.
+  Successful DELETE identifies whether the pending invitation was retained as
+  revoked or the faulty invitation was physically deleted.
 - Invitation acceptance always creates a new account and its invited permanent
   role. An email uniqueness conflict rejects acceptance without consuming the
   invitation.

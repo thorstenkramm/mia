@@ -197,7 +197,15 @@ Invitation:
       type: string
     attributes:
       type: object
-      required: [email, role, status, created_at, updated_at]
+      required:
+        - email
+        - role
+        - status
+        - delivery_state
+        - delivery_code
+        - delivery_attempted_at
+        - created_at
+        - updated_at
       properties:
         email:
           type: string
@@ -210,6 +218,22 @@ Invitation:
         failure_code:
           type: string
           description: Present only on faulty invitations.
+        delivery_state:
+          type: string
+          enum: [queued, delivered, ambiguous, failed]
+          description: Authoritative latest admitted delivery state; queued and ambiguous remain usable while pending.
+        delivery_code:
+          type: [string, 'null']
+          enum:
+            - invitation_delivery_timeout
+            - invitation_delivery_ambiguous
+            - invitation_delivery_rejected
+            - null
+          description: Sanitized latest outcome code; timeout and ambiguous never claim delivery.
+        delivery_attempted_at:
+          type: [string, 'null']
+          format: date-time
+          description: UTC start time of the latest completed SMTP attempt, or null while only queued.
         created_at:
           type: string
           format: date-time
@@ -233,6 +257,25 @@ InvitationPreview:
         role:
           type: string
           enum: [administrator, supervisor, mentor]
+InvitationDeletion:
+  type: object
+  required: [type, id, attributes]
+  properties:
+    type:
+      const: invitation-deletions
+    id:
+      type: string
+      description: Unique ephemeral command-result ID with the `invd_` prefix.
+    attributes:
+      type: object
+      required: [invitation_id, effect]
+      additionalProperties: false
+      properties:
+        invitation_id:
+          type: string
+        effect:
+          type: string
+          enum: [revoked, deleted]
 Course:
   type: object
   required: [type, id, attributes, relationships]
@@ -1169,6 +1212,12 @@ InvitationCollectionDocument:
       $ref: ../json-api/documents.yaml#/PageMeta
     links:
       $ref: ../json-api/documents.yaml#/PageLinks
+InvitationDeletionDocument:
+  type: object
+  required: [data]
+  properties:
+    data:
+      $ref: '#/InvitationDeletion'
 InvitationPreviewDocument:
   type: object
   required: [data]

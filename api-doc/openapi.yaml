@@ -184,6 +184,9 @@ components:
     CacheControlNoStore:
       description: Prohibits browsers and intermediaries from storing or replaying the API response.
       schema: { type: string, const: no-store }
+    StrongETag:
+      description: Strong validator for the current invitation representation and state-dependent DELETE effect.
+      schema: { type: string, pattern: '^"[0-9a-f]{64}"$' }
     SessionIdleExpiresAt:
       description: Authoritative idle deadline, unchanged except after Continue working.
       schema: { type: string, format: date-time }
@@ -213,6 +216,12 @@ components:
       in: path
       required: true
       schema: { type: string, minLength: 1 }
+    IfMatch:
+      name: If-Match
+      in: header
+      required: true
+      description: Exact strong ETag obtained from the latest authorized invitation GET.
+      schema: { type: string, pattern: '^"[0-9a-f]{64}"$' }
     UserID:
       name: user_id
       in: path

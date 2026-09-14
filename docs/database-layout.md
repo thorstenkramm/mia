@@ -403,24 +403,28 @@ Columns:
 - `role`, enum `administrator`, `supervisor`, or `mentor`, not null
 - `email`, intended original address, not null
 - `email_normalized`, intended normalized address, not null
-- `token_hash`, nullable SHA-256 token digest, unique when present
+- `token_digest`, nullable SHA-256 token digest, unique when present
 - `token_generation`, positive integer, not null, default 1
-- `state`, enum `pending`, `accepted`, `revoked`, or `faulty`, not null
+- `version`, positive integer used for strong HTTP validators, not null
+- `status`, enum `pending`, `accepted`, `revoked`, or `faulty`, not null
+- `delivery_state`, enum `queued`, `delivered`, `ambiguous`, or `failed`, not null
+- `delivery_code`, nullable sanitized ambiguous-outcome code; faulty delivery uses the existing `failure_code` source
+- `delivery_attempted_at`, nullable UTC start time of the latest completed attempt
 - `created_at`, not null
-- `created_by`, nullable user ID
-- `last_sent_at`, nullable
+- `inviter_id`, nullable user ID
+- `sent_at`, nullable
 - `accepted_at`, nullable
 - `accepted_by`, nullable user ID
 - `revoked_at`, nullable
 - `revoked_by`, nullable user ID
-- `faulted_at`, nullable
+- `fault_at`, nullable
 - `failure_code`, nullable sanitized code
 
 Invariants:
 
 - Invitations have no course or student scope.
 - Invitations do not expire.
-- `token_hash` is present only while state is pending. Acceptance, revocation, or
+- `token_digest` is present only while status is pending. Acceptance, revocation, or
   definite delivery failure clears it.
 - Only pending invitations can be resent, accepted, or revoked. A definite
   initial SMTP failure atomically makes an invitation faulty and invalidates its
@@ -434,8 +438,17 @@ Invariants:
   audit event. API DELETE on a faulty invitation physically deletes it. Accepted
   and revoked invitations reject API DELETE without changing state; foreign-key
   cascades required by account deletion remain unaffected.
-- Resend replaces `token_hash`, increments `token_generation`, and invalidates
+- Resend replaces `token_digest`, increments `token_generation`, resets delivery
+  state to `queued`, and invalidates
   every earlier link in the same transaction.
+- Every representation- or effect-changing invitation update increments `version`.
+  The element ETag binds the invitation ID and version; DELETE compares it after
+  authorization inside the same write transaction before choosing revoke or
+  physical deletion.
+- A completed current-generation SMTP attempt records its start time and latest
+  delivery result atomically with its audit event. Timeout and ambiguous outcomes
+  remain pending; definite rejection records `failed` while making the invitation
+  faulty. Stale generation results make no change and produce no audit event.
 - Acceptance is single-use and creates one new account and invited role in one
   transaction.
 - Invitation creation rejects an intended email already used by a registered
@@ -445,7 +458,7 @@ Invariants:
 - Any administrator can revoke an administrator or supervisor invitation. Any
   supervisor may create a mentor invitation; only its creating supervisor or an
   administrator may resend or revoke it.
-- A mentor invitation requires `created_by` at creation. Actor deletion may later
+- A mentor invitation requires `inviter_id` at creation. Actor deletion may later
   set it to null, after which only an administrator can manage the invitation.
 - Those same actors can delete a corresponding faulty invitation.
 - Tokens follow the shared bearer-token contract above.

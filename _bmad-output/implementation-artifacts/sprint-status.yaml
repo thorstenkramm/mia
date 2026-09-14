@@ -54,7 +54,7 @@ development_status:
   epic-2: in-progress
   2-1-protect-browser-responses-and-bound-error-disclosure: done
   2-2-discover-and-extend-browser-sessions-safely: done
-  2-3-manage-invitations-through-delivery-ambiguity: backlog
+  2-3-manage-invitations-through-delivery-ambiguity: done
   2-4-discover-account-capabilities-and-administration-targets: backlog
   2-5-inspect-mfa-state-and-recover-lost-factors: backlog
   2-6-observe-and-continue-mobile-verification: backlog

@@ -46,3 +46,11 @@ ServiceUnavailable:
   description: A configured optional service required for the operation is unavailable.
   headers: { Cache-Control: { $ref: ../openapi.yaml#/components/headers/CacheControlNoStore } }
   content: { application/vnd.api+json: { schema: { $ref: ../schemas/json-api/documents.yaml#/ErrorDocument } } }
+PreconditionFailed:
+  description: The reviewed resource validator is stale or invalid (`invitation_precondition_failed`).
+  headers: { Cache-Control: { $ref: ../openapi.yaml#/components/headers/CacheControlNoStore } }
+  content: { application/vnd.api+json: { schema: { $ref: ../schemas/json-api/documents.yaml#/ErrorDocument } } }
+PreconditionRequired:
+  description: A current reviewed resource validator is required (`invitation_precondition_required`).
+  headers: { Cache-Control: { $ref: ../openapi.yaml#/components/headers/CacheControlNoStore } }
+  content: { application/vnd.api+json: { schema: { $ref: ../schemas/json-api/documents.yaml#/ErrorDocument } } }

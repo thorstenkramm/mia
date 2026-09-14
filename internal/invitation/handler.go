@@ -126,19 +126,39 @@ func deleteHandler(service *Service) echo.HandlerFunc {
 		if err != nil {
 			return err
 		}
-		err = service.Delete(c.Request().Context(), c.Param("id"), actorID)
+		effect, err := service.Delete(c.Request().Context(), c.Param("id"), actorID,
+			c.Request().Header.Get("If-Match"))
+		if errors.Is(err, ErrPreconditionRequired) {
+			service.AuditRevocationDenied(c.Request().Context(), actorID)
+			return httpserver.NewError(httpserver.CodeInvitationPreconditionRequired)
+		}
+		if errors.Is(err, ErrPreconditionFailed) {
+			service.AuditRevocationDenied(c.Request().Context(), actorID)
+			return httpserver.NewError(httpserver.CodeInvitationPreconditionFailed)
+		}
 		if errors.Is(err, ErrInvitationNotFound) {
 			// Audit denied mutation without revealing existence.
 			service.AuditRevocationDenied(c.Request().Context(), actorID)
 			return httpserver.NewError(httpserver.CodeInvitationNotFound)
 		}
 		if errors.Is(err, ErrInvitationNotPending) {
+			service.AuditRevocationDenied(c.Request().Context(), actorID)
 			return httpserver.NewError(httpserver.CodeInvitationInvalid)
 		}
 		if err != nil {
 			return err
 		}
-		return c.NoContent(http.StatusNoContent)
+		c.Response().Header().Set(echo.HeaderContentType, "application/vnd.api+json")
+		return c.JSON(http.StatusOK, map[string]any{
+			"data": map[string]any{
+				"type": "invitation-deletions",
+				"id":   deletionID(),
+				"attributes": map[string]any{
+					"invitation_id": c.Param("id"),
+					"effect":        string(effect),
+				},
+			},
+		})
 	}
 }
 
@@ -312,6 +332,7 @@ func authenticatedUser(c *echo.Context) (string, error) {
 }
 
 func invitationResource(c *echo.Context, status int, inv Invitation) error {
+	c.Response().Header().Set("ETag", ETag(inv))
 	c.Response().Header().Set(echo.HeaderContentType, "application/vnd.api+json")
 	return c.JSON(status, map[string]any{
 		"data": map[string]any{
@@ -324,14 +345,20 @@ func invitationResource(c *echo.Context, status int, inv Invitation) error {
 
 func invitationAttributes(inv Invitation) map[string]any {
 	attrs := map[string]any{
-		"email":      inv.Email,
-		"role":       string(inv.Role),
-		"status":     string(inv.Status),
-		"created_at": httpserver.FormatInstant(inv.CreatedAt),
-		"updated_at": httpserver.FormatInstant(inv.UpdatedAt),
+		"email":                 inv.Email,
+		"role":                  string(inv.Role),
+		"status":                string(inv.Status),
+		"delivery_state":        string(inv.DeliveryState),
+		"delivery_code":         inv.DeliveryCode,
+		"delivery_attempted_at": nil,
+		"created_at":            httpserver.FormatInstant(inv.CreatedAt),
+		"updated_at":            httpserver.FormatInstant(inv.UpdatedAt),
 	}
 	if inv.FailureCode != nil {
 		attrs["failure_code"] = *inv.FailureCode
+	}
+	if inv.DeliveryAttemptedAt != nil {
+		attrs["delivery_attempted_at"] = httpserver.FormatInstant(*inv.DeliveryAttemptedAt)
 	}
 	return attrs
 }

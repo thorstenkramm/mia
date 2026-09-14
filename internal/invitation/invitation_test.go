@@ -347,14 +347,22 @@ func TestFaultyInvitationDeletionIsAudited(t *testing.T) {
 	}
 
 	// Mark it as faulty.
-	if err := service.MarkFaulty(context.Background(), inv.ID, "smtp_rejected"); err != nil {
+	if err := service.MarkFaulty(context.Background(), inv.ID,
+		httpserver.StableCode(httpserver.CodeInvitationDeliveryRejected)); err != nil {
+		t.Fatal(err)
+	}
+	inv, err = service.Get(context.Background(), inv.ID, admin.ID)
+	if err != nil {
 		t.Fatal(err)
 	}
 
 	// Delete the faulty invitation.
 	csrf, session := loginSession(t, server, "admin", "correct horse battery")
-	response := serve(t, server, http.MethodDelete, "/api/v1/invitations/"+inv.ID, csrf, session, "")
-	assertStatus(t, response, http.StatusNoContent)
+	response := serveIfMatch(t, server, "/api/v1/invitations/"+inv.ID, csrf, session, ETag(inv))
+	assertStatus(t, response, http.StatusOK)
+	if !bytes.Contains(response.Body.Bytes(), []byte(`"effect":"deleted"`)) {
+		t.Fatalf("DELETE did not identify physical deletion: %s", response.Body.String())
+	}
 
 	// Check audit record exists.
 	var auditCount int
@@ -617,6 +625,22 @@ func serve(t *testing.T, server *httpserver.Server, method, path, csrf string, s
 	return response
 }
 
+func serveIfMatch(
+	t *testing.T, server *httpserver.Server, path, csrf string, session []*http.Cookie, etag string,
+) *httptest.ResponseRecorder {
+	t.Helper()
+	request := httptest.NewRequest(http.MethodDelete, "http://mia.test"+path, nil)
+	request.Header.Set("X-CSRF-Token", csrf)
+	request.Header.Set("If-Match", etag)
+	request.AddCookie(&http.Cookie{Name: server.CSRFCookieName(), Value: csrf})
+	for _, cookie := range session {
+		request.AddCookie(cookie)
+	}
+	response := httptest.NewRecorder()
+	server.Echo.ServeHTTP(response, request)
+	return response
+}
+
 func assertStatus(t *testing.T, response *httptest.ResponseRecorder, status int) {
 	t.Helper()
 	if response.Code != status {
@@ -663,7 +687,7 @@ func TestTokenGenerationPreventsStaleDeliveryMarking(t *testing.T) {
 	service := NewService(database, nil)
 
 	// Create an invitation.
-	inv, _, err := service.Create(context.Background(), CreateInput{
+	inv, originalToken, err := service.Create(context.Background(), CreateInput{
 		Email:     "generation-test@example.test",
 		Role:      RoleSupervisor,
 		InviterID: admin.ID,
@@ -678,16 +702,25 @@ func TestTokenGenerationPreventsStaleDeliveryMarking(t *testing.T) {
 	}
 
 	// Resend increments generation.
-	inv2, _, err := service.Resend(context.Background(), inv.ID, admin.ID)
+	inv2, resentToken, err := service.Resend(context.Background(), inv.ID, admin.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if inv2.TokenGeneration != originalGeneration+1 {
 		t.Fatalf("expected generation %d, got %d", originalGeneration+1, inv2.TokenGeneration)
 	}
+	if _, err := service.Preview(context.Background(), originalToken); !errors.Is(err, ErrInvitationInvalid) {
+		t.Fatalf("resend left previous token usable: %v", err)
+	}
+	if _, err := service.Preview(context.Background(), resentToken); err != nil {
+		t.Fatalf("resend did not leave new token usable: %v", err)
+	}
 
 	// MarkFaultyIfGeneration with old generation should not mark faulty.
-	if err := service.MarkFaultyIfGeneration(context.Background(), inv.ID, "smtp_rejected", originalGeneration); err != nil {
+	if err := service.MarkFaultyIfGeneration(
+		context.Background(), inv.ID, httpserver.StableCode(httpserver.CodeInvitationDeliveryRejected),
+		originalGeneration, time.Now(),
+	); err != nil {
 		t.Fatal(err)
 	}
 
@@ -701,7 +734,10 @@ func TestTokenGenerationPreventsStaleDeliveryMarking(t *testing.T) {
 	}
 
 	// MarkFaultyIfGeneration with current generation should mark faulty.
-	if err := service.MarkFaultyIfGeneration(context.Background(), inv.ID, "smtp_rejected", inv2.TokenGeneration); err != nil {
+	if err := service.MarkFaultyIfGeneration(
+		context.Background(), inv.ID, httpserver.StableCode(httpserver.CodeInvitationDeliveryRejected),
+		inv2.TokenGeneration, time.Now(),
+	); err != nil {
 		t.Fatal(err)
 	}
 
@@ -756,7 +792,7 @@ func TestNonPendingPublicStateEquivalence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := service.Delete(context.Background(), inv2.ID, admin.ID); err != nil {
+	if _, err := service.Delete(context.Background(), inv2.ID, admin.ID, ETag(inv2)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -775,7 +811,8 @@ func TestNonPendingPublicStateEquivalence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := service.MarkFaulty(context.Background(), inv3.ID, "smtp_rejected"); err != nil {
+	if err := service.MarkFaulty(context.Background(), inv3.ID,
+		httpserver.StableCode(httpserver.CodeInvitationDeliveryRejected)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1225,7 +1262,7 @@ func TestInvitationAuditMetadata(t *testing.T) {
 	}
 
 	// Revoke the invitation.
-	if err := service.Delete(context.Background(), inv.ID, admin.ID); err != nil {
+	if _, err := service.Delete(context.Background(), inv.ID, admin.ID, ETag(inv)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1350,7 +1387,7 @@ func TestDeliveryManagerMarksFaultyOnRejection(t *testing.T) {
 	service := NewService(database, nil)
 
 	// Create invitation.
-	inv, _, err := service.Create(context.Background(), CreateInput{
+	inv, token, err := service.Create(context.Background(), CreateInput{
 		Email:     "delivery-reject@example.test",
 		Role:      RoleSupervisor,
 		InviterID: admin.ID,
@@ -1371,13 +1408,19 @@ func TestDeliveryManagerMarksFaultyOnRejection(t *testing.T) {
 	// Wait for delivery to complete.
 	manager.Close()
 
-	// Verify invitation is now faulty.
-	var status string
-	if err := database.QueryRow("SELECT status FROM invitations WHERE id = ?", inv.ID).Scan(&status); err != nil {
+	// Verify invitation is now faulty with a sanitized failed delivery result.
+	var status, deliveryState string
+	var deliveryCode, attemptedAt sql.NullString
+	if err := database.QueryRow(`SELECT status, delivery_state, failure_code, delivery_attempted_at
+		FROM invitations WHERE id = ?`, inv.ID).Scan(&status, &deliveryState, &deliveryCode, &attemptedAt); err != nil {
 		t.Fatal(err)
 	}
-	if status != "faulty" {
-		t.Fatalf("expected status faulty, got %s", status)
+	if status != "faulty" || deliveryState != "failed" || !deliveryCode.Valid ||
+		deliveryCode.String != "invitation_delivery_rejected" || !attemptedAt.Valid {
+		t.Fatalf("unexpected definite-failure state: %s %s %v %v", status, deliveryState, deliveryCode, attemptedAt)
+	}
+	if _, err := service.Preview(context.Background(), token); !errors.Is(err, ErrInvitationInvalid) {
+		t.Fatalf("definite failure left token usable: %v", err)
 	}
 }
 
@@ -1559,7 +1602,7 @@ func TestRevokedTokenReturnsGenericErrorWithInvalidProfile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := service.Delete(context.Background(), inv.ID, admin.ID); err != nil {
+	if _, err := service.Delete(context.Background(), inv.ID, admin.ID, ETag(inv)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1598,8 +1641,8 @@ func TestDeliveryAuditIncludesOutcomeCode(t *testing.T) {
 	if err := database.QueryRow("SELECT metadata FROM audit_events WHERE action = 'invitation.invitation.delivery_timeout' ORDER BY created_at DESC LIMIT 1").Scan(&metadata1); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(metadata1, `"outcome_code":"timeout"`) {
-		t.Fatalf("expected metadata to contain outcome_code:timeout, got: %s", metadata1)
+	if !strings.Contains(metadata1, `"outcome_code":"invitation_delivery_timeout"`) {
+		t.Fatalf("expected stable timeout outcome code, got: %s", metadata1)
 	}
 
 	// Test ambiguous outcome code.
@@ -1622,8 +1665,220 @@ func TestDeliveryAuditIncludesOutcomeCode(t *testing.T) {
 	if err := database.QueryRow("SELECT metadata FROM audit_events WHERE action = 'invitation.invitation.delivery_ambiguous' ORDER BY created_at DESC LIMIT 1").Scan(&metadata2); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(metadata2, `"outcome_code":"ambiguous"`) {
-		t.Fatalf("expected metadata to contain outcome_code:ambiguous, got: %s", metadata2)
+	if !strings.Contains(metadata2, `"outcome_code":"invitation_delivery_ambiguous"`) {
+		t.Fatalf("expected stable ambiguous outcome code, got: %s", metadata2)
+	}
+}
+
+func TestInvitationDeliveryStateReconcilesTimeout(t *testing.T) {
+	server, database := testServer(t)
+	admin := createAdminAccount(t, database, "delivery-state-admin")
+	service := NewService(database, nil)
+	inv, token, err := service.Create(context.Background(), CreateInput{
+		Email: "delivery-state@example.test", Role: RoleSupervisor, InviterID: admin.ID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := NewDeliveryManager(service, database, timeoutMailer{}, nil)
+	if !manager.Admit(context.Background(), inv.ID, inv.Email, string(inv.Role), "https://test/invite", 1) {
+		t.Fatal("expected delivery admission")
+	}
+	manager.Close()
+
+	csrf, session := loginSession(t, server, "delivery-state-admin", "correct horse battery")
+	response := serve(t, server, http.MethodGet, "/api/v1/invitations/"+inv.ID, csrf, session, "")
+	assertStatus(t, response, http.StatusOK)
+	if response.Header().Get("ETag") == "" || strings.HasPrefix(response.Header().Get("ETag"), "W/") {
+		t.Fatalf("expected strong ETag, got %q", response.Header().Get("ETag"))
+	}
+	if response.Header().Get("ETag") == ETag(inv) {
+		t.Fatal("delivery outcome did not change the reviewed invitation validator")
+	}
+	var document struct {
+		Data struct {
+			Attributes struct {
+				Status              string  `json:"status"`
+				DeliveryState       string  `json:"delivery_state"`
+				DeliveryCode        *string `json:"delivery_code"`
+				DeliveryAttemptedAt *string `json:"delivery_attempted_at"`
+			} `json:"attributes"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &document); err != nil {
+		t.Fatal(err)
+	}
+	attributes := document.Data.Attributes
+	if attributes.Status != "pending" || attributes.DeliveryState != "ambiguous" ||
+		attributes.DeliveryCode == nil || *attributes.DeliveryCode != "invitation_delivery_timeout" ||
+		attributes.DeliveryAttemptedAt == nil {
+		t.Fatalf("unexpected delivery reconciliation: %+v", attributes)
+	}
+	if _, err := time.Parse("2006-01-02T15:04:05.000000Z", *attributes.DeliveryAttemptedAt); err != nil {
+		t.Fatalf("invalid delivery attempt instant: %v", err)
+	}
+	if _, err := service.Preview(context.Background(), token); err != nil {
+		t.Fatalf("timeout invalidated usable token: %v", err)
+	}
+}
+
+func TestInvitationDeleteRequiresCurrentReviewedETag(t *testing.T) {
+	server, database := testServer(t)
+	admin := createAdminAccount(t, database, "etag-admin")
+	service := NewService(database, nil)
+	inv, _, err := service.Create(context.Background(), CreateInput{
+		Email: "etag@example.test", Role: RoleSupervisor, InviterID: admin.ID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	csrf, session := loginSession(t, server, "etag-admin", "correct horse battery")
+	path := "/api/v1/invitations/" + inv.ID
+
+	missing := serve(t, server, http.MethodDelete, path, csrf, session, "")
+	assertCode(t, missing, http.StatusPreconditionRequired, "invitation_precondition_required")
+	current, err := service.Get(context.Background(), inv.ID, admin.ID)
+	if err != nil || current.Status != StatusPending {
+		t.Fatalf("missing precondition changed invitation: %+v, %v", current, err)
+	}
+	malformed := serveIfMatch(t, server, path, csrf, session, `W/"not-current"`)
+	assertCode(t, malformed, http.StatusPreconditionFailed, "invitation_precondition_failed")
+	staleETag := ETag(current)
+	if _, _, err := service.Resend(context.Background(), inv.ID, admin.ID); err != nil {
+		t.Fatal(err)
+	}
+	stale := serveIfMatch(t, server, path, csrf, session, staleETag)
+	assertCode(t, stale, http.StatusPreconditionFailed, "invitation_precondition_failed")
+	current, err = service.Get(context.Background(), inv.ID, admin.ID)
+	if err != nil || current.Status != StatusPending {
+		t.Fatalf("stale precondition changed invitation: %+v, %v", current, err)
+	}
+	var deniedCount int
+	if err := database.QueryRow(`SELECT COUNT(*) FROM audit_events
+		WHERE action = 'invitation.invitation.revocation_denied'`).Scan(&deniedCount); err != nil {
+		t.Fatal(err)
+	}
+	if deniedCount != 3 {
+		t.Fatalf("expected three audited precondition denials, got %d", deniedCount)
+	}
+
+	deleted := serveIfMatch(t, server, path, csrf, session, ETag(current))
+	assertStatus(t, deleted, http.StatusOK)
+	if !bytes.Contains(deleted.Body.Bytes(), []byte(`"effect":"revoked"`)) {
+		t.Fatalf("DELETE did not identify revoke effect: %s", deleted.Body.String())
+	}
+	var retainedStatus string
+	if err := database.QueryRow("SELECT status FROM invitations WHERE id = ?", inv.ID).Scan(&retainedStatus); err != nil {
+		t.Fatal(err)
+	}
+	if retainedStatus != "revoked" {
+		t.Fatalf("expected retained revoked invitation, got %s", retainedStatus)
+	}
+}
+
+func TestInvitationDeleteHidesMissingAndOutOfScopeTargetsBeforeRequiringETag(t *testing.T) {
+	server, database := testServer(t)
+	admin := createAdminAccount(t, database, "hidden-delete-admin")
+	_ = createSupervisorAccount(t, database, "hidden-delete-supervisor")
+	service := NewService(database, nil)
+	inv, _, err := service.Create(context.Background(), CreateInput{
+		Email: "hidden-delete@example.test", Role: RoleAdministrator, InviterID: admin.ID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	csrf, session := loginSession(t, server, "hidden-delete-supervisor", "correct horse battery")
+
+	outOfScope := serve(t, server, http.MethodDelete, "/api/v1/invitations/"+inv.ID, csrf, session, "")
+	assertCode(t, outOfScope, http.StatusNotFound, "invitation_not_found")
+	missing := serve(t, server, http.MethodDelete, "/api/v1/invitations/inv_missing", csrf, session, "")
+	assertCode(t, missing, http.StatusNotFound, "invitation_not_found")
+	if outOfScope.Body.String() != missing.Body.String() {
+		t.Fatalf("hidden DELETE responses differ: out-of-scope=%s missing=%s",
+			outOfScope.Body.String(), missing.Body.String())
+	}
+	var status Status
+	if err := database.QueryRow("SELECT status FROM invitations WHERE id = ?", inv.ID).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status != StatusPending {
+		t.Fatalf("hidden DELETE changed invitation to %s", status)
+	}
+}
+
+func TestPendingDeleteReviewCannotDeleteConcurrentFault(t *testing.T) {
+	server, database := testServer(t)
+	admin := createAdminAccount(t, database, "fault-race-admin")
+	service := NewService(database, nil)
+	inv, _, err := service.Create(context.Background(), CreateInput{
+		Email: "fault-race@example.test", Role: RoleSupervisor, InviterID: admin.ID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reviewed := ETag(inv)
+	if err := service.MarkFaulty(context.Background(), inv.ID,
+		httpserver.StableCode(httpserver.CodeInvitationDeliveryRejected)); err != nil {
+		t.Fatal(err)
+	}
+	csrf, session := loginSession(t, server, "fault-race-admin", "correct horse battery")
+	response := serveIfMatch(t, server, "/api/v1/invitations/"+inv.ID, csrf, session, reviewed)
+	assertCode(t, response, http.StatusPreconditionFailed, "invitation_precondition_failed")
+	var status string
+	if err := database.QueryRow("SELECT status FROM invitations WHERE id = ?", inv.ID).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status != "faulty" {
+		t.Fatalf("stale pending review changed concurrent fault to %s", status)
+	}
+}
+
+func TestPendingDeleteReviewCannotChangeConcurrentTerminalEffect(t *testing.T) {
+	server, database := testServer(t)
+	admin := createAdminAccount(t, database, "terminal-race-admin")
+	service := NewService(database, nil)
+	csrf, session := loginSession(t, server, "terminal-race-admin", "correct horse battery")
+	cases := []struct {
+		name   string
+		status Status
+	}{
+		{name: "accepted", status: StatusAccepted},
+		{name: "revoked", status: StatusRevoked},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			inv, token, err := service.Create(context.Background(), CreateInput{
+				Email: "terminal-race-" + tc.name + "@example.test",
+				Role:  RoleSupervisor, InviterID: admin.ID,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			reviewed := ETag(inv)
+			switch tc.status {
+			case StatusAccepted:
+				_, err = service.Accept(context.Background(), AcceptInput{
+					Token: token, Username: "terminaluser" + tc.name,
+					PasswordHash: "$argon2id$v=19$m=19456,t=2,p=1$dGVzdHNhbHRzYWx0c2Fs$K0VIUEFlT09CMEMDAwXVxDAwNDAwMDAwMA",
+					Language:     "en", Country: "DE", TimeZone: "Europe/Berlin",
+				})
+			case StatusRevoked:
+				_, err = service.Delete(context.Background(), inv.ID, admin.ID, reviewed)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			response := serveIfMatch(t, server, "/api/v1/invitations/"+inv.ID, csrf, session, reviewed)
+			assertCode(t, response, http.StatusPreconditionFailed, "invitation_precondition_failed")
+			var status Status
+			if err := database.QueryRow("SELECT status FROM invitations WHERE id = ?", inv.ID).Scan(&status); err != nil {
+				t.Fatal(err)
+			}
+			if status != tc.status {
+				t.Fatalf("stale pending review changed %s invitation to %s", tc.status, status)
+			}
+		})
 	}
 }
 
@@ -2014,7 +2269,7 @@ func TestRevokerDeletionAllowsNullAttribution(t *testing.T) {
 	}
 
 	// Revoke the invitation.
-	if err := service.Delete(context.Background(), inv.ID, admin2.ID); err != nil {
+	if _, err := service.Delete(context.Background(), inv.ID, admin2.ID, ETag(inv)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -2175,7 +2430,7 @@ func TestRevokedInvitationRaceCondition(t *testing.T) {
 	}
 	originalGeneration := inv.TokenGeneration
 
-	if err := service.Delete(context.Background(), inv.ID, admin.ID); err != nil {
+	if _, err := service.Delete(context.Background(), inv.ID, admin.ID, ETag(inv)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -2220,7 +2475,8 @@ func TestFaultyInvitationRaceCondition(t *testing.T) {
 	originalGeneration := inv.TokenGeneration
 
 	// Mark invitation as faulty (simulating SMTP rejection).
-	if err := service.MarkFaulty(context.Background(), inv.ID, "smtp_rejected"); err != nil {
+	if err := service.MarkFaulty(context.Background(), inv.ID,
+		httpserver.StableCode(httpserver.CodeInvitationDeliveryRejected)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -2328,7 +2584,7 @@ func TestDeniedInvitationDeletionIsAudited(t *testing.T) {
 
 	// Supervisor tries to delete admin invitation - should fail and be audited.
 	csrf, session := loginSession(t, server, "supervisor", "correct horse battery")
-	response := serve(t, server, http.MethodDelete, "/api/v1/invitations/"+inv.ID, csrf, session, "")
+	response := serveIfMatch(t, server, "/api/v1/invitations/"+inv.ID, csrf, session, ETag(inv))
 	assertCode(t, response, http.StatusNotFound, "invitation_not_found")
 
 	// Verify denial was audited.
@@ -2514,7 +2770,8 @@ func TestUnrelatedSupervisorCannotManageMentorInvitation(t *testing.T) {
 	assertCode(t, response2, http.StatusNotFound, "invitation_not_found")
 
 	// Supervisor2 tries to delete - should fail.
-	response3 := serve(t, server, http.MethodDelete, "/api/v1/invitations/"+created.Data.ID, csrf2, session2, "")
+	response3 := serveIfMatch(t, server, "/api/v1/invitations/"+created.Data.ID, csrf2, session2,
+		response.Header().Get("ETag"))
 	assertCode(t, response3, http.StatusNotFound, "invitation_not_found")
 
 	// Supervisor2 tries to resend - should fail.
