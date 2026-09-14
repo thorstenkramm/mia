@@ -519,6 +519,12 @@ Invariants:
   It also deletes any pending SMS factor whose destination snapshot is now stale.
 - A replacement challenge invalidates an earlier pending challenge for the user.
 - Resend sends the same code and preserves expiry and `failed_attempts`.
+- The current-account API projects the latest challenge as active, expired, invalidated, completed, absent, or
+  provider-unavailable. Reads never mutate or extend it. Creation, successful resend, and successful verification return
+  the same projection used by the read.
+- Resend eligibility is computed from `last_sent_at` and durable SMS attempt rows. Cooldown and hourly/daily exhaustion
+  are distinct browser states with an authoritative next-attempt instant, but never expose the destination, code,
+  failure count, limiting dimension, threshold, or attempt count.
 - MIA sends no notice to the previous mobile number.
 - An authorized supervisor profile update sets or clears a student's verified
   mobile directly and invalidates all of that student's pending challenges in the

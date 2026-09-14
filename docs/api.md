@@ -299,6 +299,21 @@ single-use recovery codes once; they cannot be retrieved again. A management
 proof is an opaque five-minute bearer value for one factor disable or replacement
 and is distinct from its non-secret JSON:API resource ID.
 
+### Mobile-verification lifecycle
+
+`GET /api/v1/users/me/mobile-change-challenges` is the non-refreshing, current-account reconciliation read. It returns
+one per-account state resource whose lifecycle is `active`, `expired`, `invalidated`, `completed`, `absent`, or
+`unavailable`. The resource exposes only the opaque challenge ID, original server-authored expiry, resend eligibility,
+and the next resend instant when known. It never returns the destination, code, failed submissions, limiter dimensions,
+or delivery counts.
+
+Challenge creation, successful verification, and successful resend return the same representation as an immediate read.
+Resend keeps the original code, expiry, and accumulated verification-failure count. A 60-second cooldown uses the stable
+`user_mobile_resend_cooldown` error; hourly or daily exhaustion uses the generic `rate_limited` error. Both include
+`Retry-After`, make no provider request, and disclose neither whether the account or destination dimension caused the
+denial nor the configured thresholds. A provider failure is not retried automatically; the client reconciles through the
+GET operation.
+
 ## Invitations
 
 OpenAPI defines the authenticated invitation-management and public preview and

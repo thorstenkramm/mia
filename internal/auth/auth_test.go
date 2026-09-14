@@ -904,6 +904,105 @@ func TestSMSEnrollmentDeliversAndVerifiesOneCode(t *testing.T) {
 	}
 }
 
+func TestSMSRateLimitedRoutesReturnRetryAfter(t *testing.T) {
+	t.Run("login challenge creation", func(t *testing.T) {
+		server, database := testServerWithSMS(t, &smsRecorder{})
+		account := createAccount(t, database, false)
+		destination := "+4915111111111"
+		if _, err := database.Exec(`INSERT INTO mfa_factors
+			(id, user_id, method, sms_destination, created_at) VALUES (?, ?, 'sms', ?, ?)`,
+			"mff_"+uuid.NewString(), account.ID, destination, instant(time.Now())); err != nil {
+			t.Fatal(err)
+		}
+		insertCurrentSMSAttempt(t, database, account.ID, destination)
+		response := serve(t, server, http.MethodPost, "/api/v1/auth/login", csrfToken(t, server), nil,
+			loginBody("student", "correct horse battery"))
+		assertSMSRetryAfter(t, response)
+	})
+
+	t.Run("login challenge resend", func(t *testing.T) {
+		server, database := testServerWithSMS(t, &smsRecorder{})
+		account := createAccount(t, database, false)
+		destination := "+4915222222222"
+		challengeID := "mfc_" + uuid.NewString()
+		if _, err := database.Exec(`INSERT INTO mfa_factors
+			(id, user_id, method, sms_destination, created_at) VALUES (?, ?, 'sms', ?, ?)`,
+			"mff_"+uuid.NewString(), account.ID, destination, instant(time.Now())); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := database.Exec(`INSERT INTO mfa_challenges
+			(id, user_id, method, sms_code, expires_at, created_at) VALUES (?, ?, 'sms', '123456', ?, ?)`,
+			challengeID, account.ID, instant(time.Now().Add(30*time.Minute)), instant(time.Now())); err != nil {
+			t.Fatal(err)
+		}
+		insertCurrentSMSAttempt(t, database, account.ID, destination)
+		request := httptest.NewRequest(http.MethodPost, "http://mia.test/", nil)
+		recorder := httptest.NewRecorder()
+		context := server.Echo.NewContext(request, recorder)
+		if err := server.StartMFASession(context, account.ID, account.SecurityGeneration, challengeID, time.Now()); err != nil {
+			t.Fatal(err)
+		}
+		response := serve(t, server, http.MethodPost, "/api/v1/auth/mfa-challenges/"+challengeID+"/resends",
+			csrfToken(t, server), sessionCookies(t, server, recorder), "")
+		assertSMSRetryAfter(t, response)
+	})
+
+	t.Run("enrollment creation", func(t *testing.T) {
+		server, database := testServerWithSMS(t, &smsRecorder{})
+		account := createAccount(t, database, false)
+		destination := "+4915333333333"
+		if _, err := database.Exec("UPDATE users SET mobile = ?, mobile_verified_at = ? WHERE id = ?", destination,
+			instant(time.Now()), account.ID); err != nil {
+			t.Fatal(err)
+		}
+		csrf := csrfToken(t, server)
+		login := serve(t, server, http.MethodPost, "/api/v1/auth/login", csrf, nil,
+			loginBody("student", "correct horse battery"))
+		cookies, csrf := authCookies(t, server, login)
+		insertCurrentSMSAttempt(t, database, account.ID, destination)
+		response := serve(t, server, http.MethodPost, "/api/v1/users/me/mfa-enrollments", csrf, cookies,
+			`{"data":{"type":"mfa-enrollments","attributes":{"method":"sms"}}}`)
+		assertSMSRetryAfter(t, response)
+	})
+
+	t.Run("enrollment resend", func(t *testing.T) {
+		server, database := testServerWithSMS(t, &smsRecorder{})
+		account := createAccount(t, database, false)
+		destination := "+4915444444444"
+		csrf := csrfToken(t, server)
+		login := serve(t, server, http.MethodPost, "/api/v1/auth/login", csrf, nil,
+			loginBody("student", "correct horse battery"))
+		cookies, csrf := authCookies(t, server, login)
+		enrollmentID := "mfe_" + uuid.NewString()
+		if _, err := database.Exec(`INSERT INTO mfa_enrollments
+			(id, user_id, method, sms_destination, sms_code, expires_at, created_at)
+			VALUES (?, ?, 'sms', ?, '123456', ?, ?)`, enrollmentID, account.ID, destination,
+			instant(time.Now().Add(30*time.Minute)), instant(time.Now())); err != nil {
+			t.Fatal(err)
+		}
+		insertCurrentSMSAttempt(t, database, account.ID, destination)
+		response := serve(t, server, http.MethodPost,
+			"/api/v1/users/me/mfa-enrollments/"+enrollmentID+"/resends", csrf, cookies, "")
+		assertSMSRetryAfter(t, response)
+	})
+}
+
+func insertCurrentSMSAttempt(t *testing.T, database *sql.DB, accountID, destination string) {
+	t.Helper()
+	if _, err := database.Exec(`INSERT INTO sms_delivery_attempts (id, user_id, destination, created_at)
+		VALUES (?, ?, ?, ?)`, "sms_"+uuid.NewString(), accountID, destination, instant(time.Now())); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func assertSMSRetryAfter(t *testing.T, response *httptest.ResponseRecorder) {
+	t.Helper()
+	assertCode(t, response, http.StatusTooManyRequests, "rate_limited")
+	if response.Header().Get("Retry-After") == "" {
+		t.Fatal("SMS rate limit omitted Retry-After")
+	}
+}
+
 type smsRecorder struct {
 	mu    sync.Mutex
 	codes []string

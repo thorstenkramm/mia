@@ -391,19 +391,38 @@ MFAReset:
         password_change_required: { const: true }
         session_effect: { const: invalidated }
         mfa_state: { const: none }
-MobileChangeChallenge:
+MobileVerificationState:
   type: object
   required: [type, id, attributes]
+  additionalProperties: false
   properties:
     type:
-      const: mobile-change-challenges
+      const: mobile-verification-states
     id:
       type: string
-      description: Challenge ID with the `mvc_` prefix.
+      description: Authenticated account ID identifying this per-account singleton projection.
     attributes:
       type: object
       additionalProperties: false
-      description: Intentionally empty; the code travels only by SMS.
+      required: [state, challenge_id, expires_at, resend_state, next_resend_at]
+      properties:
+        state:
+          type: string
+          enum: [active, expired, invalidated, completed, absent, unavailable]
+        challenge_id:
+          type: [string, 'null']
+          description: Opaque current challenge ID used by authorized verification and resend operations.
+        expires_at:
+          type: [string, 'null']
+          format: date-time
+          description: Original server-authored expiry; never extended by reads or resends.
+        resend_state:
+          type: string
+          enum: [eligible, cooldown, rate_limited, unavailable, not_available]
+        next_resend_at:
+          type: [string, 'null']
+          format: date-time
+          description: Earliest known resend instant for cooldown or durable quota exhaustion.
 Invitation:
   type: object
   required: [type, id, attributes]
@@ -1434,12 +1453,12 @@ CreatedUserDocument:
   properties:
     data:
       $ref: '#/CreatedUser'
-MobileChangeChallengeDocument:
+MobileVerificationStateDocument:
   type: object
   required: [data]
   properties:
     data:
-      $ref: '#/MobileChangeChallenge'
+      $ref: '#/MobileVerificationState'
 InvitationDocument:
   type: object
   required: [data]

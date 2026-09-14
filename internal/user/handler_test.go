@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -227,17 +228,25 @@ func TestUserCreateResourcesRejectClientGeneratedIDs(t *testing.T) {
 	conformance.Error(t, response, http.StatusUnprocessableEntity, "user_profile_invalid")
 }
 
-type handlerSMS struct{ code string }
+type handlerSMS struct {
+	code  string
+	sends int
+}
 
 func (sender *handlerSMS) Send(_ context.Context, _ string, code string) error {
 	sender.code = code
+	sender.sends++
 	return nil
 }
 
 func TestMobileHandlersNeverReturnDestinationOrCode(t *testing.T) {
 	sender := &handlerSMS{}
-	server, _, staff, _, _ := profileServerWithSender(t, sender)
+	server, database, staff, student, _ := profileServerWithSender(t, sender)
 	session, csrf := issueSession(t, server, staff)
+	studentSession, studentCSRF := issueSession(t, server, student)
+	denied := profileRequest(t, server, http.MethodGet, "/api/v1/users/me/mobile-change-challenges", studentSession,
+		studentCSRF, "", "")
+	conformance.Error(t, denied, http.StatusForbidden, "user_profile_unauthorized")
 	created := profileRequest(t, server, http.MethodPost, "/api/v1/users/me/mobile-change-challenges", session, csrf,
 		"application/vnd.api+json",
 		`{"data":{"type":"mobile-change-challenges","attributes":{"mobile":"+49123456789"}}}`)
@@ -247,17 +256,66 @@ func TestMobileHandlersNeverReturnDestinationOrCode(t *testing.T) {
 	}
 	var document struct {
 		Data struct {
-			ID string `json:"id"`
+			ID         string `json:"id"`
+			Attributes struct {
+				State        string  `json:"state"`
+				ChallengeID  string  `json:"challenge_id"`
+				ResendState  string  `json:"resend_state"`
+				ExpiresAt    *string `json:"expires_at"`
+				NextResendAt *string `json:"next_resend_at"`
+			} `json:"attributes"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(created.Body.Bytes(), &document); err != nil {
 		t.Fatal(err)
 	}
+	if document.Data.ID != staff || document.Data.Attributes.State != "active" ||
+		document.Data.Attributes.ChallengeID == "" || document.Data.Attributes.ResendState != "cooldown" ||
+		document.Data.Attributes.ExpiresAt == nil || document.Data.Attributes.NextResendAt == nil {
+		t.Fatalf("mobile state response = %s", created.Body.String())
+	}
+	reloaded := profileRequest(t, server, http.MethodGet, "/api/v1/users/me/mobile-change-challenges", session, csrf, "", "")
+	if reloaded.Code != http.StatusOK || reloaded.Body.String() != created.Body.String() {
+		t.Fatalf("mobile reload = %d %s; created = %s", reloaded.Code, reloaded.Body.String(), created.Body.String())
+	}
+	cooldown := profileRequest(t, server, http.MethodPost,
+		"/api/v1/users/me/mobile-change-challenges/"+document.Data.Attributes.ChallengeID+"/resends", session, csrf,
+		"", "")
+	conformance.Error(t, cooldown, http.StatusTooManyRequests, "user_mobile_resend_cooldown")
+	if cooldown.Header().Get("Retry-After") == "" {
+		t.Fatal("mobile resend cooldown omitted Retry-After")
+	}
+	quotaBase := time.Now().Add(-10 * time.Minute).UTC()
+	if _, err := database.Exec("UPDATE sms_delivery_attempts SET created_at = ? WHERE user_id = ?",
+		quotaBase.Format("2006-01-02T15:04:05.000000Z"), staff); err != nil {
+		t.Fatal(err)
+	}
+	for index := 1; index < 5; index++ {
+		if _, err := database.Exec(`INSERT INTO sms_delivery_attempts (id, user_id, destination, created_at)
+			VALUES (?, ?, '+49123456789', ?)`, "sms_quota_"+strconv.Itoa(index), staff,
+			quotaBase.Add(time.Duration(index)*time.Minute).Format("2006-01-02T15:04:05.000000Z")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	quotaState := profileRequest(t, server, http.MethodGet, "/api/v1/users/me/mobile-change-challenges", session, csrf,
+		"", "")
+	if quotaState.Code != http.StatusOK ||
+		!bytes.Contains(quotaState.Body.Bytes(), []byte(`"resend_state":"rate_limited"`)) ||
+		!bytes.Contains(quotaState.Body.Bytes(), []byte(`"next_resend_at":"`)) {
+		t.Fatalf("quota state = %d %s", quotaState.Code, quotaState.Body.String())
+	}
+	quota := profileRequest(t, server, http.MethodPost,
+		"/api/v1/users/me/mobile-change-challenges/"+document.Data.Attributes.ChallengeID+"/resends", session, csrf,
+		"", "")
+	conformance.Error(t, quota, http.StatusTooManyRequests, "rate_limited")
+	if quota.Header().Get("Retry-After") == "" || sender.sends != 1 {
+		t.Fatalf("quota Retry-After/provider sends = %q/%d", quota.Header().Get("Retry-After"), sender.sends)
+	}
 	verified := profileRequest(t, server, http.MethodPost,
-		"/api/v1/users/me/mobile-change-challenges/"+document.Data.ID+"/verifications", session, csrf,
+		"/api/v1/users/me/mobile-change-challenges/"+document.Data.Attributes.ChallengeID+"/verifications", session, csrf,
 		"application/vnd.api+json",
 		`{"data":{"type":"mobile-change-verifications","attributes":{"code":"`+sender.code+`"}}}`)
-	if verified.Code != http.StatusNoContent {
+	if verified.Code != http.StatusOK || !bytes.Contains(verified.Body.Bytes(), []byte(`"state":"completed"`)) {
 		t.Fatalf("mobile verification response = %d %s", verified.Code, verified.Body.String())
 	}
 	profile := profileRequest(t, server, http.MethodGet, "/api/v1/users/me", session, csrf, "", "")

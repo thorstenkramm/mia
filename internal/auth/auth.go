@@ -133,7 +133,7 @@ func login(server *httpserver.Server, database *sql.DB, smsSender sms.Sender) ec
 					return httpserver.NewError(httpserver.CodeMFAUnavailable)
 				}
 				if errors.Is(err, sms.ErrRateLimited) {
-					return httpserver.NewError(httpserver.CodeRateLimited)
+					return smsRateLimited(c, err)
 				}
 				return fmt.Errorf("create MFA challenge: %w", err)
 			}
@@ -681,7 +681,7 @@ func resendChallenge(_ *httpserver.Server, database *sql.DB, sender sms.Sender) 
 			return httpserver.NewError(httpserver.CodeMFAUnavailable)
 		}
 		if errors.Is(err, sms.ErrRateLimited) {
-			return httpserver.NewError(httpserver.CodeRateLimited)
+			return smsRateLimited(c, err)
 		}
 		if errors.Is(err, errChallengeExpired) {
 			return httpserver.NewError(httpserver.CodeMFAChallengeExpired)
@@ -889,7 +889,7 @@ func startEnrollment(_ *httpserver.Server, database *sql.DB, publicURL string, s
 			return httpserver.NewError(httpserver.CodeMFAUnavailable)
 		}
 		if errors.Is(err, sms.ErrRateLimited) {
-			return httpserver.NewError(httpserver.CodeRateLimited)
+			return smsRateLimited(c, err)
 		}
 		if err != nil {
 			return fmt.Errorf("start MFA enrollment: %w", err)
@@ -1058,7 +1058,7 @@ func resendEnrollment(_ *httpserver.Server, database *sql.DB, sender sms.Sender)
 			return err
 		})
 		if errors.Is(err, sms.ErrRateLimited) {
-			return httpserver.NewError(httpserver.CodeRateLimited)
+			return smsRateLimited(c, err)
 		}
 		if errors.Is(err, errChallengeExpired) {
 			return httpserver.NewError(httpserver.CodeMFAChallengeExpired)
@@ -1380,10 +1380,22 @@ func mfaThrottled(c *echo.Context, database *sql.DB, accountID string, action au
 	if err := writeAudit(c.Request().Context(), database, action, accountID); err != nil {
 		return err
 	}
-	if limit.RetryAfter > 0 {
-		c.Response().Header().Set("Retry-After", strconv.Itoa(max(1, int(limit.RetryAfter.Seconds()+.999))))
+	setRetryAfter(c, limit.RetryAfter)
+	return httpserver.NewError(httpserver.CodeRateLimited)
+}
+
+func smsRateLimited(c *echo.Context, err error) error {
+	var limit *sms.LimitError
+	if errors.As(err, &limit) {
+		setRetryAfter(c, limit.RetryAfter)
 	}
 	return httpserver.NewError(httpserver.CodeRateLimited)
+}
+
+func setRetryAfter(c *echo.Context, retryAfter time.Duration) {
+	if retryAfter > 0 {
+		c.Response().Header().Set("Retry-After", strconv.Itoa(max(1, int(retryAfter.Seconds()+.999))))
+	}
 }
 
 func newSMSCode() (string, error) {

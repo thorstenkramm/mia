@@ -40,11 +40,20 @@ type Service struct {
 	dataDir              string
 	sender               sms.Sender
 	invalidatePendingSMS PendingSMSInvalidator
+	now                  func() time.Time
+	mobileMu             sync.Mutex
 	avatarMu             sync.RWMutex
 }
 
 func NewService(database *sql.DB, dataDir string, sender sms.Sender, invalidator PendingSMSInvalidator) *Service {
-	return &Service{database: database, dataDir: dataDir, sender: sender, invalidatePendingSMS: invalidator}
+	return NewServiceWithClock(database, dataDir, sender, invalidator, time.Now)
+}
+
+// NewServiceWithClock constructs a profile service with an injected lifecycle clock.
+func NewServiceWithClock(database *sql.DB, dataDir string, sender sms.Sender, invalidator PendingSMSInvalidator,
+	now func() time.Time,
+) *Service {
+	return &Service{database: database, dataDir: dataDir, sender: sender, invalidatePendingSMS: invalidator, now: now}
 }
 
 type Profile struct {
@@ -209,21 +218,106 @@ func SetStudentTTSVoice(ctx context.Context, query miSQLite.Querier, studentID, 
 	return nil
 }
 
+type MobileState struct {
+	AccountID, Lifecycle, ResendState string
+	ChallengeID                       *string
+	ExpiresAt, NextResendAt           *time.Time
+}
+
+// MobileState returns the current account's latest secret-free mobile-verification lifecycle.
+func (service *Service) MobileState(ctx context.Context, accountID string) (MobileState, error) {
+	service.mobileMu.Lock()
+	defer service.mobileMu.Unlock()
+	return service.mobileState(ctx, accountID, service.now())
+}
+
+func (service *Service) mobileState(ctx context.Context, accountID string, now time.Time) (MobileState, error) {
+	var state MobileState
+	err := miSQLite.WithTx(ctx, service.database, func(tx *sql.Tx) error {
+		var loadErr error
+		state, loadErr = service.loadMobileState(ctx, tx, accountID, now)
+		return loadErr
+	})
+	return state, err
+}
+
+func (service *Service) loadMobileState(ctx context.Context, query miSQLite.Querier, accountID string,
+	now time.Time,
+) (MobileState, error) {
+	if err := requireStaff(ctx, query, accountID); err != nil {
+		return MobileState{}, err
+	}
+	state := MobileState{AccountID: accountID, Lifecycle: "absent", ResendState: "not_available"}
+	var id, destination, expires string
+	var consumed, invalidated sql.NullString
+	err := query.QueryRowContext(ctx, `SELECT id, pending_mobile, expires_at, consumed_at, invalidated_at
+		FROM mobile_verification_challenges WHERE user_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1`, accountID).
+		Scan(&id, &destination, &expires, &consumed, &invalidated)
+	if errors.Is(err, sql.ErrNoRows) {
+		return state, nil
+	}
+	if err != nil {
+		return MobileState{}, fmt.Errorf("load mobile verification state: %w", err)
+	}
+	expiresAt, err := time.Parse("2006-01-02T15:04:05.000000Z", expires)
+	if err != nil {
+		return MobileState{}, fmt.Errorf("parse mobile verification expiry: %w", err)
+	}
+	state.ChallengeID, state.ExpiresAt = &id, &expiresAt
+	switch {
+	case consumed.Valid:
+		state.Lifecycle = "completed"
+	case invalidated.Valid:
+		state.Lifecycle = "invalidated"
+	case !expiresAt.After(now):
+		state.Lifecycle = "expired"
+	case !sms.Available(service.sender):
+		state.Lifecycle, state.ResendState = "unavailable", "unavailable"
+	default:
+		state.Lifecycle = "active"
+		eligibility, checkErr := sms.Check(ctx, query, accountID, destination, now)
+		if checkErr != nil {
+			return MobileState{}, fmt.Errorf("check mobile resend eligibility: %w", checkErr)
+		}
+		if eligibility.Allowed {
+			state.ResendState = "eligible"
+		} else {
+			state.ResendState = string(eligibility.Reason)
+			state.NextResendAt = &eligibility.RetryAt
+		}
+	}
+	return state, nil
+}
+
 // StartMobileChallenge replaces the account's pending challenge before one provider attempt.
 func (service *Service) StartMobileChallenge(ctx context.Context, accountID, destination string) (string, error) {
-	if !sms.Available(service.sender) {
-		return "", ErrMobileUnavailable
-	}
-	destination, err := identity.E164(destination)
-	if err != nil {
-		return "", ErrProfileInvalid
-	}
-	code, err := newMobileCode()
+	state, err := service.StartMobileChallengeState(ctx, accountID, destination)
 	if err != nil {
 		return "", err
 	}
+	if state.ChallengeID == nil {
+		return "", errors.New("started mobile challenge has no identity")
+	}
+	return *state.ChallengeID, nil
+}
+
+// StartMobileChallengeState starts a challenge and returns its authoritative lifecycle.
+func (service *Service) StartMobileChallengeState(ctx context.Context, accountID, destination string) (MobileState, error) {
+	service.mobileMu.Lock()
+	defer service.mobileMu.Unlock()
+	if !sms.Available(service.sender) {
+		return MobileState{}, ErrMobileUnavailable
+	}
+	destination, err := identity.E164(destination)
+	if err != nil {
+		return MobileState{}, ErrProfileInvalid
+	}
+	code, err := newMobileCode()
+	if err != nil {
+		return MobileState{}, err
+	}
 	id := "mvc_" + uuid.NewString()
-	now := time.Now()
+	now := service.now()
 	err = miSQLite.WithTx(ctx, service.database, func(tx *sql.Tx) error {
 		if err := requireStaff(ctx, tx, accountID); err != nil {
 			return err
@@ -243,28 +337,27 @@ func (service *Service) StartMobileChallenge(ctx context.Context, accountID, des
 		}
 		return audit.Write(ctx, tx, audit.ActionUserMobileChallengeCreated, accountID, accountID)
 	})
-	if errors.Is(err, sms.ErrRateLimited) {
-		return "", sms.ErrRateLimited
-	}
 	if err != nil {
-		return "", err
+		return MobileState{}, err
 	}
-	if err := service.sender.Send(ctx, destination, code); err != nil {
-		if auditErr := service.auditMobileDeliveryFailure(ctx, accountID); auditErr != nil {
-			return "", errors.Join(ErrMobileUnavailable, auditErr)
-		}
-		return "", ErrMobileUnavailable
-	}
-	return id, nil
+	return service.sendMobileCodeAndState(ctx, accountID, destination, code)
 }
 
 // ResendMobileChallenge sends the same live code without extending its state.
 func (service *Service) ResendMobileChallenge(ctx context.Context, accountID, challengeID string) error {
+	_, err := service.ResendMobileChallengeState(ctx, accountID, challengeID)
+	return err
+}
+
+// ResendMobileChallengeState resends and returns the unchanged authoritative lifecycle.
+func (service *Service) ResendMobileChallengeState(ctx context.Context, accountID, challengeID string) (MobileState, error) {
+	service.mobileMu.Lock()
+	defer service.mobileMu.Unlock()
 	if !sms.Available(service.sender) {
-		return ErrMobileUnavailable
+		return MobileState{}, ErrMobileUnavailable
 	}
 	var destination, code string
-	now := time.Now()
+	now := service.now()
 	err := miSQLite.WithTx(ctx, service.database, func(tx *sql.Tx) error {
 		if err := requireStaff(ctx, tx, accountID); err != nil {
 			return err
@@ -287,23 +380,37 @@ func (service *Service) ResendMobileChallenge(ctx context.Context, accountID, ch
 		return audit.Write(ctx, tx, audit.ActionUserMobileChallengeResendAttempted, accountID, accountID)
 	})
 	if err != nil {
-		return err
+		return MobileState{}, err
 	}
+	return service.sendMobileCodeAndState(ctx, accountID, destination, code)
+}
+
+func (service *Service) sendMobileCodeAndState(ctx context.Context, accountID, destination, code string) (MobileState, error) {
 	if err := service.sender.Send(ctx, destination, code); err != nil {
 		if auditErr := service.auditMobileDeliveryFailure(ctx, accountID); auditErr != nil {
-			return errors.Join(ErrMobileUnavailable, auditErr)
+			return MobileState{}, errors.Join(ErrMobileUnavailable, auditErr)
 		}
-		return ErrMobileUnavailable
+		return MobileState{}, ErrMobileUnavailable
 	}
-	return nil
+	return service.mobileState(ctx, accountID, service.now())
 }
 
 // VerifyMobileChallenge consumes one challenge and changes the verified profile mobile atomically.
 func (service *Service) VerifyMobileChallenge(ctx context.Context, accountID, challengeID, submitted string) error {
+	_, err := service.VerifyMobileChallengeState(ctx, accountID, challengeID, submitted)
+	return err
+}
+
+// VerifyMobileChallengeState verifies and returns the resulting authoritative lifecycle.
+func (service *Service) VerifyMobileChallengeState(ctx context.Context, accountID, challengeID,
+	submitted string,
+) (MobileState, error) {
+	service.mobileMu.Lock()
+	defer service.mobileMu.Unlock()
 	if len(submitted) != 6 {
-		return service.mobileFailure(ctx, accountID, challengeID)
+		return MobileState{}, service.mobileFailure(ctx, accountID, challengeID)
 	}
-	now := time.Now()
+	now := service.now()
 	resultErr := error(nil)
 	err := miSQLite.WithTx(ctx, service.database, func(tx *sql.Tx) error {
 		if err := requireStaff(ctx, tx, accountID); err != nil {
@@ -346,9 +453,12 @@ func (service *Service) VerifyMobileChallenge(ctx context.Context, accountID, ch
 		return audit.Write(ctx, tx, audit.ActionUserMobileChanged, accountID, accountID)
 	})
 	if err != nil {
-		return err
+		return MobileState{}, err
 	}
-	return resultErr
+	if resultErr != nil {
+		return MobileState{}, resultErr
+	}
+	return service.mobileState(ctx, accountID, now)
 }
 
 func (service *Service) mobileFailure(ctx context.Context, accountID, challengeID string) error {
@@ -356,7 +466,7 @@ func (service *Service) mobileFailure(ctx context.Context, accountID, challengeI
 		if err := requireStaff(ctx, tx, accountID); err != nil {
 			return err
 		}
-		return recordMobileFailure(ctx, tx, accountID, challengeID, time.Now())
+		return recordMobileFailure(ctx, tx, accountID, challengeID, service.now())
 	})
 	if err != nil {
 		return err
@@ -384,7 +494,9 @@ func recordMobileFailure(ctx context.Context, tx *sql.Tx, accountID, challengeID
 
 // RemoveMobile clears a verified mobile and pending mobile/SMS state without touching an active factor.
 func (service *Service) RemoveMobile(ctx context.Context, accountID string) error {
-	now := time.Now()
+	service.mobileMu.Lock()
+	defer service.mobileMu.Unlock()
+	now := service.now()
 	return miSQLite.WithTx(ctx, service.database, func(tx *sql.Tx) error {
 		if err := requireStaff(ctx, tx, accountID); err != nil {
 			return err

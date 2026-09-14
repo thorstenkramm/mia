@@ -139,6 +139,40 @@ func TestReserveAppliesAccountAndDestinationLimitsIndependently(t *testing.T) {
 	reserve(t, database, first, "+49222222222", base.Add(20*time.Minute))
 }
 
+func TestCheckDistinguishesCooldownAndReturnsExactQuotaBoundary(t *testing.T) {
+	database, accountID, _ := smsDatabase(t)
+	destination := "+49111111111"
+	base := time.Date(2026, 9, 14, 12, 0, 0, 0, time.UTC)
+	reserve(t, database, accountID, destination, base)
+	eligibility, err := sms.Check(context.Background(), database, accountID, destination, base.Add(30*time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if eligibility.Allowed || eligibility.Reason != sms.LimitCooldown ||
+		!eligibility.RetryAt.Equal(base.Add(time.Minute)) {
+		t.Fatalf("cooldown eligibility = %+v", eligibility)
+	}
+	for index := 1; index < 5; index++ {
+		reserve(t, database, accountID, destination, base.Add(time.Duration(index)*2*time.Minute))
+	}
+	checkedAt := base.Add(10 * time.Minute)
+	eligibility, err = sms.Check(context.Background(), database, accountID, destination, checkedAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if eligibility.Allowed || eligibility.Reason != sms.LimitQuota ||
+		!eligibility.RetryAt.Equal(base.Add(time.Hour)) {
+		t.Fatalf("quota eligibility = %+v", eligibility)
+	}
+	eligibility, err = sms.Check(context.Background(), database, accountID, destination, base.Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !eligibility.Allowed {
+		t.Fatalf("boundary eligibility = %+v", eligibility)
+	}
+}
+
 func reserve(t *testing.T, database *sql.DB, accountID, destination string, at time.Time) {
 	t.Helper()
 	if err := miSQLite.WithTx(context.Background(), database, func(tx *sql.Tx) error {

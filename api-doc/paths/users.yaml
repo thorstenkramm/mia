@@ -105,6 +105,24 @@ accounts:
         $ref: ../responses/errors.yaml#/Unprocessable
         description: Unsupported, duplicate, empty, malformed, or excessive query (`user_account_query_invalid`).
 mobileChallenges:
+  get:
+    tags: [Users]
+    operationId: getMobileVerificationState
+    summary: Read current mobile-verification state
+    security: [{ sessionCookie: [] }]
+    responses:
+      '200':
+        description: Authoritative current-account lifecycle and resend eligibility without sensitive values.
+        headers: { Cache-Control: { $ref: ../openapi.yaml#/components/headers/CacheControlNoStore } }
+        content:
+          application/vnd.api+json:
+            schema: { $ref: ../schemas/resources/resources.yaml#/MobileVerificationStateDocument }
+      '401': { $ref: ../responses/errors.yaml#/Unauthorized }
+      '403':
+        $ref: ../responses/errors.yaml#/Forbidden
+        description: Restricted session or student-only profile (`auth_password_change_required` or
+          `user_profile_unauthorized`).
+      '406': { $ref: ../responses/errors.yaml#/NotAcceptable }
   post:
     tags: [Users]
     operationId: createMobileChallenge
@@ -118,10 +136,12 @@ mobileChallenges:
     responses:
       '201':
         headers: { Cache-Control: { $ref: ../openapi.yaml#/components/headers/CacheControlNoStore } }
-        description: Identity-only mobile challenge; the code is sent by SMS.
+        description: >-
+          Authoritative post-delivery lifecycle projection. It may be expired when the original expiry passes during
+          delivery; the persisted expiry is unchanged. The destination and code are sent only to ClickSend.
         content:
           application/vnd.api+json:
-            schema: { $ref: ../schemas/resources/resources.yaml#/MobileChangeChallengeDocument }
+            schema: { $ref: ../schemas/resources/resources.yaml#/MobileVerificationStateDocument }
       '400': { $ref: ../responses/errors.yaml#/BadRequest }
       '401': { $ref: ../responses/errors.yaml#/Unauthorized }
       '403':
@@ -135,7 +155,11 @@ mobileChallenges:
       '422':
         $ref: ../responses/errors.yaml#/Unprocessable
         description: Invalid resource or E.164 mobile (`user_profile_invalid`).
-      '429': { $ref: ../responses/errors.yaml#/RateLimited }
+      '429':
+        $ref: ../responses/errors.yaml#/RateLimited
+        description: >-
+          SMS cooldown (`user_mobile_resend_cooldown`), hourly/daily capacity, or the layered mobile-operation limiter
+          (`rate_limited`). `Retry-After` is included when the next attempt is known without exposing limiter identity.
       '503':
         $ref: ../responses/errors.yaml#/ServiceUnavailable
         description: SMS verification unavailable (`user_mobile_unavailable`).
@@ -153,9 +177,12 @@ mobileChallengeVerifications:
         application/vnd.api+json:
           schema: { $ref: ../schemas/requests/requests.yaml#/MobileVerificationRequestDocument }
     responses:
-      '204':
-        $ref: ../responses/success.yaml#/NoContent
-        description: Mobile verified and pending SMS factors invalidated.
+      '200':
+        description: Completed lifecycle; mobile verified and pending SMS factors invalidated.
+        headers: { Cache-Control: { $ref: ../openapi.yaml#/components/headers/CacheControlNoStore } }
+        content:
+          application/vnd.api+json:
+            schema: { $ref: ../schemas/resources/resources.yaml#/MobileVerificationStateDocument }
       '400': { $ref: ../responses/errors.yaml#/BadRequest }
       '401': { $ref: ../responses/errors.yaml#/Unauthorized }
       '403':
@@ -181,9 +208,14 @@ mobileChallengeResends:
     security: [{ sessionCookie: [], csrfToken: [] }]
     parameters: [{ $ref: ../openapi.yaml#/components/parameters/ResourceID }]
     responses:
-      '204':
-        $ref: ../responses/success.yaml#/NoContent
-        description: Existing code sent without extending challenge expiry.
+      '200':
+        description: >-
+          Authoritative post-delivery lifecycle projection after sending the existing code. It may be expired when the
+          original expiry passes during delivery; resend does not alter the persisted expiry or reset failures.
+        headers: { Cache-Control: { $ref: ../openapi.yaml#/components/headers/CacheControlNoStore } }
+        content:
+          application/vnd.api+json:
+            schema: { $ref: ../schemas/resources/resources.yaml#/MobileVerificationStateDocument }
       '401': { $ref: ../responses/errors.yaml#/Unauthorized }
       '403':
         $ref: ../responses/errors.yaml#/Forbidden
@@ -194,7 +226,11 @@ mobileChallengeResends:
       '422':
         $ref: ../responses/errors.yaml#/Unprocessable
         description: Invalid or expired challenge (`user_mobile_challenge_invalid`).
-      '429': { $ref: ../responses/errors.yaml#/RateLimited }
+      '429':
+        $ref: ../responses/errors.yaml#/RateLimited
+        description: >-
+          Resend cooldown (`user_mobile_resend_cooldown`) or hourly/daily capacity (`rate_limited`). `Retry-After`
+          identifies the next permitted attempt without disclosing the limiting account or destination dimension.
       '503':
         $ref: ../responses/errors.yaml#/ServiceUnavailable
         description: SMS verification unavailable (`user_mobile_unavailable`).

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -14,13 +15,39 @@ import (
 )
 
 type recordingSMS struct {
+	mu                sync.Mutex
 	destination, code string
 	err               error
+	sends             int
+}
+
+type resendBoundarySMS struct {
+	now   *time.Time
+	code  string
+	sends int
+}
+
+func (sender *resendBoundarySMS) Send(_ context.Context, _ string, code string) error {
+	sender.code = code
+	sender.sends++
+	if sender.sends == 2 {
+		*sender.now = sender.now.Add(2 * time.Second)
+	}
+	return nil
 }
 
 func (sender *recordingSMS) Send(_ context.Context, destination, code string) error {
+	sender.mu.Lock()
+	defer sender.mu.Unlock()
 	sender.destination, sender.code = destination, code
+	sender.sends++
 	return sender.err
+}
+
+func (sender *recordingSMS) sendCount() int {
+	sender.mu.Lock()
+	defer sender.mu.Unlock()
+	return sender.sends
 }
 
 func TestStaffProfileUpdateIsNormalizedAuditedAndStudentSelfEditRejected(t *testing.T) {
@@ -145,6 +172,161 @@ func TestMobileVerificationChangesProfileOnceAndPreservesActiveFactorDestination
 	}
 }
 
+func TestMobileStateProjectsLifecycleAndAuthoritativeResendTiming(t *testing.T) {
+	database := openDatabase(t)
+	staff := createStaff(t, database, "mobile-state", []user.Role{user.Mentor})
+	sender := &recordingSMS{}
+	now := time.Date(2026, 9, 14, 12, 0, 0, 0, time.UTC)
+	service := user.NewServiceWithClock(database, t.TempDir(), sender, auth.InvalidatePendingSMS, func() time.Time {
+		return now
+	})
+	state, err := service.MobileState(context.Background(), staff.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Lifecycle != "absent" || state.ChallengeID != nil || state.ExpiresAt != nil {
+		t.Fatalf("absent state = %+v", state)
+	}
+	state, err = service.StartMobileChallengeState(context.Background(), staff.ID, "+49222222222")
+	if err != nil {
+		t.Fatal(err)
+	}
+	challengeID, expiry := *state.ChallengeID, *state.ExpiresAt
+	if state.Lifecycle != "active" || state.ResendState != "cooldown" ||
+		!expiry.Equal(now.Add(30*time.Minute)) || state.NextResendAt == nil ||
+		!state.NextResendAt.Equal(now.Add(time.Minute)) {
+		t.Fatalf("created state = %+v", state)
+	}
+	if _, err := database.Exec("UPDATE mobile_verification_challenges SET failed_attempts = 3 WHERE id = ?", challengeID); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(61 * time.Second)
+	state, err = service.ResendMobileChallengeState(context.Background(), staff.ID, challengeID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var failures int
+	var storedExpiry string
+	if err := database.QueryRow("SELECT failed_attempts, expires_at FROM mobile_verification_challenges WHERE id = ?",
+		challengeID).Scan(&failures, &storedExpiry); err != nil {
+		t.Fatal(err)
+	}
+	if state.ResendState != "cooldown" || failures != 3 || storedExpiry != expiry.Format("2006-01-02T15:04:05.000000Z") {
+		t.Fatalf("resent state/storage = %+v failures=%d expiry=%s", state, failures, storedExpiry)
+	}
+	if _, err := service.VerifyMobileChallengeState(context.Background(), staff.ID, challengeID, sender.code); err != nil {
+		t.Fatal(err)
+	}
+	state, err = service.MobileState(context.Background(), staff.ID)
+	if err != nil || state.Lifecycle != "completed" {
+		t.Fatalf("completed state/error = %+v / %v", state, err)
+	}
+	if _, err := database.Exec(`UPDATE mobile_verification_challenges
+		SET consumed_at = NULL, invalidated_at = ?, expires_at = ? WHERE id = ?`,
+		now.Format("2006-01-02T15:04:05.000000Z"), now.Add(time.Minute).Format("2006-01-02T15:04:05.000000Z"),
+		challengeID); err != nil {
+		t.Fatal(err)
+	}
+	state, err = service.MobileState(context.Background(), staff.ID)
+	if err != nil || state.Lifecycle != "invalidated" {
+		t.Fatalf("invalidated state/error = %+v / %v", state, err)
+	}
+	if _, err := database.Exec(`UPDATE mobile_verification_challenges
+		SET invalidated_at = NULL, expires_at = ? WHERE id = ?`,
+		now.Format("2006-01-02T15:04:05.000000Z"), challengeID); err != nil {
+		t.Fatal(err)
+	}
+	state, err = service.MobileState(context.Background(), staff.ID)
+	if err != nil || state.Lifecycle != "expired" {
+		t.Fatalf("expired state/error = %+v / %v", state, err)
+	}
+	if _, err := database.Exec("UPDATE mobile_verification_challenges SET expires_at = ? WHERE id = ?",
+		now.Add(time.Minute).Format("2006-01-02T15:04:05.000000Z"), challengeID); err != nil {
+		t.Fatal(err)
+	}
+	unavailable := user.NewServiceWithClock(database, t.TempDir(), sms.Unavailable{}, auth.InvalidatePendingSMS,
+		func() time.Time { return now })
+	state, err = unavailable.MobileState(context.Background(), staff.ID)
+	if err != nil || state.Lifecycle != "unavailable" || state.ResendState != "unavailable" {
+		t.Fatalf("unavailable state/error = %+v / %v", state, err)
+	}
+}
+
+func TestConcurrentMobileResendsMakeOneProviderCall(t *testing.T) {
+	database := openDatabase(t)
+	staff := createStaff(t, database, "mobile-race", []user.Role{user.Mentor})
+	sender := &recordingSMS{}
+	now := time.Date(2026, 9, 14, 12, 0, 0, 0, time.UTC)
+	service := user.NewServiceWithClock(database, t.TempDir(), sender, auth.InvalidatePendingSMS,
+		func() time.Time { return now })
+	challengeID, err := service.StartMobileChallenge(context.Background(), staff.ID, "+49333333333")
+	if err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(61 * time.Second)
+	errorsByAttempt := make(chan error, 2)
+	var wait sync.WaitGroup
+	for range 2 {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			errorsByAttempt <- service.ResendMobileChallenge(context.Background(), staff.ID, challengeID)
+		}()
+	}
+	wait.Wait()
+	close(errorsByAttempt)
+	var succeeded, limited int
+	for resendErr := range errorsByAttempt {
+		switch {
+		case resendErr == nil:
+			succeeded++
+		case errors.Is(resendErr, sms.ErrRateLimited):
+			limited++
+		default:
+			t.Fatalf("concurrent resend error = %v", resendErr)
+		}
+	}
+	if succeeded != 1 || limited != 1 || sender.sendCount() != 2 {
+		t.Fatalf("resends success/limited/provider sends = %d/%d/%d", succeeded, limited, sender.sendCount())
+	}
+}
+
+func TestMobileResendReevaluatesLifecycleAfterProviderCallCrossesExpiry(t *testing.T) {
+	database := openDatabase(t)
+	staff := createStaff(t, database, "mobile-expiry-boundary", []user.Role{user.Mentor})
+	now := time.Date(2026, 9, 14, 12, 0, 0, 0, time.UTC)
+	sender := &resendBoundarySMS{now: &now}
+	service := user.NewServiceWithClock(database, t.TempDir(), sender, auth.InvalidatePendingSMS,
+		func() time.Time { return now })
+	created, err := service.StartMobileChallengeState(context.Background(), staff.ID, "+49444444444")
+	if err != nil {
+		t.Fatal(err)
+	}
+	expiresAt := *created.ExpiresAt
+	now = expiresAt.Add(-time.Second)
+	resent, err := service.ResendMobileChallengeState(context.Background(), staff.ID, *created.ChallengeID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reloaded, err := service.MobileState(context.Background(), staff.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sender.sends != 2 || resent.Lifecycle != "expired" || reloaded.Lifecycle != "expired" ||
+		resent.ResendState != reloaded.ResendState || !resent.ExpiresAt.Equal(expiresAt) ||
+		!reloaded.ExpiresAt.Equal(expiresAt) {
+		t.Fatalf("resent/reloaded/provider sends = %+v / %+v / %d", resent, reloaded, sender.sends)
+	}
+	var storedExpiry string
+	if err := database.QueryRow("SELECT expires_at FROM mobile_verification_challenges WHERE id = ?",
+		*created.ChallengeID).Scan(&storedExpiry); err != nil {
+		t.Fatal(err)
+	}
+	if storedExpiry != expiresAt.Format("2006-01-02T15:04:05.000000Z") {
+		t.Fatalf("stored expiry = %s, want %s", storedExpiry, expiresAt.Format("2006-01-02T15:04:05.000000Z"))
+	}
+}
+
 func TestMobileFifthFailureInvalidatesAndProviderFailureLeavesCurrentMobile(t *testing.T) {
 	database := openDatabase(t)
 	staff := createStaff(t, database, "staff", []user.Role{user.Mentor})
@@ -186,6 +368,10 @@ func TestMobileFifthFailureInvalidatesAndProviderFailureLeavesCurrentMobile(t *t
 	service = user.NewService(database, t.TempDir(), failing, auth.InvalidatePendingSMS)
 	if _, err := service.StartMobileChallenge(context.Background(), staff.ID, "+49555555555"); !errors.Is(err, user.ErrMobileUnavailable) {
 		t.Fatalf("provider failure error = %v", err)
+	}
+	state, err := service.MobileState(context.Background(), staff.ID)
+	if err != nil || state.Lifecycle != "active" || state.ChallengeID == nil {
+		t.Fatalf("provider-failed challenge state/error = %+v / %v", state, err)
 	}
 	var mobile sql.NullString
 	if err := database.QueryRow("SELECT mobile FROM users WHERE id = ?", staff.ID).Scan(&mobile); err != nil {

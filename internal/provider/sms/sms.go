@@ -24,6 +24,33 @@ var ErrUnavailable = errors.New("SMS provider is unavailable")
 // ErrRateLimited means the durable SMS delivery gate rejected a send.
 var ErrRateLimited = errors.New("SMS delivery rate limited")
 
+// LimitReason identifies a safe class of SMS delivery denial without exposing
+// the account or destination dimension that caused it.
+type LimitReason string
+
+const (
+	LimitNone     LimitReason = ""
+	LimitCooldown LimitReason = "cooldown"
+	LimitQuota    LimitReason = "rate_limited"
+)
+
+// Eligibility is the authoritative durable SMS delivery state at one instant.
+type Eligibility struct {
+	Allowed bool
+	Reason  LimitReason
+	RetryAt time.Time
+}
+
+// LimitError preserves safe retry timing for HTTP callers.
+type LimitError struct {
+	Eligibility Eligibility
+	RetryAfter  time.Duration
+}
+
+func (err *LimitError) Error() string { return ErrRateLimited.Error() }
+
+func (err *LimitError) Unwrap() error { return ErrRateLimited }
+
 // Sender delivers a security code to an already validated destination.
 type Sender interface {
 	Send(context.Context, string, string) error
@@ -138,9 +165,13 @@ func (Unavailable) Send(context.Context, string, string) error { return ErrUnava
 // Reserve records an SMS delivery attempt before the provider is contacted.
 // Failed and ambiguous sends deliberately consume the same durable quota.
 func Reserve(ctx context.Context, tx *sql.Tx, accountID, destination string, now time.Time) (time.Duration, error) {
-	retry, err := reserveAllowed(ctx, tx, accountID, destination, now)
+	eligibility, err := Check(ctx, tx, accountID, destination, now)
 	if err != nil {
-		return retry, err
+		return 0, err
+	}
+	if !eligibility.Allowed {
+		retry := eligibility.RetryAt.Sub(now.UTC())
+		return retry, &LimitError{Eligibility: eligibility, RetryAfter: retry}
 	}
 	if _, err := tx.ExecContext(ctx, "INSERT INTO sms_delivery_attempts (id, user_id, destination, created_at) VALUES (?, ?, ?, ?)", "sms_"+uuid.NewString(), accountID, destination, format(now)); err != nil {
 		return 0, fmt.Errorf("reserve SMS delivery: %w", err)
@@ -150,52 +181,87 @@ func Reserve(ctx context.Context, tx *sql.Tx, accountID, destination string, now
 
 // CanSend reports current durable SMS eligibility without reserving capacity.
 func CanSend(ctx context.Context, query miSQLite.Querier, accountID, destination string, now time.Time) (bool, error) {
-	_, err := reserveAllowed(ctx, query, accountID, destination, now)
-	if errors.Is(err, ErrRateLimited) {
-		return false, nil
-	}
-	return err == nil, err
+	eligibility, err := Check(ctx, query, accountID, destination, now)
+	return eligibility.Allowed, err
 }
 
-func reserveAllowed(ctx context.Context, query miSQLite.Querier, accountID, destination string,
+// Check projects cooldown and quota eligibility without consuming capacity.
+func Check(ctx context.Context, query miSQLite.Querier, accountID, destination string,
 	now time.Time,
-) (time.Duration, error) {
+) (result Eligibility, returnErr error) {
 	now = now.UTC()
-	var newest string
-	err := query.QueryRowContext(ctx, `SELECT created_at FROM sms_delivery_attempts
-		WHERE user_id = ? OR destination = ? ORDER BY created_at DESC LIMIT 1`, accountID, destination).Scan(&newest)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return 0, fmt.Errorf("load SMS cooldown: %w", err)
+	rows, err := query.QueryContext(ctx, `SELECT user_id, destination, created_at FROM sms_delivery_attempts
+		WHERE (user_id = ? OR destination = ?) AND created_at > ? ORDER BY created_at`, accountID, destination,
+		format(now.Add(-24*time.Hour)))
+	if err != nil {
+		return Eligibility{}, fmt.Errorf("load SMS delivery eligibility: %w", err)
 	}
-	if err == nil {
-		last, parseErr := time.Parse("2006-01-02T15:04:05.000000Z", newest)
-		if parseErr != nil {
-			return 0, fmt.Errorf("parse SMS cooldown: %w", parseErr)
+	defer func() {
+		if err := rows.Close(); err != nil {
+			closeErr := fmt.Errorf("close SMS delivery eligibility rows: %w", err)
+			if returnErr == nil {
+				returnErr = closeErr
+			} else {
+				returnErr = errors.Join(returnErr, closeErr)
+			}
 		}
-		if retry := time.Minute - now.Sub(last); retry > 0 {
-			return retry, ErrRateLimited
-		}
+	}()
+	type attempt struct {
+		account, destination string
+		at                   time.Time
 	}
+	var attempts []attempt
+	for rows.Next() {
+		var item attempt
+		var stored string
+		if err := rows.Scan(&item.account, &item.destination, &stored); err != nil {
+			return Eligibility{}, fmt.Errorf("scan SMS delivery eligibility: %w", err)
+		}
+		item.at, err = time.Parse("2006-01-02T15:04:05.000000Z", stored)
+		if err != nil {
+			return Eligibility{}, fmt.Errorf("parse SMS delivery instant: %w", err)
+		}
+		attempts = append(attempts, item)
+	}
+	if err := rows.Err(); err != nil {
+		return Eligibility{}, fmt.Errorf("iterate SMS delivery eligibility: %w", err)
+	}
+	eligibility := Eligibility{Allowed: true}
 	for _, window := range []struct {
 		duration time.Duration
 		maximum  int
 	}{{time.Hour, 5}, {24 * time.Hour, 10}} {
-		var accountCount, destinationCount int
-		if err := query.QueryRowContext(ctx, `SELECT COUNT(*) FROM sms_delivery_attempts
-			WHERE user_id = ? AND created_at > ?`, accountID,
-			format(now.Add(-window.duration))).Scan(&accountCount); err != nil {
-			return 0, fmt.Errorf("count SMS deliveries: %w", err)
-		}
-		if err := query.QueryRowContext(ctx, `SELECT COUNT(*) FROM sms_delivery_attempts
-			WHERE destination = ? AND created_at > ?`, destination,
-			format(now.Add(-window.duration))).Scan(&destinationCount); err != nil {
-			return 0, fmt.Errorf("count destination SMS deliveries: %w", err)
-		}
-		if accountCount >= window.maximum || destinationCount >= window.maximum {
-			return window.duration, ErrRateLimited
+		for _, dimension := range []func(attempt) bool{
+			func(item attempt) bool { return item.account == accountID },
+			func(item attempt) bool { return item.destination == destination },
+		} {
+			var matching []time.Time
+			for _, item := range attempts {
+				if item.at.After(now.Add(-window.duration)) && dimension(item) {
+					matching = append(matching, item.at)
+				}
+			}
+			if len(matching) >= window.maximum {
+				candidate := matching[len(matching)-window.maximum].Add(window.duration)
+				if candidate.After(eligibility.RetryAt) {
+					eligibility.RetryAt = candidate
+				}
+				eligibility.Allowed, eligibility.Reason = false, LimitQuota
+			}
 		}
 	}
-	return 0, nil
+	if len(attempts) > 0 {
+		cooldownEnd := attempts[len(attempts)-1].at.Add(time.Minute)
+		if cooldownEnd.After(now) {
+			if cooldownEnd.After(eligibility.RetryAt) {
+				eligibility.RetryAt = cooldownEnd
+			}
+			if eligibility.Reason == LimitNone {
+				eligibility.Allowed, eligibility.Reason = false, LimitCooldown
+			}
+		}
+	}
+	return eligibility, nil
 }
 
 func format(value time.Time) string { return value.UTC().Format("2006-01-02T15:04:05.000000Z") }

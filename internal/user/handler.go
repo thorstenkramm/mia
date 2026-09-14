@@ -19,6 +19,7 @@ import (
 func RegisterProfileRoutes(server *httpserver.Server, service *Service) {
 	server.AuthenticatedGET("/api/v1/users/me", getProfile(service))
 	server.AuthenticatedPATCH("/api/v1/users/me", patchProfile(service))
+	server.AuthenticatedGET("/api/v1/users/me/mobile-change-challenges", getMobileChallenge(service))
 	server.AuthenticatedPOST("/api/v1/users/me/mobile-change-challenges", startMobileChallenge(server, service))
 	server.AuthenticatedPOST("/api/v1/users/me/mobile-change-challenges/:id/verifications",
 		verifyMobileChallenge(server, service))
@@ -28,6 +29,20 @@ func RegisterProfileRoutes(server *httpserver.Server, service *Service) {
 	server.AuthenticatedRoute(http.MethodGet, "/api/v1/users/me/avatar", httpserver.RepresentationBinary, getAvatar(service))
 	server.AuthenticatedRoute(http.MethodPut, "/api/v1/users/me/avatar", httpserver.RepresentationImageUpload, putAvatar(service))
 	server.AuthenticatedDELETE("/api/v1/users/me/avatar", deleteAvatar(service))
+}
+
+func getMobileChallenge(service *Service) echo.HandlerFunc {
+	return func(c *echo.Context) error {
+		accountID, err := currentUser(c)
+		if err != nil {
+			return err
+		}
+		state, err := service.MobileState(c.Request().Context(), accountID)
+		if err != nil {
+			return profileError(err)
+		}
+		return mobileStateResponse(c, http.StatusOK, state)
+	}
 }
 
 func getProfile(service *Service) echo.HandlerFunc {
@@ -169,11 +184,11 @@ func startMobileChallenge(server *httpserver.Server, service *Service) echo.Hand
 			request.Data.Attributes.Mobile == "" {
 			return httpserver.NewError(httpserver.CodeUserProfileInvalid)
 		}
-		id, err := service.StartMobileChallenge(c.Request().Context(), accountID, request.Data.Attributes.Mobile)
+		state, err := service.StartMobileChallengeState(c.Request().Context(), accountID, request.Data.Attributes.Mobile)
 		if err != nil {
-			return profileError(err)
+			return profileErrorWithRetry(c, err)
 		}
-		return resource(c, http.StatusCreated, "mobile-change-challenges", id, map[string]any{})
+		return mobileStateResponse(c, http.StatusCreated, state)
 	}
 }
 
@@ -194,11 +209,12 @@ func verifyMobileChallenge(server *httpserver.Server, service *Service) echo.Han
 			request.Data.Attributes.Code == "" {
 			return httpserver.NewError(httpserver.CodeUserProfileInvalid)
 		}
-		if err := service.VerifyMobileChallenge(c.Request().Context(), accountID, c.Param("id"),
-			request.Data.Attributes.Code); err != nil {
+		state, err := service.VerifyMobileChallengeState(c.Request().Context(), accountID, c.Param("id"),
+			request.Data.Attributes.Code)
+		if err != nil {
 			return profileError(err)
 		}
-		return c.NoContent(http.StatusNoContent)
+		return mobileStateResponse(c, http.StatusOK, state)
 	}
 }
 
@@ -211,10 +227,11 @@ func resendMobileChallenge(server *httpserver.Server, service *Service) echo.Han
 		if result := server.CheckMFA(c, accountID); !result.Allowed {
 			return rateLimited(c, result)
 		}
-		if err := service.ResendMobileChallenge(c.Request().Context(), accountID, c.Param("id")); err != nil {
-			return profileError(err)
+		state, err := service.ResendMobileChallengeState(c.Request().Context(), accountID, c.Param("id"))
+		if err != nil {
+			return profileErrorWithRetry(c, err)
 		}
-		return c.NoContent(http.StatusNoContent)
+		return mobileStateResponse(c, http.StatusOK, state)
 	}
 }
 
@@ -303,6 +320,17 @@ func profileResponse(c *echo.Context, profile Profile, avatar bool) error {
 	return resource(c, http.StatusOK, "users", profile.ID, attributes)
 }
 
+func mobileStateResponse(c *echo.Context, status int, state MobileState) error {
+	attributes := map[string]any{
+		"state":          state.Lifecycle,
+		"challenge_id":   state.ChallengeID,
+		"expires_at":     httpserver.FormatOptionalInstant(state.ExpiresAt),
+		"resend_state":   state.ResendState,
+		"next_resend_at": httpserver.FormatOptionalInstant(state.NextResendAt),
+	}
+	return resource(c, status, "mobile-verification-states", state.AccountID, attributes)
+}
+
 func resource(c *echo.Context, status int, resourceType, id string, attributes any) error {
 	return httpserver.Resource(c, status, resourceType, id, attributes)
 }
@@ -330,6 +358,21 @@ func profileError(err error) error {
 	default:
 		return err
 	}
+}
+
+func profileErrorWithRetry(c *echo.Context, err error) error {
+	var limit *sms.LimitError
+	if !errors.As(err, &limit) {
+		return profileError(err)
+	}
+	retry := limit.RetryAfter
+	if retry > 0 {
+		c.Response().Header().Set("Retry-After", strconv.Itoa(max(1, int(retry.Seconds()+.999))))
+	}
+	if limit.Eligibility.Reason == sms.LimitCooldown {
+		return httpserver.NewError(httpserver.CodeUserMobileResendCooldown)
+	}
+	return httpserver.NewError(httpserver.CodeRateLimited)
 }
 
 func rateLimited(c *echo.Context, result httpserver.Result) error {

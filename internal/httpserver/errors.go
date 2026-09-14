@@ -66,6 +66,7 @@ const (
 	CodeUserProfileInvalid              Code = "user_profile_invalid"
 	CodeUserProfileUnauthorized         Code = "user_profile_unauthorized"
 	CodeUserMobileUnavailable           Code = "user_mobile_unavailable"
+	CodeUserMobileResendCooldown        Code = "user_mobile_resend_cooldown"
 	CodeUserMobileChallengeInvalid      Code = "user_mobile_challenge_invalid"
 	CodeUserMobileCodeInvalid           Code = "user_mobile_code_invalid"
 	CodeUserAvatarInvalid               Code = "user_avatar_invalid"
@@ -181,6 +182,7 @@ var errorRegistry = map[Code]definition{
 	CodeUserProfileInvalid:              {http.StatusUnprocessableEntity, "Invalid Profile", "The request could not be completed."},
 	CodeUserProfileUnauthorized:         {http.StatusForbidden, "Unauthorized", "The request could not be completed."},
 	CodeUserMobileUnavailable:           {http.StatusServiceUnavailable, "Mobile Verification Unavailable", "The request could not be completed."},
+	CodeUserMobileResendCooldown:        {http.StatusTooManyRequests, "Mobile Resend Unavailable", "Wait before requesting another code."},
 	CodeUserMobileChallengeInvalid:      {http.StatusUnprocessableEntity, "Invalid Mobile Challenge", "The request could not be completed."},
 	CodeUserMobileCodeInvalid:           {http.StatusUnprocessableEntity, "Invalid Mobile Code", "The request could not be completed."},
 	CodeUserAvatarInvalid:               {http.StatusUnprocessableEntity, "Invalid Avatar", "The request could not be completed."},
