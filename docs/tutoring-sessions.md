@@ -145,6 +145,26 @@ state is failed with a safe restart code because MIA cannot know whether its
 provider request ran. During graceful shutdown MIA starts no queued work, gives
 active generation 30 seconds to finish, then cancels and fails what remains.
 
+The owner-only current-work read is the authoritative browser view of this
+queue. One database snapshot distinguishes idle, generating, queued, combined
+generating-and-queued, and completed states. It includes immutable identities
+for current work, remaining queue capacity, and independent eligibility for
+submit, queue, Stop, retry, reconnect, and finish. Eligible reconnect work
+identifies the immutable response SSE target. The browser does not reconstruct
+these answers from transcript pages, elapsed time, SSE events, or failed
+mutations.
+
+Optional retained message-request and response identities let this read
+reconcile ambiguous outcomes. Stop success is bound to the requested immutable
+response; automatic handoff may expose another response as current work without
+changing the stopped response's terminal outcome. Reads, polling, and reconnects
+never start provider work or refresh browser-session idle expiry.
+
+Explicit retries carry a canonical UUID v4 request ID bound to the target
+message. Identical replay returns the existing linked response, including after
+session completion; changed payload reuse conflicts. A new retry still requires
+an active idle session.
+
 ## Starting a tutoring session
 
 A student can conduct only one session at a time across all courses. Starting

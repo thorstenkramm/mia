@@ -157,6 +157,8 @@ paths:
     $ref: paths/tutoring.yaml#/activeTutoringSession
   /api/v1/tutoring-sessions/{id}:
     $ref: paths/tutoring.yaml#/tutoringSession
+  /api/v1/tutoring-sessions/{id}/current-work:
+    $ref: paths/tutoring.yaml#/tutoringSessionCurrentWork
   /api/v1/tutoring-sessions/{id}/completion:
     $ref: paths/tutoring.yaml#/tutoringSessionCompletion
   /api/v1/tutoring-sessions/{id}/summary-generations:

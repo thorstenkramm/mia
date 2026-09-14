@@ -1319,6 +1319,99 @@ StudentMessage:
         created_at: { type: string, format: date-time }
         response: { $ref: '#/TutorResponse' }
 
+TutoringWork:
+  description: Atomic owner-only projection of persisted session work and server-authored action eligibility.
+  type: object
+  required: [type, id, attributes]
+  properties:
+    type: { const: tutoring-work-states }
+    id:
+      type: string
+      description: The tutoring-session ID.
+    attributes:
+      type: object
+      required:
+        - session_state
+        - state
+        - remaining_queue_capacity
+        - generating_response
+        - queued_work
+        - latest_response
+        - reconciled_message
+        - reconciled_response
+        - actions
+      properties:
+        session_state: { type: string, enum: [active, completed] }
+        state: { type: string, enum: [idle, generating, queued, generating_and_queued, completed] }
+        remaining_queue_capacity: { type: integer, minimum: 0, maximum: 1 }
+        generating_response:
+          oneOf:
+            - { $ref: '#/TutorResponse' }
+            - type: 'null'
+        queued_work:
+          oneOf:
+            - { $ref: '#/StudentMessage' }
+            - type: 'null'
+        latest_response:
+          oneOf:
+            - { $ref: '#/TutorResponse' }
+            - type: 'null'
+        reconciled_message:
+          oneOf:
+            - { $ref: '#/StudentMessage' }
+            - type: 'null'
+        reconciled_response:
+          oneOf:
+            - { $ref: '#/TutorResponse' }
+            - type: 'null'
+        actions:
+          $ref: '#/TutoringWorkActions'
+
+TutoringWorkActions:
+  type: object
+  required: [submit, queue, stop, stop_response_ids, retry, retry_response_id, reconnect, reconnect_response_id, finish]
+  properties:
+    submit: { type: boolean }
+    queue: { type: boolean }
+    stop: { type: boolean }
+    stop_response_ids:
+      type: array
+      maxItems: 2
+      uniqueItems: true
+      items: { type: string }
+    retry: { type: boolean }
+    retry_response_id: { type: [string, 'null'] }
+    reconnect: { type: boolean }
+    reconnect_response_id: { type: [string, 'null'] }
+    finish: { type: boolean }
+
+InterruptedTutorResponse:
+  description: The immutable terminal response targeted by the successful Stop operation.
+  allOf:
+    - { $ref: '#/TutorResponse' }
+    - type: object
+      required: [attributes]
+      properties:
+        attributes:
+          type: object
+          required: [state, finished_at]
+          properties:
+            state: { const: interrupted }
+            finished_at: { type: string, format: date-time }
+
+TutoringStopWork:
+  description: Post-Stop work whose reconciliation result is the non-null interrupted target.
+  allOf:
+    - { $ref: '#/TutoringWork' }
+    - type: object
+      required: [attributes]
+      properties:
+        attributes:
+          type: object
+          required: [reconciled_response]
+          properties:
+            reconciled_response: { $ref: '#/InterruptedTutorResponse' }
+
 TutoringTurn:
   description: One paginated immutable student-message and tutor-response attempt pair.
   type: object
@@ -1475,6 +1568,14 @@ StudentMessageDocument:
   required: [data]
   properties:
     data: { $ref: '#/StudentMessage' }
+StudentMessageMutationDocument:
+  description: Definitive submit/replay result with an immediate request-ID reconciliation link.
+  type: object
+  required: [data, links]
+  additionalProperties: false
+  properties:
+    data: { $ref: '#/StudentMessage' }
+    links: { $ref: '#/MessageCurrentWorkLinks' }
 TutoringTurnCollectionDocument:
   type: object
   required: [data, meta]
@@ -1489,6 +1590,77 @@ TutorResponseDocument:
   required: [data]
   properties:
     data: { $ref: '#/TutorResponse' }
+TutorResponseRetryDocument:
+  description: Definitive retry/replay result with an immutable-response reconciliation link.
+  type: object
+  required: [data, links]
+  additionalProperties: false
+  properties:
+    data: { $ref: '#/TutorResponse' }
+    links: { $ref: '#/ResponseCurrentWorkLinks' }
+TutoringSessionCompletionDocument:
+  description: Completed session with the authoritative completed current-work link.
+  type: object
+  required: [data, links]
+  additionalProperties: false
+  properties:
+    data: { $ref: '#/TutoringSession' }
+    links: { $ref: '#/SessionCurrentWorkLinks' }
+TutoringWorkDocument:
+  type: object
+  required: [data]
+  properties:
+    data: { $ref: '#/TutoringWork' }
+TutoringStopDocument:
+  description: Successful Stop result with the terminal target and authoritative post-Stop current work.
+  type: object
+  required: [data]
+  additionalProperties: false
+  properties:
+    data: { $ref: '#/TutoringStopWork' }
+
+MessageCurrentWorkLinks:
+  type: object
+  required: [current_work]
+  additionalProperties: false
+  properties:
+    current_work:
+      type: string
+      format: uri-reference
+      pattern: '^/api/v1/tutoring-sessions/ts_[0-9a-f-]+/current-work\?message_request_id=[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'
+      examples:
+        - /api/v1/tutoring-sessions/ts_94d69bc5-3d12-49a2-8fee-1cb0f4b3e452/current-work?message_request_id=01cc7db6-271d-46e7-8707-1527520b035e
+      description: >-
+        Immediate current-work read whose sole query parameter is this submission's canonical `message_request_id`.
+        Its `reconciled_message` identifies the committed message and initial response for the retained request.
+
+ResponseCurrentWorkLinks:
+  type: object
+  required: [current_work]
+  additionalProperties: false
+  properties:
+    current_work:
+      type: string
+      format: uri-reference
+      pattern: '^/api/v1/tutoring-sessions/ts_[0-9a-f-]+/current-work\?response_id=rsp_[0-9a-f-]+$'
+      examples:
+        - /api/v1/tutoring-sessions/ts_94d69bc5-3d12-49a2-8fee-1cb0f4b3e452/current-work?response_id=rsp_9193bde0-e12e-4a4c-a489-d5a3dcc24959
+      description: >-
+        Immediate current-work read whose sole query parameter is the returned immutable `response_id`. Its
+        `reconciled_response` identifies this retry response independently from later current work.
+
+SessionCurrentWorkLinks:
+  type: object
+  required: [current_work]
+  additionalProperties: false
+  properties:
+    current_work:
+      type: string
+      format: uri-reference
+      pattern: '^/api/v1/tutoring-sessions/ts_[0-9a-f-]+/current-work$'
+      examples:
+        - /api/v1/tutoring-sessions/ts_94d69bc5-3d12-49a2-8fee-1cb0f4b3e452/current-work
+      description: Immediate current-work read for the completed session; no reconciliation query is required.
 TutoringMaterialCollectionDocument:
   type: object
   required: [data, meta]

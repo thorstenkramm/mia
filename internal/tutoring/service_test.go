@@ -220,6 +220,146 @@ func TestDiscoverActiveSessionDependencyFailureIsUnavailable(t *testing.T) {
 	assert.ErrorIs(t, err, ErrDiscoveryUnavailable)
 }
 
+func TestCurrentWorkStatesEligibilityAndReconciliation(t *testing.T) {
+	fixture := newTutoringFixture(t)
+	ctx := context.Background()
+	session, _, err := fixture.service.Start(ctx, StartInput{CourseID: fixture.course, StudentID: fixture.student,
+		RequestID: uuid.NewString()})
+	require.NoError(t, err)
+
+	work, err := fixture.service.CurrentWork(ctx, session.ID, fixture.student, WorkQuery{})
+	require.NoError(t, err)
+	assert.Equal(t, "idle", work.State)
+	assert.Equal(t, 1, work.RemainingQueueCapacity)
+	assert.True(t, work.Actions.Submit)
+	assert.True(t, work.Actions.Finish)
+	assert.False(t, work.Actions.Queue)
+
+	messageRequestID := uuid.NewString()
+	first, err := fixture.service.Submit(ctx, SubmitInput{SessionID: session.ID, StudentID: fixture.student,
+		RequestID: messageRequestID, Content: "first"})
+	require.NoError(t, err)
+	_, err = fixture.database.Exec(`UPDATE tutor_responses SET state = 'generating', started_at = ? WHERE id = ?`,
+		instant(time.Now()), first.Response.ID)
+	require.NoError(t, err)
+	work, err = fixture.service.CurrentWork(ctx, session.ID, fixture.student,
+		WorkQuery{MessageRequestID: messageRequestID, ResponseID: first.Response.ID})
+	require.NoError(t, err)
+	require.NotNil(t, work.Generating)
+	assert.Equal(t, first.Response.ID, work.Generating.ID)
+	require.NotNil(t, work.ReconciledMessage)
+	assert.Equal(t, first.Message.ID, work.ReconciledMessage.Message.ID)
+	require.NotNil(t, work.ReconciledResponse)
+	assert.Equal(t, first.Response.ID, work.ReconciledResponse.ID)
+	assert.Equal(t, "generating", work.State)
+	assert.True(t, work.Actions.Queue)
+	assert.True(t, work.Actions.Reconnect)
+	assert.Equal(t, first.Response.ID, work.Actions.ReconnectResponseID)
+	assert.Equal(t, []string{first.Response.ID}, work.Actions.StopResponseIDs)
+
+	second, err := fixture.service.Submit(ctx, SubmitInput{SessionID: session.ID, StudentID: fixture.student,
+		RequestID: uuid.NewString(), Content: "second"})
+	require.NoError(t, err)
+	work, err = fixture.service.CurrentWork(ctx, session.ID, fixture.student, WorkQuery{})
+	require.NoError(t, err)
+	assert.Equal(t, "generating_and_queued", work.State)
+	assert.Zero(t, work.RemainingQueueCapacity)
+	require.NotNil(t, work.Queued)
+	assert.Equal(t, second.Message.ID, work.Queued.Message.ID)
+	assert.Equal(t, second.Response.ID, work.Queued.Response.ID)
+	assert.Equal(t, []string{first.Response.ID, second.Response.ID}, work.Actions.StopResponseIDs)
+	assert.False(t, work.Actions.Submit)
+	assert.False(t, work.Actions.Queue)
+	assert.True(t, work.Actions.Reconnect)
+	assert.Equal(t, first.Response.ID, work.Actions.ReconnectResponseID)
+	assert.False(t, work.Actions.Finish)
+
+	_, err = fixture.database.Exec(`UPDATE tutor_responses SET state = 'failed', failure_code = 'provider_failure',
+		finished_at = ? WHERE id = ?`, instant(time.Now()), first.Response.ID)
+	require.NoError(t, err)
+	_, err = fixture.database.Exec(`UPDATE tutor_responses SET state = 'generating', started_at = ? WHERE id = ?`,
+		instant(time.Now()), second.Response.ID)
+	require.NoError(t, err)
+	work, err = fixture.service.CurrentWork(ctx, session.ID, fixture.student, WorkQuery{ResponseID: first.Response.ID})
+	require.NoError(t, err)
+	require.NotNil(t, work.ReconciledResponse)
+	assert.Equal(t, "failed", work.ReconciledResponse.State)
+	require.NotNil(t, work.Generating)
+	assert.Equal(t, second.Response.ID, work.Generating.ID)
+}
+
+func TestRetryRequestIDIsPayloadBoundAndReplaySurvivesCompletion(t *testing.T) {
+	fixture := newTutoringFixture(t)
+	ctx := context.Background()
+	session, _, err := fixture.service.Start(ctx, StartInput{CourseID: fixture.course, StudentID: fixture.student,
+		RequestID: uuid.NewString()})
+	require.NoError(t, err)
+	first, err := fixture.service.Submit(ctx, SubmitInput{SessionID: session.ID, StudentID: fixture.student,
+		RequestID: uuid.NewString(), Content: "retry me"})
+	require.NoError(t, err)
+	_, err = fixture.database.Exec(`UPDATE tutor_responses SET state = 'failed', finished_at = ? WHERE id = ?`,
+		instant(time.Now()), first.Response.ID)
+	require.NoError(t, err)
+	newer, err := fixture.service.Submit(ctx, SubmitInput{SessionID: session.ID, StudentID: fixture.student,
+		RequestID: uuid.NewString(), Content: "newer completed work"})
+	require.NoError(t, err)
+	_, err = fixture.database.Exec(`UPDATE tutor_responses SET state = 'completed', started_at = ?, finished_at = ?
+		WHERE id = ?`, instant(time.Now()), instant(time.Now()), newer.Response.ID)
+	require.NoError(t, err)
+	work, err := fixture.service.CurrentWork(ctx, session.ID, fixture.student, WorkQuery{})
+	require.NoError(t, err)
+	assert.True(t, work.Actions.Retry)
+	assert.Equal(t, first.Response.ID, work.Actions.RetryResponseID)
+
+	requestID := uuid.NewString()
+	retry, err := fixture.service.Retry(ctx, RetryInput{MessageID: first.Message.ID, StudentID: fixture.student,
+		RequestID: requestID})
+	require.NoError(t, err)
+	assert.False(t, retry.Replay)
+	replayed, err := fixture.service.Retry(ctx, RetryInput{MessageID: first.Message.ID, StudentID: fixture.student,
+		RequestID: requestID})
+	require.NoError(t, err)
+	assert.True(t, replayed.Replay)
+	assert.Equal(t, retry.Response.ID, replayed.Response.ID)
+
+	busyResult, err := fixture.service.Submit(ctx, SubmitInput{SessionID: session.ID, StudentID: fixture.student,
+		RequestID: uuid.NewString(), Content: "different"})
+	assert.ErrorIs(t, err, ErrWorkBusy)
+	assert.Empty(t, busyResult.Message.ID)
+
+	_, err = fixture.database.Exec(`UPDATE tutor_responses SET state = 'interrupted', finished_at = ? WHERE id = ?`,
+		instant(time.Now()), retry.Response.ID)
+	require.NoError(t, err)
+	_, err = fixture.service.Complete(ctx, session.ID, fixture.student)
+	require.NoError(t, err)
+	work, err = fixture.service.CurrentWork(ctx, session.ID, fixture.student, WorkQuery{})
+	require.NoError(t, err)
+	assert.Equal(t, "completed", work.State)
+	assert.False(t, work.Actions.Submit)
+	assert.False(t, work.Actions.Retry)
+	assert.False(t, work.Actions.Reconnect)
+	_, err = fixture.service.CurrentWork(ctx, session.ID, fixture.supervisor, WorkQuery{})
+	assert.ErrorIs(t, err, ErrNotFound)
+	replayed, err = fixture.service.Retry(ctx, RetryInput{MessageID: first.Message.ID, StudentID: fixture.student,
+		RequestID: requestID})
+	require.NoError(t, err)
+	assert.True(t, replayed.Replay)
+	_, err = fixture.service.Retry(ctx, RetryInput{MessageID: first.Message.ID, StudentID: fixture.student,
+		RequestID: uuid.NewString()})
+	assert.ErrorIs(t, err, ErrInvalidState)
+}
+
+func TestCurrentWorkDependencyFailureIsSafe(t *testing.T) {
+	fixture := newTutoringFixture(t)
+	session, _, err := fixture.service.Start(context.Background(), StartInput{CourseID: fixture.course,
+		StudentID: fixture.student, RequestID: uuid.NewString()})
+	require.NoError(t, err)
+	require.NoError(t, fixture.database.Close())
+	_, err = fixture.service.CurrentWork(context.Background(), session.ID, fixture.student, WorkQuery{})
+	assert.Error(t, err)
+	assert.NotErrorIs(t, err, ErrNotFound)
+}
+
 func TestConcurrentMessageSubmissionsKeepOneQueuedResponse(t *testing.T) {
 	fixture := newTutoringFixture(t)
 	ctx := context.Background()
@@ -280,7 +420,8 @@ func TestConcurrentResponseRetriesKeepOneQueuedResponse(t *testing.T) {
 		go func() {
 			ready.Done()
 			<-start
-			_, retryErr := fixture.service.Retry(ctx, initial.Message.ID, fixture.student)
+			_, retryErr := fixture.service.Retry(ctx, RetryInput{MessageID: initial.Message.ID,
+				StudentID: fixture.student, RequestID: uuid.NewString()})
 			errorsByRetry <- retryErr
 		}()
 	}
@@ -653,8 +794,10 @@ func TestMessagesReturnRetryHistoryWithoutDuplicateMessages(t *testing.T) {
 	_, err = fixture.database.Exec(`UPDATE tutor_responses SET state = 'failed', finished_at = ? WHERE id = ?`,
 		instant(time.Now()), result.Response.ID)
 	require.NoError(t, err)
-	retry, err := fixture.service.Retry(ctx, result.Message.ID, fixture.student)
+	retryResult, err := fixture.service.Retry(ctx, RetryInput{MessageID: result.Message.ID,
+		StudentID: fixture.student, RequestID: uuid.NewString()})
 	require.NoError(t, err)
+	retry := retryResult.Response
 	values, _, err := fixture.service.Messages(ctx, session.ID, fixture.student, ListInput{Limit: 25})
 	require.NoError(t, err)
 	require.Len(t, values, 2)
@@ -673,6 +816,70 @@ type scriptedStream struct {
 	mu    chan struct{}
 	fail  bool
 	block <-chan struct{}
+}
+
+func TestManagedStopReturnsDistinctTargetAndHandedOffWork(t *testing.T) {
+	fixture := newTutoringFixture(t)
+	require.NoError(t, EnsureInstructions(fixture.directory))
+	ctx := context.Background()
+	started := make(chan struct{}, 2)
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	t.Cleanup(func() { releaseOnce.Do(func() { close(release) }) })
+	manager := NewManager(fixture.database, fixture.service, &scriptedStream{mu: started, block: release},
+		fixture.directory, nil)
+	fixture.service.SetManager(manager)
+	session, _, err := fixture.service.Start(ctx, StartInput{CourseID: fixture.course, StudentID: fixture.student,
+		RequestID: uuid.NewString()})
+	require.NoError(t, err)
+	first, err := fixture.service.Submit(ctx, SubmitInput{SessionID: session.ID, StudentID: fixture.student,
+		RequestID: uuid.NewString(), Content: "generating"})
+	require.NoError(t, err)
+	select {
+	case <-started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("first response did not start")
+	}
+	second, err := fixture.service.Submit(ctx, SubmitInput{SessionID: session.ID, StudentID: fixture.student,
+		RequestID: uuid.NewString(), Content: "queued"})
+	require.NoError(t, err)
+	require.NotEqual(t, first.Response.ID, second.Response.ID)
+
+	work, err := fixture.service.InterruptAndCurrentWork(ctx, first.Response.ID, fixture.student)
+	require.NoError(t, err)
+	require.NotNil(t, work.ReconciledResponse)
+	assert.Equal(t, first.Response.ID, work.ReconciledResponse.ID)
+	assert.Equal(t, "interrupted", work.ReconciledResponse.State)
+	require.NotNil(t, work.LatestResponse)
+	assert.Equal(t, second.Response.ID, work.LatestResponse.ID)
+	assert.Equal(t, []string{second.Response.ID}, currentWorkResponseIDs(work))
+	assert.NotContains(t, currentWorkResponseIDs(work), work.ReconciledResponse.ID)
+
+	select {
+	case <-started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("queued response was not handed off")
+	}
+	handedOff, err := fixture.service.CurrentWork(ctx, session.ID, fixture.student,
+		WorkQuery{ResponseID: first.Response.ID})
+	require.NoError(t, err)
+	require.NotNil(t, handedOff.Generating)
+	assert.Equal(t, second.Response.ID, handedOff.Generating.ID)
+	require.NotNil(t, handedOff.ReconciledResponse)
+	assert.Equal(t, first.Response.ID, handedOff.ReconciledResponse.ID)
+	assert.NotEqual(t, handedOff.ReconciledResponse.ID, handedOff.Generating.ID)
+	releaseOnce.Do(func() { close(release) })
+}
+
+func currentWorkResponseIDs(work CurrentWork) []string {
+	ids := make([]string, 0, 2)
+	if work.Generating != nil {
+		ids = append(ids, work.Generating.ID)
+	}
+	if work.Queued != nil {
+		ids = append(ids, work.Queued.Response.ID)
+	}
+	return ids
 }
 
 func (fake *scriptedStream) Stream(ctx context.Context, _ openai.ChatRequest, delta func(string) error,
@@ -713,8 +920,10 @@ func TestManagerPreservesPartialFailureAndRecovery(t *testing.T) {
 		response, loadErr := loadResponse(ctx, fixture.database, result.Response.ID)
 		return loadErr == nil && response.State == "failed" && response.Content == "partial"
 	}, 3*time.Second, 10*time.Millisecond)
-	retry, err := fixture.service.Retry(ctx, result.Message.ID, fixture.student)
+	retryResult, err := fixture.service.Retry(ctx, RetryInput{MessageID: result.Message.ID,
+		StudentID: fixture.student, RequestID: uuid.NewString()})
 	require.NoError(t, err)
+	retry := retryResult.Response
 	require.Eventually(t, func() bool {
 		response, loadErr := loadResponse(ctx, fixture.database, retry.ID)
 		return loadErr == nil && response.State == "failed"

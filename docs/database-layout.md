@@ -949,6 +949,8 @@ Columns:
 - `student_message_id`, student message ID, not null, cascade on message deletion
 - `session_id`, denormalized owning session ID used by partial queue and generation indexes, not null
 - `retry_of_response_id`, nullable response ID
+- `retry_request_id`, nullable canonical UUID v4 for explicit retry idempotency
+- `retry_request_digest`, nullable 32-byte SHA-256 target digest
 - `attempt`, positive integer, not null
 - `state`, enum `queued`, `generating`, `completed`, `interrupted`, or `failed`,
   not null
@@ -966,6 +968,9 @@ Columns:
 Constraints:
 
 - Unique: (`student_message_id`, `attempt`).
+- Retry request ID and digest are either both null for initial responses or both
+  present for retries. Retry request IDs are unique within the session; matching
+  target replay returns the retained response and changed target reuse conflicts.
 - In one tutoring session, at most one response is generating and at most one is
   queued. Message creation, sequence allocation, response creation, and these
   checks occur in one transaction.

@@ -47,7 +47,43 @@ type Response struct {
 }
 
 type MessageResult struct {
-	Message  Message
+	Message   Message
+	Response  Response
+	RequestID string
+	Replay    bool
+}
+
+// ActionEligibility reports which tutoring mutations are valid for one current-work snapshot.
+type ActionEligibility struct {
+	Submit, Queue, Stop, Retry, Reconnect, Finish bool
+	StopResponseIDs                               []string
+	RetryResponseID, ReconnectResponseID          string
+}
+
+// CurrentWork is the authoritative persisted work projection for one owned session.
+type CurrentWork struct {
+	SessionID, SessionState, State string
+	Generating                     *Response
+	Queued                         *MessageResult
+	LatestResponse                 *Response
+	ReconciledMessage              *MessageResult
+	ReconciledResponse             *Response
+	RemainingQueueCapacity         int
+	Actions                        ActionEligibility
+}
+
+// WorkQuery carries optional retained identities to reconcile in a current-work read.
+type WorkQuery struct {
+	MessageRequestID, ResponseID string
+}
+
+// RetryInput identifies an owned message and the client request that creates or replays its retry.
+type RetryInput struct {
+	MessageID, StudentID, RequestID string
+}
+
+// ResponseResult returns a retry response and whether it was an idempotent replay.
+type ResponseResult struct {
 	Response Response
 	Replay   bool
 }

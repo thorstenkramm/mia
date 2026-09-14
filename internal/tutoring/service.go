@@ -219,6 +219,164 @@ func (service *Service) List(ctx context.Context, courseID, actorID string, inpu
 	return ListResult{Sessions: sessions, HasMore: hasMore}, nil
 }
 
+// CurrentWork returns session state, response slots, and action eligibility from one database snapshot.
+func (service *Service) CurrentWork(ctx context.Context, sessionID, actorID string, input WorkQuery) (CurrentWork, error) {
+	if input.MessageRequestID != "" {
+		if _, ok := canonicalUUID(input.MessageRequestID); !ok {
+			return CurrentWork{}, ErrInvalid
+		}
+	}
+	if input.ResponseID != "" && (len(input.ResponseID) > 128 || !utf8.ValidString(input.ResponseID)) {
+		return CurrentWork{}, ErrInvalid
+	}
+	var work CurrentWork
+	err := miSQLite.WithTx(ctx, service.database, func(tx *sql.Tx) error {
+		var sessionState string
+		if err := tx.QueryRowContext(ctx, `SELECT state FROM tutoring_sessions
+			WHERE id = ? AND student_user_id = ?`, sessionID, actorID).Scan(&sessionState); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return ErrNotFound
+			}
+			return err
+		}
+		work.SessionID, work.SessionState = sessionID, sessionState
+		generating, err := loadWorkResponse(ctx, tx, sessionID, "generating")
+		if err != nil {
+			return err
+		}
+		work.Generating = generating
+		queued, err := loadQueuedWork(ctx, tx, sessionID)
+		if err != nil {
+			return err
+		}
+		work.Queued = queued
+		latest, err := loadLatestWorkResponse(ctx, tx, sessionID)
+		if err != nil {
+			return err
+		}
+		work.LatestResponse = latest
+		retryable, err := loadLatestRetryableResponse(ctx, tx, sessionID)
+		if err != nil {
+			return err
+		}
+		if input.MessageRequestID != "" {
+			message, _, response, err := loadMessageByRequest(ctx, tx, sessionID, input.MessageRequestID)
+			if err == nil {
+				work.ReconciledMessage = &MessageResult{Message: message, Response: response, Replay: true}
+			} else if !errors.Is(err, sql.ErrNoRows) {
+				return err
+			}
+		}
+		if input.ResponseID != "" {
+			response, err := loadResponseInSession(ctx, tx, sessionID, input.ResponseID)
+			if err == nil {
+				work.ReconciledResponse = &response
+			} else if !errors.Is(err, sql.ErrNoRows) {
+				return err
+			}
+		}
+		setWorkStateAndActions(&work, retryable)
+		return nil
+	})
+	return work, err
+}
+
+func loadLatestRetryableResponse(ctx context.Context, query miSQLite.Querier, sessionID string) (*Response, error) {
+	row := query.QueryRowContext(ctx, `SELECT r.id, r.session_id, r.student_message_id,
+		COALESCE(r.retry_of_response_id, ''), r.attempt, r.state, r.content, COALESCE(r.failure_code, ''),
+		r.created_at, r.started_at, r.finished_at FROM tutor_responses r
+		JOIN student_messages m ON m.id = r.student_message_id WHERE r.session_id = ?
+		AND r.attempt = (SELECT MAX(last.attempt) FROM tutor_responses last
+			WHERE last.student_message_id = r.student_message_id)
+		AND r.state IN ('failed', 'interrupted') ORDER BY m.sequence DESC LIMIT 1`, sessionID)
+	return scanOptionalResponse(row)
+}
+
+func loadWorkResponse(ctx context.Context, query miSQLite.Querier, sessionID, state string) (*Response, error) {
+	row := query.QueryRowContext(ctx, `SELECT id, session_id, student_message_id,
+		COALESCE(retry_of_response_id, ''), attempt, state, content, COALESCE(failure_code, ''),
+		created_at, started_at, finished_at FROM tutor_responses WHERE session_id = ? AND state = ?`, sessionID, state)
+	return scanOptionalResponse(row)
+}
+
+func loadQueuedWork(ctx context.Context, query miSQLite.Querier, sessionID string) (*MessageResult, error) {
+	row := query.QueryRowContext(ctx, `SELECT m.id, m.tutoring_session_id, m.sequence, m.content, m.created_at,
+		r.id, r.session_id, r.student_message_id, COALESCE(r.retry_of_response_id, ''), r.attempt,
+		r.state, r.content, COALESCE(r.failure_code, ''), r.created_at, r.started_at, r.finished_at
+		FROM tutor_responses r JOIN student_messages m ON m.id = r.student_message_id
+		WHERE r.session_id = ? AND r.state = 'queued'`, sessionID)
+	message, response, err := scanMessageResponse(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &MessageResult{Message: message, Response: response}, nil
+}
+
+func loadLatestWorkResponse(ctx context.Context, query miSQLite.Querier, sessionID string) (*Response, error) {
+	row := query.QueryRowContext(ctx, `SELECT r.id, r.session_id, r.student_message_id,
+		COALESCE(r.retry_of_response_id, ''), r.attempt, r.state, r.content, COALESCE(r.failure_code, ''),
+		r.created_at, r.started_at, r.finished_at FROM tutor_responses r
+		JOIN student_messages m ON m.id = r.student_message_id WHERE r.session_id = ?
+		ORDER BY m.sequence DESC, r.attempt DESC LIMIT 1`, sessionID)
+	return scanOptionalResponse(row)
+}
+
+func scanOptionalResponse(row scanner) (*Response, error) {
+	response, err := scanResponse(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &response, nil
+}
+
+func loadResponseInSession(ctx context.Context, query miSQLite.Querier, sessionID, responseID string) (Response, error) {
+	row := query.QueryRowContext(ctx, `SELECT id, session_id, student_message_id,
+		COALESCE(retry_of_response_id, ''), attempt, state, content, COALESCE(failure_code, ''),
+		created_at, started_at, finished_at FROM tutor_responses WHERE session_id = ? AND id = ?`, sessionID, responseID)
+	return scanResponse(row)
+}
+
+func setWorkStateAndActions(work *CurrentWork, retryable *Response) {
+	work.Actions.StopResponseIDs = []string{}
+	work.State = "idle"
+	if work.SessionState == "completed" {
+		work.State = "completed"
+		return
+	}
+	work.RemainingQueueCapacity = 1
+	if work.Generating != nil {
+		work.State = "generating"
+		work.Actions.StopResponseIDs = append(work.Actions.StopResponseIDs, work.Generating.ID)
+		work.Actions.Reconnect = true
+		work.Actions.ReconnectResponseID = work.Generating.ID
+	}
+	if work.Queued != nil {
+		work.RemainingQueueCapacity = 0
+		work.Actions.StopResponseIDs = append(work.Actions.StopResponseIDs, work.Queued.Response.ID)
+		if work.Generating == nil {
+			work.State = "queued"
+			work.Actions.Reconnect = true
+			work.Actions.ReconnectResponseID = work.Queued.Response.ID
+		} else {
+			work.State = "generating_and_queued"
+		}
+	}
+	work.Actions.Stop = len(work.Actions.StopResponseIDs) != 0
+	work.Actions.Submit = work.Generating == nil && work.Queued == nil
+	work.Actions.Queue = work.Generating != nil && work.Queued == nil
+	work.Actions.Finish = work.Actions.Submit
+	if work.Actions.Submit && retryable != nil {
+		work.Actions.Retry = true
+		work.Actions.RetryResponseID = retryable.ID
+	}
+}
+
 func (service *Service) Submit(ctx context.Context, input SubmitInput) (MessageResult, error) {
 	requestID, ok := canonicalUUID(input.RequestID)
 	if !ok || !validMessage(input.Content) {
@@ -244,7 +402,7 @@ func (service *Service) Submit(ctx context.Context, input SubmitInput) (MessageR
 				input.SessionID).Scan(&owner); err != nil || owner != input.StudentID {
 				return ErrNotFound
 			}
-			result = MessageResult{Message: existing, Response: response, Replay: true}
+			result = MessageResult{Message: existing, Response: response, RequestID: requestID, Replay: true}
 			return nil
 		}
 		if !errors.Is(err, sql.ErrNoRows) {
@@ -297,7 +455,7 @@ func (service *Service) Submit(ctx context.Context, input SubmitInput) (MessageR
 			instant(now), input.SessionID); err != nil {
 			return err
 		}
-		result, shouldDispatch = MessageResult{Message: message, Response: newResponse}, generating == 0
+		result, shouldDispatch = MessageResult{Message: message, Response: newResponse, RequestID: requestID}, generating == 0
 		return nil
 	})
 	if err == nil && shouldDispatch && service.manager != nil {
@@ -306,20 +464,36 @@ func (service *Service) Submit(ctx context.Context, input SubmitInput) (MessageR
 	return result, err
 }
 
-func (service *Service) Retry(ctx context.Context, messageID, actorID string) (Response, error) {
-	var created Response
+func (service *Service) Retry(ctx context.Context, input RetryInput) (ResponseResult, error) {
+	requestID, ok := canonicalUUID(input.RequestID)
+	if !ok {
+		return ResponseResult{}, ErrInvalid
+	}
+	digest := sha256.Sum256([]byte(input.MessageID))
+	var result ResponseResult
 	err := miSQLite.WithTx(ctx, service.database, func(tx *sql.Tx) error {
-		if err := lockSessionForRetry(ctx, tx, messageID, actorID); err != nil {
+		if err := lockSessionForRetry(ctx, tx, input.MessageID, input.StudentID); err != nil {
 			return err
 		}
-		original, err := loadLastResponseForMessage(ctx, tx, messageID)
+		original, err := loadLastResponseForMessage(ctx, tx, input.MessageID)
 		if err != nil {
 			return ErrNotFound
 		}
 		var state, owner string
 		if err := tx.QueryRowContext(ctx, `SELECT state, student_user_id FROM tutoring_sessions WHERE id = ?`,
-			original.SessionID).Scan(&state, &owner); err != nil || owner != actorID {
+			original.SessionID).Scan(&state, &owner); err != nil || owner != input.StudentID {
 			return ErrNotFound
+		}
+		existing, existingDigest, err := loadRetryByRequest(ctx, tx, original.SessionID, requestID)
+		if err == nil {
+			if !equalDigest(existingDigest, digest) {
+				return ErrConflict
+			}
+			result = ResponseResult{Response: existing, Replay: true}
+			return nil
+		}
+		if !errors.Is(err, sql.ErrNoRows) {
+			return err
 		}
 		if state != "active" {
 			return ErrInvalidState
@@ -339,24 +513,25 @@ func (service *Service) Retry(ctx context.Context, messageID, actorID string) (R
 		if original.State != "failed" && original.State != "interrupted" {
 			return ErrInvalidState
 		}
-		created = Response{ID: "rsp_" + uuid.NewString(), SessionID: original.SessionID, MessageID: original.MessageID,
+		created := Response{ID: "rsp_" + uuid.NewString(), SessionID: original.SessionID, MessageID: original.MessageID,
 			RetryOfID: original.ID, Attempt: attempt + 1, State: "queued", CreatedAt: time.Now()}
 		_, err = tx.ExecContext(ctx, `INSERT INTO tutor_responses
-			(id, session_id, student_message_id, retry_of_response_id, attempt, state, created_at)
-			VALUES (?, ?, ?, ?, ?, 'queued', ?)`, created.ID, created.SessionID, created.MessageID, original.ID,
-			created.Attempt, instant(created.CreatedAt))
+			(id, session_id, student_message_id, retry_of_response_id, attempt, state, created_at,
+			retry_request_id, retry_request_digest) VALUES (?, ?, ?, ?, ?, 'queued', ?, ?, ?)`, created.ID,
+			created.SessionID, created.MessageID, original.ID, created.Attempt, instant(created.CreatedAt), requestID, digest[:])
 		if isWorkSlotConstraint(err) {
 			return ErrWorkBusy
 		}
 		if err != nil {
 			return fmt.Errorf("insert tutor response retry: %w", err)
 		}
+		result.Response = created
 		return nil
 	})
-	if err == nil && service.manager != nil {
-		service.manager.Dispatch(created.ID)
+	if err == nil && !result.Replay && service.manager != nil {
+		service.manager.Dispatch(result.Response.ID)
 	}
-	return created, err
+	return result, err
 }
 
 func (service *Service) Interrupt(ctx context.Context, responseID, actorID string) error {
@@ -386,6 +561,18 @@ func (service *Service) Interrupt(ctx context.Context, responseID, actorID strin
 		return ErrInvalidState
 	}
 	return service.manager.Interrupt(responseID)
+}
+
+// InterruptAndCurrentWork binds a Stop result to its immutable response and the following persisted work snapshot.
+func (service *Service) InterruptAndCurrentWork(ctx context.Context, responseID, actorID string) (CurrentWork, error) {
+	if err := service.Interrupt(ctx, responseID, actorID); err != nil {
+		return CurrentWork{}, err
+	}
+	response, err := loadResponseScopedOwner(ctx, service.database, responseID, actorID)
+	if err != nil {
+		return CurrentWork{}, err
+	}
+	return service.CurrentWork(ctx, response.SessionID, actorID, WorkQuery{ResponseID: response.ID})
 }
 
 func (service *Service) Complete(ctx context.Context, sessionID, actorID string) (Session, error) {

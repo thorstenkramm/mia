@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/labstack/echo/v5"
@@ -52,11 +53,22 @@ type messageRequest struct {
 	} `json:"data"`
 }
 
+type responseRetryRequest struct {
+	Data struct {
+		Type       string `json:"type"`
+		ID         string `json:"id,omitempty"`
+		Attributes struct {
+			ClientRequestID string `json:"client_request_id"`
+		} `json:"attributes"`
+	} `json:"data"`
+}
+
 func Register(server *httpserver.Server, service *Service, manager *Manager) {
 	server.AuthenticatedGET("/api/v1/users/me/active-tutoring-session", discoverActiveSessionHandler(service))
 	server.AuthenticatedGET("/api/v1/courses/:course_id/tutoring-sessions", listSessionsHandler(service))
 	server.AuthenticatedPOST("/api/v1/courses/:course_id/tutoring-sessions", startSessionHandler(service))
 	server.AuthenticatedGET("/api/v1/tutoring-sessions/:id", getSessionHandler(service))
+	server.AuthenticatedGET("/api/v1/tutoring-sessions/:id/current-work", currentWorkHandler(service))
 	server.AuthenticatedPATCH("/api/v1/tutoring-sessions/:id", correctSummaryHandler(service))
 	server.AuthenticatedPOST("/api/v1/tutoring-sessions/:id/completion", completeSessionHandler(service))
 	server.AuthenticatedPOST("/api/v1/tutoring-sessions/:id/summary-generations", regenerateSummaryHandler(service))
@@ -67,6 +79,37 @@ func Register(server *httpserver.Server, service *Service, manager *Manager) {
 	server.AuthenticatedPOST("/api/v1/tutor-responses/:id/interruptions", interruptResponseHandler(service))
 	server.AuthenticatedRoute(http.MethodGet, "/api/v1/tutor-responses/:id/events", httpserver.RepresentationSSE,
 		eventsHandler(manager))
+}
+
+func currentWorkHandler(service *Service) echo.HandlerFunc {
+	return func(c *echo.Context) error {
+		actorID, err := httpserver.AuthenticatedUser(c)
+		if err != nil {
+			return err
+		}
+		query, err := workQuery(c)
+		if err != nil {
+			return tutoringError(err)
+		}
+		work, err := service.CurrentWork(c.Request().Context(), c.Param("id"), actorID, query)
+		if err != nil {
+			return tutoringError(err)
+		}
+		return currentWorkResponse(c, http.StatusOK, work)
+	}
+}
+
+func workQuery(c *echo.Context) (WorkQuery, error) {
+	values, err := url.ParseQuery(c.Request().URL.RawQuery)
+	if err != nil {
+		return WorkQuery{}, ErrInvalid
+	}
+	for key, entries := range values {
+		if (key != "message_request_id" && key != "response_id") || len(entries) != 1 || entries[0] == "" {
+			return WorkQuery{}, ErrInvalid
+		}
+	}
+	return WorkQuery{MessageRequestID: values.Get("message_request_id"), ResponseID: values.Get("response_id")}, nil
 }
 
 func discoverActiveSessionHandler(service *Service) echo.HandlerFunc {
@@ -187,7 +230,7 @@ func completeSessionHandler(service *Service) echo.HandlerFunc {
 		if err != nil {
 			return tutoringError(err)
 		}
-		return sessionResponse(c, http.StatusOK, value)
+		return sessionResponseWithCurrentWork(c, http.StatusOK, value)
 	}
 }
 
@@ -256,11 +299,23 @@ func retryResponseHandler(service *Service) echo.HandlerFunc {
 		if err != nil {
 			return err
 		}
-		response, err := service.Retry(c.Request().Context(), c.Param("id"), actorID)
+		var body responseRetryRequest
+		if err := httpserver.DecodeJSONAPI(c, &body); err != nil {
+			return err
+		}
+		if body.Data.Type != "tutor-response-retries" || body.Data.ID != "" {
+			return tutoringError(ErrInvalid)
+		}
+		result, err := service.Retry(c.Request().Context(), RetryInput{MessageID: c.Param("id"), StudentID: actorID,
+			RequestID: body.Data.Attributes.ClientRequestID})
 		if err != nil {
 			return tutoringError(err)
 		}
-		return responseResponse(c, http.StatusCreated, response)
+		status := http.StatusCreated
+		if result.Replay {
+			status = http.StatusOK
+		}
+		return responseResponse(c, status, result.Response)
 	}
 }
 
@@ -270,10 +325,11 @@ func interruptResponseHandler(service *Service) echo.HandlerFunc {
 		if err != nil {
 			return err
 		}
-		if err := service.Interrupt(c.Request().Context(), c.Param("id"), actorID); err != nil {
+		work, err := service.InterruptAndCurrentWork(c.Request().Context(), c.Param("id"), actorID)
+		if err != nil {
 			return tutoringError(err)
 		}
-		return c.NoContent(http.StatusNoContent)
+		return currentWorkResponse(c, http.StatusOK, work)
 	}
 }
 
@@ -377,6 +433,11 @@ func sessionResponse(c *echo.Context, status int, value Session) error {
 	return httpserver.JSONAPI(c, status, map[string]any{"data": sessionResource(value)})
 }
 
+func sessionResponseWithCurrentWork(c *echo.Context, status int, value Session) error {
+	return httpserver.JSONAPI(c, status, map[string]any{"data": sessionResource(value), "links": map[string]string{
+		"current_work": "/api/v1/tutoring-sessions/" + value.ID + "/current-work"}})
+}
+
 func sessionResource(value Session) map[string]any {
 	var summary, followUp, summarySource any
 	if value.SummarySource != "" {
@@ -408,7 +469,9 @@ func activeSessionResource(value ActiveSession) map[string]any {
 }
 
 func messageResponse(c *echo.Context, status int, value MessageResult) error {
-	return httpserver.JSONAPI(c, status, map[string]any{"data": messageResource(value)})
+	return httpserver.JSONAPI(c, status, map[string]any{"data": messageResource(value), "links": map[string]string{
+		"current_work": "/api/v1/tutoring-sessions/" + value.Message.SessionID +
+			"/current-work?message_request_id=" + value.RequestID}})
 }
 
 func messageResource(value MessageResult) map[string]any {
@@ -425,7 +488,8 @@ func transcriptResource(value MessageResult) map[string]any {
 }
 
 func responseResponse(c *echo.Context, status int, value Response) error {
-	return httpserver.JSONAPI(c, status, map[string]any{"data": responseResource(value)})
+	return httpserver.JSONAPI(c, status, map[string]any{"data": responseResource(value), "links": map[string]string{
+		"current_work": "/api/v1/tutoring-sessions/" + value.SessionID + "/current-work?response_id=" + value.ID}})
 }
 
 func responseResource(value Response) map[string]any {
@@ -435,6 +499,49 @@ func responseResource(value Response) map[string]any {
 		"failure_code": nullableString(value.FailureCode), "created_at": httpserver.FormatInstant(value.CreatedAt),
 		"started_at":  httpserver.FormatOptionalInstant(value.StartedAt),
 		"finished_at": httpserver.FormatOptionalInstant(value.FinishedAt)}}
+}
+
+func currentWorkResponse(c *echo.Context, status int, value CurrentWork) error {
+	return httpserver.JSONAPI(c, status, map[string]any{"data": currentWorkResource(value)})
+}
+
+func currentWorkResource(value CurrentWork) map[string]any {
+	attributes := map[string]any{
+		"session_state":            value.SessionState,
+		"state":                    value.State,
+		"remaining_queue_capacity": value.RemainingQueueCapacity,
+		"generating_response":      responsePointerResource(value.Generating),
+		"queued_work":              messagePointerResource(value.Queued),
+		"latest_response":          responsePointerResource(value.LatestResponse),
+		"reconciled_message":       messagePointerResource(value.ReconciledMessage),
+		"reconciled_response":      responsePointerResource(value.ReconciledResponse),
+		"actions": map[string]any{
+			"submit":                value.Actions.Submit,
+			"queue":                 value.Actions.Queue,
+			"stop":                  value.Actions.Stop,
+			"stop_response_ids":     value.Actions.StopResponseIDs,
+			"retry":                 value.Actions.Retry,
+			"retry_response_id":     nullableString(value.Actions.RetryResponseID),
+			"reconnect":             value.Actions.Reconnect,
+			"reconnect_response_id": nullableString(value.Actions.ReconnectResponseID),
+			"finish":                value.Actions.Finish,
+		},
+	}
+	return map[string]any{"type": "tutoring-work-states", "id": value.SessionID, "attributes": attributes}
+}
+
+func responsePointerResource(value *Response) any {
+	if value == nil {
+		return nil
+	}
+	return responseResource(*value)
+}
+
+func messagePointerResource(value *MessageResult) any {
+	if value == nil {
+		return nil
+	}
+	return messageResource(*value)
 }
 
 func nullableString(value string) any {

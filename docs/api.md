@@ -645,6 +645,7 @@ results cannot recreate deleted state.
 - `GET|POST /api/v1/courses/{course_id}/tutoring-sessions`
 - `GET /api/v1/users/me/active-tutoring-session`
 - `GET|PATCH /api/v1/tutoring-sessions/{id}`
+- `GET /api/v1/tutoring-sessions/{id}/current-work`
 - `POST /api/v1/tutoring-sessions/{id}/completion`
 - `POST /api/v1/tutoring-sessions/{id}/summary-generations`
 - `GET|POST /api/v1/tutoring-sessions/{id}/messages`
@@ -687,6 +688,23 @@ Different content is a conflict. A request that would create a new message
 requires an active session. Authorized account, course, or membership deletion
 may cascade the owning session and removes this request-ID history without a
 tombstone.
+
+The owner-only current-work read is the authoritative reconciliation surface for
+one session. In one database snapshot it reports the session and work state, any
+generating response, any queued message and response, the latest response,
+remaining queue capacity, and separate server-authored eligibility for submit,
+queue, Stop, retry, reconnect, and finish. Eligible reconnect work identifies
+the immutable response SSE target. Eligibility never replaces atomic checks by
+the mutation. Optional `message_request_id` and `response_id` parameters resolve a
+known retained identity in the same snapshot; a null reconciliation result means
+that identity has no matching committed work in the owned session.
+
+Message and retry responses link to the current-work read. Conflicts and
+transport-ambiguous outcomes are reconciled there rather than by automatically
+replaying an unsafe request. A retry carries its own canonical lowercase UUID v4
+request ID. Identical target replay returns the existing linked response,
+including after completion, while reuse for another target conflicts. Retry
+request history is deleted with the owning response and session.
 
 Transcript listing is paginated by immutable message-response attempt pairs.
 Each `tutoring-turns` resource has the tutor-response ID as its identity and
@@ -785,6 +803,10 @@ cancels its provider operation. Startup resumes queued work and marks stranded
 generation failed rather than recreating an uncertain provider request.
 If cancellation cannot be confirmed, MIA retains the interrupted state, discards
 late events, and logs a sanitized failure.
+The successful interruption response includes the immutable target outcome and
+current work. If its response is lost, the browser reads current work with the
+target `response_id`; a response started by automatic handoff remains a distinct
+identity and cannot be mistaken for the Stop target.
 
 ## Generated speech
 

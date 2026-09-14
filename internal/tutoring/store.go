@@ -162,6 +162,31 @@ func loadMessageByRequest(ctx context.Context, query miSQLite.Querier, sessionID
 	return message, digest, response, err
 }
 
+func loadRetryByRequest(ctx context.Context, query miSQLite.Querier, sessionID,
+	requestID string) (Response, []byte, error) {
+	row := query.QueryRowContext(ctx, `SELECT id, session_id, student_message_id,
+		COALESCE(retry_of_response_id, ''), attempt, state, content, COALESCE(failure_code, ''),
+		created_at, started_at, finished_at, retry_request_digest
+		FROM tutor_responses WHERE session_id = ? AND retry_request_id = ?`, sessionID, requestID)
+	var response Response
+	var created string
+	var started, finished sql.NullString
+	var digest []byte
+	err := row.Scan(&response.ID, &response.SessionID, &response.MessageID, &response.RetryOfID, &response.Attempt,
+		&response.State, &response.Content, &response.FailureCode, &created, &started, &finished, &digest)
+	if err != nil {
+		return Response{}, nil, err
+	}
+	response.CreatedAt, err = parseInstant(created)
+	if err == nil {
+		response.StartedAt, err = parseOptionalInstant(started)
+	}
+	if err == nil {
+		response.FinishedAt, err = parseOptionalInstant(finished)
+	}
+	return response, digest, err
+}
+
 func loadResponse(ctx context.Context, query miSQLite.Querier, responseID string) (Response, error) {
 	row := query.QueryRowContext(ctx, `SELECT id, session_id, student_message_id, COALESCE(retry_of_response_id, ''), attempt,
 		state, content, COALESCE(failure_code, ''), created_at, started_at, finished_at FROM tutor_responses WHERE id = ?`,

@@ -3,6 +3,7 @@ package tutoring
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -40,6 +41,10 @@ func TestTutoringRoutesUseSharedProtocolAndScopeActiveReview(t *testing.T) {
 		TimeZone: "UTC", Roles: []user.Role{user.Administrator}})
 	require.NoError(t, err)
 	administratorSession, _ := tutoringSession(t, server, administrator.ID)
+	otherStudent, err := user.Create(context.Background(), fixture.database, user.CreateInput{Username: "student.other",
+		PasswordHash: "hash", Language: "en", Country: "US", TimeZone: "UTC", Roles: []user.Role{user.Student}})
+	require.NoError(t, err)
+	otherStudentSession, _ := tutoringSession(t, server, otherStudent.ID)
 
 	none := tutoringHTTP(server, http.MethodGet, "/api/v1/users/me/active-tutoring-session",
 		studentSession, "", "", nil)
@@ -77,6 +82,29 @@ func TestTutoringRoutesUseSharedProtocolAndScopeActiveReview(t *testing.T) {
 	session, _, err := fixture.service.Start(context.Background(), StartInput{CourseID: fixture.course,
 		StudentID: fixture.student, RequestID: requestID, SelectedMaterialIDs: []string{fixture.materialID}})
 	require.NoError(t, err)
+	t.Run("current work authorization hides session and work", func(t *testing.T) {
+		path := "/api/v1/tutoring-sessions/" + session.ID + "/current-work"
+		unauthenticated := tutoringHTTP(server, http.MethodGet, path, nil, "", "", nil)
+		assert.Equal(t, http.StatusUnauthorized, unauthenticated.Code)
+
+		notFoundBody := `{"errors":[{"status":"404","code":"tutoring_not_found","title":"Not Found",` +
+			`"detail":"The requested resource was not found."}]}`
+		for name, cookies := range map[string][]*http.Cookie{
+			"supervisor":        supervisorSession,
+			"administrator":     administratorSession,
+			"different student": otherStudentSession,
+		} {
+			t.Run(name, func(t *testing.T) {
+				response := tutoringHTTP(server, http.MethodGet, path, cookies, "", "", nil)
+				assert.Equal(t, http.StatusNotFound, response.Code)
+				assert.JSONEq(t, notFoundBody, response.Body.String())
+				assert.NotContains(t, response.Body.String(), session.ID)
+				assert.NotContains(t, response.Body.String(), fixture.course)
+				assert.NotContains(t, response.Body.String(), fixture.materialID)
+				assert.NotContains(t, response.Body.String(), "generating_response")
+			})
+		}
+	})
 	activeStatus := tutoringHTTP(server, http.MethodGet, "/api/v1/tutoring-sessions/"+session.ID,
 		supervisorSession, "", "", nil)
 	assert.Equal(t, http.StatusOK, activeStatus.Code)
@@ -85,6 +113,94 @@ func TestTutoringRoutesUseSharedProtocolAndScopeActiveReview(t *testing.T) {
 		supervisorSession, "", "", nil)
 	assert.Equal(t, http.StatusNotFound, activeMessages.Code)
 	assert.Contains(t, activeMessages.Body.String(), `"code":"tutoring_not_found"`)
+
+	messageRequestID := uuid.NewString()
+	messageBody := []byte(`{"data":{"type":"student-messages","attributes":{"client_request_id":"` +
+		messageRequestID + `","content":"What is alpha?"}}}`)
+	messageCreated := tutoringHTTP(server, http.MethodPost, "/api/v1/tutoring-sessions/"+session.ID+"/messages",
+		studentSession, studentCSRF, "application/vnd.api+json", messageBody)
+	assert.Equal(t, http.StatusCreated, messageCreated.Code)
+	assert.Contains(t, messageCreated.Body.String(), `"current_work":"/api/v1/tutoring-sessions/`+session.ID+
+		`/current-work?message_request_id=`+messageRequestID+`"`)
+	var messageDocument struct {
+		Data struct {
+			Attributes struct {
+				Response struct {
+					ID string `json:"id"`
+				} `json:"response"`
+			} `json:"attributes"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(messageCreated.Body.Bytes(), &messageDocument))
+	responseID := messageDocument.Data.Attributes.Response.ID
+	require.NotEmpty(t, responseID)
+	work := tutoringHTTP(server, http.MethodGet, "/api/v1/tutoring-sessions/"+session.ID+
+		"/current-work?message_request_id="+messageRequestID+"&response_id="+responseID, studentSession, "", "", nil)
+	assert.Equal(t, http.StatusOK, work.Code)
+	assert.Contains(t, work.Body.String(), `"state":"queued"`)
+	assert.Contains(t, work.Body.String(), `"reconciled_message"`)
+	assert.Contains(t, work.Body.String(), `"reconciled_response"`)
+	assert.Equal(t, "no-store", work.Header().Get("Cache-Control"))
+	for _, cookie := range work.Result().Cookies() {
+		assert.NotEqual(t, server.SessionCookieName(), cookie.Name, "current-work reads must not refresh authentication")
+	}
+	invalidWorkQueries := []struct {
+		name  string
+		query string
+	}{
+		{name: "unknown", query: "unknown=value"},
+		{name: "duplicate", query: "response_id=" + responseID + "&response_id=" + responseID},
+		{name: "empty", query: "response_id="},
+		{name: "malformed message request UUID", query: "message_request_id=not-a-uuid"},
+		{name: "overlong response ID", query: "response_id=" + strings.Repeat("x", 129)},
+		{name: "invalid response ID", query: "response_id=%FF"},
+	}
+	for _, test := range invalidWorkQueries {
+		t.Run("current work rejects "+test.name+" query", func(t *testing.T) {
+			response := tutoringHTTP(server, http.MethodGet,
+				"/api/v1/tutoring-sessions/"+session.ID+"/current-work?"+test.query,
+				studentSession, "", "", nil)
+			assert.Equal(t, http.StatusUnprocessableEntity, response.Code)
+			assert.Contains(t, response.Body.String(), `"code":"tutoring_invalid"`)
+		})
+	}
+	busyCompletion := tutoringHTTP(server, http.MethodPost, "/api/v1/tutoring-sessions/"+session.ID+"/completion",
+		studentSession, studentCSRF, "", nil)
+	assert.Equal(t, http.StatusConflict, busyCompletion.Code)
+	assert.Contains(t, busyCompletion.Body.String(), `"code":"tutoring_work_busy"`)
+
+	interrupted := tutoringHTTP(server, http.MethodPost, "/api/v1/tutor-responses/"+responseID+"/interruptions",
+		studentSession, studentCSRF, "", nil)
+	assert.Equal(t, http.StatusOK, interrupted.Code)
+	assert.Contains(t, interrupted.Body.String(), `"reconciled_response"`)
+	assert.Contains(t, interrupted.Body.String(), `"state":"interrupted"`)
+	retryRequestID := uuid.NewString()
+	retryBody := []byte(`{"data":{"type":"tutor-response-retries","attributes":{"client_request_id":"` +
+		retryRequestID + `"}}}`)
+	retried := tutoringHTTP(server, http.MethodPost, "/api/v1/student-messages/"+sessionMessageID(t, fixture, responseID)+
+		"/response-retries", studentSession, studentCSRF, "application/vnd.api+json", retryBody)
+	assert.Equal(t, http.StatusCreated, retried.Code)
+	var retryDocument struct {
+		Data struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(retried.Body.Bytes(), &retryDocument))
+	require.NotEmpty(t, retryDocument.Data.ID)
+	assert.Contains(t, retried.Body.String(), `"current_work":"/api/v1/tutoring-sessions/`+session.ID+
+		`/current-work?response_id=`+retryDocument.Data.ID+`"`)
+	replayedRetry := tutoringHTTP(server, http.MethodPost, "/api/v1/student-messages/"+
+		sessionMessageID(t, fixture, responseID)+"/response-retries", studentSession, studentCSRF,
+		"application/vnd.api+json", retryBody)
+	assert.Equal(t, http.StatusOK, replayedRetry.Code)
+	retryStopped := tutoringHTTP(server, http.MethodPost,
+		"/api/v1/tutor-responses/"+retryDocument.Data.ID+"/interruptions", studentSession, studentCSRF, "", nil)
+	assert.Equal(t, http.StatusOK, retryStopped.Code)
+	completed := tutoringHTTP(server, http.MethodPost, "/api/v1/tutoring-sessions/"+session.ID+"/completion",
+		studentSession, studentCSRF, "", nil)
+	assert.Equal(t, http.StatusOK, completed.Code)
+	assert.Contains(t, completed.Body.String(), `"current_work":"/api/v1/tutoring-sessions/`+session.ID+
+		`/current-work"`)
 
 	malformed := tutoringHTTP(server, http.MethodPost, "/api/v1/courses/"+fixture.course+"/tutoring-sessions",
 		studentSession, studentCSRF, "application/vnd.api+json",
@@ -96,6 +212,14 @@ func TestTutoringRoutesUseSharedProtocolAndScopeActiveReview(t *testing.T) {
 	trailing := tutoringHTTP(server, http.MethodGet, "/api/v1/tutoring-sessions/"+session.ID+"/", studentSession,
 		"", "", nil)
 	assert.Equal(t, http.StatusNotFound, trailing.Code)
+}
+
+func sessionMessageID(t *testing.T, fixture tutoringFixture, responseID string) string {
+	t.Helper()
+	var messageID string
+	require.NoError(t, fixture.database.QueryRow("SELECT student_message_id FROM tutor_responses WHERE id = ?", responseID).
+		Scan(&messageID))
+	return messageID
 }
 
 func TestActiveSessionDiscoveryDependencyFailureReturnsInternalError(t *testing.T) {

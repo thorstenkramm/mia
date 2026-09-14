@@ -822,6 +822,25 @@ StudentMessageContent:
   x-max-utf8-bytes: 32768
   description: Between 1 and 8,000 Unicode code points and at most 32 KiB when UTF-8 encoded.
 
+TutorResponseRetryRequestDocument:
+  type: object
+  required: [data]
+  additionalProperties: false
+  properties:
+    data:
+      type: object
+      required: [type, attributes]
+      additionalProperties: false
+      properties:
+        type: { const: tutor-response-retries }
+        id: false
+        attributes:
+          type: object
+          required: [client_request_id]
+          additionalProperties: false
+          properties:
+            client_request_id: { $ref: '#/CanonicalUUIDv4' }
+
 StudentProfileUpdateRequestDocument:
   type: object
   required: [data]

@@ -59,6 +59,11 @@ func TestMFAFactorMigrationBackfillsOpaqueRequiredID(t *testing.T) {
 				OR (method = 'sms' AND totp_secret IS NULL AND sms_destination IS NOT NULL)));
 		INSERT INTO mfa_factors (user_id, method, totp_secret, created_at)
 		VALUES ('u_legacy', 'totp', zeroblob(20), '2026-09-14T00:00:00.000000Z');
+		DROP TRIGGER tutor_responses_retry_request_pair_insert;
+		DROP TRIGGER tutor_responses_retry_request_pair_update;
+		DROP INDEX tutor_responses_retry_request_idx;
+		ALTER TABLE tutor_responses DROP COLUMN retry_request_digest;
+		ALTER TABLE tutor_responses DROP COLUMN retry_request_id;
 		UPDATE schema_migrations SET version = 17, dirty = 0;`)
 	if err != nil {
 		t.Fatal(err)
@@ -111,7 +116,7 @@ func TestOpenRejectsInsecureRestoredDatabase(t *testing.T) {
 }
 
 func TestOpenRejectsDirtyAndNewerSchema(t *testing.T) {
-	for name, statement := range map[string]string{"dirty": "UPDATE schema_migrations SET dirty = 1", "newer": "UPDATE schema_migrations SET version = 19"} {
+	for name, statement := range map[string]string{"dirty": "UPDATE schema_migrations SET dirty = 1", "newer": "UPDATE schema_migrations SET version = 20"} {
 		t.Run(name, func(t *testing.T) {
 			directory := t.TempDir()
 			if err := os.Chmod(directory, 0o700); err != nil {

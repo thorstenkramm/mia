@@ -1223,6 +1223,18 @@ turns are omitted without a hidden rolling summary.
   UTF-8.
 - A tutoring session has at most one generating tutor response and one queued
   student message. A further message is rejected until the queue slot is free.
+- The owning student can read one atomic, authoritative current-work
+  representation. It explicitly distinguishes idle, generating, queued,
+  generating with queued work, and completed state; identifies the immutable
+  generating response and queued message and response; reports remaining queue
+  capacity; and gives independent server-authored eligibility for submit, queue,
+  Stop, retry, reconnect, and finish. Reconnect eligibility identifies the
+  immutable response whose SSE stream can be resumed.
+- Current-work reconciliation may bind a retained message request ID or immutable
+  response ID. It returns matching committed work in the same snapshot or an
+  explicit null match. Browsers use this after conflicts, disconnects, and
+  transport-ambiguous submit, retry, Stop, or finish outcomes rather than
+  automatically replaying unsafe requests.
 - A queued message starts automatically after the generating response completes,
   fails, or is interrupted. Preserved partial response text is part of the
   conversation context when generation starts.
@@ -1283,6 +1295,10 @@ turns are omitted without a hidden rolling summary.
 - The student can explicitly retry a failed or interrupted response. A retry
   creates a new response linked to the same student message and its failed or
   interrupted response without deleting or rewriting either.
+- Each explicit retry carries a canonical lowercase UUID v4 request ID bound to
+  its target. An identical replay returns the existing linked response even
+  after completion; reuse for another target is a conflict. Its history is
+  retained only with the owning response and session data.
 
 ### Completion and oversight
 

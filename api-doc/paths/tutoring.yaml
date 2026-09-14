@@ -143,6 +143,45 @@ tutoringSession:
         $ref: ../responses/errors.yaml#/Unprocessable
         description: Invalid identity, summary, follow-up, or state (`tutoring_invalid`).
 
+tutoringSessionCurrentWork:
+  get:
+    tags: [Tutoring]
+    operationId: getTutoringSessionCurrentWork
+    summary: Read authoritative current tutoring work and action eligibility
+    description: >-
+      Owner-only, non-refreshing reconciliation read. Optional retained identities resolve ambiguous message or Stop
+      outcomes in the same database snapshot. Reads and reconnects never dispatch provider work. The MVP applies no
+      separate authenticated tutoring rate limit.
+    security: [{ sessionCookie: [] }]
+    parameters:
+      - { $ref: ../openapi.yaml#/components/parameters/ResourceID }
+      - name: message_request_id
+        in: query
+        required: false
+        schema: { $ref: ../schemas/requests/requests.yaml#/CanonicalUUIDv4 }
+        description: Retained message request ID to reconcile; null result means no matching committed message.
+      - name: response_id
+        in: query
+        required: false
+        schema: { type: string, minLength: 1, maxLength: 128 }
+        description: Immutable response ID to reconcile; null result means no matching response in this owned session.
+    responses:
+      '200':
+        headers: { Cache-Control: { $ref: ../openapi.yaml#/components/headers/CacheControlNoStore } }
+        description: Atomic current work, reconciliation results, queue capacity, and independent action eligibility.
+        content:
+          application/vnd.api+json:
+            schema: { $ref: ../schemas/resources/resources.yaml#/TutoringWorkDocument }
+      '401': { $ref: ../responses/errors.yaml#/Unauthorized }
+      '403': { $ref: ../responses/errors.yaml#/Forbidden }
+      '404':
+        $ref: ../responses/errors.yaml#/NotFound
+        description: Session is missing or not owned by the current student (`tutoring_not_found`).
+      '406': { $ref: ../responses/errors.yaml#/NotAcceptable }
+      '422':
+        $ref: ../responses/errors.yaml#/Unprocessable
+        description: Unknown, duplicate, empty, or invalid reconciliation parameter (`tutoring_invalid`).
+
 tutoringSessionCompletion:
   post:
     tags: [Tutoring]
@@ -156,7 +195,7 @@ tutoringSessionCompletion:
         description: Completed session with summary generation queued atomically.
         content:
           application/vnd.api+json:
-            schema: { $ref: ../schemas/resources/resources.yaml#/TutoringSessionDocument }
+            schema: { $ref: ../schemas/resources/resources.yaml#/TutoringSessionCompletionDocument }
       '401': { $ref: ../responses/errors.yaml#/Unauthorized }
       '403': { $ref: ../responses/errors.yaml#/Forbidden }
       '404': { $ref: ../responses/errors.yaml#/NotFound }
@@ -225,13 +264,13 @@ tutoringSessionMessages:
         description: Existing message and initial response returned for an identical replay.
         content:
           application/vnd.api+json:
-            schema: { $ref: ../schemas/resources/resources.yaml#/StudentMessageDocument }
+            schema: { $ref: ../schemas/resources/resources.yaml#/StudentMessageMutationDocument }
       '201':
         headers: { Cache-Control: { $ref: ../openapi.yaml#/components/headers/CacheControlNoStore } }
         description: New student message and queued tutor response.
         content:
           application/vnd.api+json:
-            schema: { $ref: ../schemas/resources/resources.yaml#/StudentMessageDocument }
+            schema: { $ref: ../schemas/resources/resources.yaml#/StudentMessageMutationDocument }
       '400': { $ref: ../responses/errors.yaml#/BadRequest }
       '401': { $ref: ../responses/errors.yaml#/Unauthorized }
       '403': { $ref: ../responses/errors.yaml#/Forbidden }
@@ -280,20 +319,39 @@ studentMessageResponseRetries:
     summary: Retry a failed or interrupted tutor response
     security: [{ sessionCookie: [], csrfToken: [] }]
     parameters: [{ $ref: ../openapi.yaml#/components/parameters/ResourceID }]
+    requestBody:
+      required: true
+      content:
+        application/vnd.api+json:
+          schema: { $ref: ../schemas/requests/requests.yaml#/TutorResponseRetryRequestDocument }
     responses:
+      '200':
+        headers: { Cache-Control: { $ref: ../openapi.yaml#/components/headers/CacheControlNoStore } }
+        description: Existing linked response returned for an identical retry request replay.
+        content:
+          application/vnd.api+json:
+            schema: { $ref: ../schemas/resources/resources.yaml#/TutorResponseRetryDocument }
       '201':
         headers: { Cache-Control: { $ref: ../openapi.yaml#/components/headers/CacheControlNoStore } }
         description: Linked queued retry response.
         content:
           application/vnd.api+json:
-            schema: { $ref: ../schemas/resources/resources.yaml#/TutorResponseDocument }
+            schema: { $ref: ../schemas/resources/resources.yaml#/TutorResponseRetryDocument }
+      '400': { $ref: ../responses/errors.yaml#/BadRequest }
       '401': { $ref: ../responses/errors.yaml#/Unauthorized }
       '403': { $ref: ../responses/errors.yaml#/Forbidden }
       '404': { $ref: ../responses/errors.yaml#/NotFound }
       '406': { $ref: ../responses/errors.yaml#/NotAcceptable }
       '409':
         $ref: ../responses/errors.yaml#/Conflict
-        description: Session, response, or work state disallows retry (`tutoring_invalid_state` or `tutoring_work_busy`).
+        description: >-
+          Request-ID, session, response, or work state disallows retry (`tutoring_request_conflict`,
+          `tutoring_invalid_state`, or `tutoring_work_busy`). Reconcile through the session current-work read.
+      '413': { $ref: ../responses/errors.yaml#/RequestTooLarge }
+      '415': { $ref: ../responses/errors.yaml#/UnsupportedMediaType }
+      '422':
+        $ref: ../responses/errors.yaml#/Unprocessable
+        description: Invalid retry request ID or document (`tutoring_invalid`).
 
 tutorResponseInterruptions:
   post:
@@ -303,16 +361,19 @@ tutorResponseInterruptions:
     security: [{ sessionCookie: [], csrfToken: [] }]
     parameters: [{ $ref: ../openapi.yaml#/components/parameters/ResourceID }]
     responses:
-      '204':
-        $ref: ../responses/success.yaml#/NoContent
-        description: Response interrupted; retained partial content is unchanged.
+      '200':
+        headers: { Cache-Control: { $ref: ../openapi.yaml#/components/headers/CacheControlNoStore } }
+        description: Target response outcome and authoritative current work after interruption.
+        content:
+          application/vnd.api+json:
+            schema: { $ref: ../schemas/resources/resources.yaml#/TutoringStopDocument }
       '401': { $ref: ../responses/errors.yaml#/Unauthorized }
       '403': { $ref: ../responses/errors.yaml#/Forbidden }
       '404': { $ref: ../responses/errors.yaml#/NotFound }
       '406': { $ref: ../responses/errors.yaml#/NotAcceptable }
       '409':
         $ref: ../responses/errors.yaml#/Conflict
-        description: Response cannot be interrupted (`tutoring_invalid_state`).
+        description: Response cannot be interrupted (`tutoring_invalid_state`); reconcile by immutable response ID.
 
 tutorResponseEvents:
   get:
