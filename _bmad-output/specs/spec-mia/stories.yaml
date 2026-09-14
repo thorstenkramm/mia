@@ -108,7 +108,9 @@
   title: Discover and extend browser sessions safely
   description: >-
     Provide authoritative browser-session discovery, explicit idle extension,
-    and logout-safe cookie and CSRF transitions without background refreshes.
+    logout protection against delayed ordinary and Continue working responses,
+    and discovery reconciliation for delayed authentication transitions without
+    background refreshes.
   spec_checkpoint: false
   done_checkpoint: true
 - id: "16"

@@ -111,23 +111,33 @@ ID are never sufficient authorization.
 The MVP uses Gorilla `CookieStore` and custom shared CSRF middleware. For HTTPS,
 the signed and encrypted `__Host-mia_session` cookie contains only the user ID,
 login stage, stage-specific challenge ID when needed, security generation,
-authentication time, idle expiry, and absolute expiry. It is `Secure`,
-`HttpOnly`, `SameSite=Lax`, has path `/`, and has no `Domain` attribute.
+authentication time, idle expiry, absolute expiry, and a browser-generation
+binding. The independently signed `__Host-mia_browser` cookie carries that
+browser generation. Both are `Secure`, `HttpOnly`, `SameSite=Lax`, have path
+`/`, and have no `Domain` attribute. Each authentication transition persists the
+browser-generation cookie through the bound session's absolute lifetime, so a
+browser restart does not invalidate an otherwise unexpired session. Ordinary
+requests and Continue working do not reissue the browser-generation cookie.
 
 Every authenticated request reloads current account, role, assignment, ban, and
 password-gate state from SQLite. Authorization never trusts those values from the
 cookie. A cookie whose security generation differs from the current user row is
-cleared and rejected. Each successful authenticated request reissues the cookie
-with a 30-minute idle expiry capped by the original 12-hour absolute expiry. An
-SSE connection refreshes the cookie when established; server-sent events do not.
+cleared and rejected. Ordinary authenticated requests, automatic polling, SSE
+establishment, reconnection, and server-sent events never reissue the cookie or
+advance its idle expiry. The frontend deliberately calls
+`POST /api/v1/auth/session-continuations` after the user chooses Continue working;
+only that operation advances the idle expiry, capped by the original 12-hour
+absolute expiry. Authenticated responses expose both authoritative deadlines in
+`Mia-Session-Idle-Expires-At` and `Mia-Session-Absolute-Expires-At` headers.
 
 MIA's shared CSRF middleware uses Fetch Metadata checks and double-submit token
 validation for unsafe methods. The HTTPS `__Host-mia_csrf` cookie is `Secure`,
 `SameSite=Lax`, host-only, uses path `/`, and is readable by the frontend rather
 than `HttpOnly`. The frontend sends its value in `X-CSRF-Token` when token
 validation is required. A loopback-HTTP `main.public_url` uses the non-Secure
-`mia_session` and `mia_csrf` names only with a loopback TCP listener. MIA supports
-same-origin browser access only in the MVP and does not enable CORS.
+`mia_session`, `mia_browser`, and `mia_csrf` names only with a loopback TCP
+listener. MIA supports same-origin browser access only in the MVP and does not
+enable CORS.
 
 `GET /api/v1/auth/session` always issues or refreshes anonymous CSRF state. Every
 unsafe public endpoint, including login, invitation preview and acceptance, and
@@ -135,6 +145,19 @@ recovery, requires the matching cookie and header. Cross-site Fetch Metadata is
 rejected; missing Fetch Metadata is accepted only with a valid CSRF token. MIA
 rotates CSRF state after completed login, logout, and every login-stage
 transition, invalidating the old value immediately.
+
+Session discovery returns the authoritative `anonymous`, `mfa`,
+`password-change`, or `authenticated` stage. It returns no profile or role data;
+the `mfa` stage exposes only its opaque challenge ID. Invalid, stale, banned, or
+deleted session state is cleared and returned as anonymous. Logout also rotates
+the current browser-generation cookie. Delayed ordinary authenticated and
+Continue working responses do not issue a matching marker and therefore cannot
+restore usable authentication after logout. A delayed login, MFA-completion, or
+password-change response admitted before logout reissues a matching cookie pair
+and may restore authentication. The frontend treats logout as incomplete while
+such a transition is outstanding and reconciles a later response through session
+discovery. Other browsers remain valid; MIA keeps no server-side browser-session
+or per-browser revocation records and offers no remote session revocation.
 
 ## Frontend and local commands
 
@@ -187,6 +210,7 @@ replacement and logout when MIA next checks account state.
 - `POST /api/v1/auth/login`
 - `POST /api/v1/auth/logout`
 - `GET /api/v1/auth/session`
+- `POST /api/v1/auth/session-continuations`
 - `POST /api/v1/auth/password-changes`
 - `POST /api/v1/auth/password-recovery-requests`
 - `POST /api/v1/auth/password-resets`

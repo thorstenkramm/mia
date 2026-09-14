@@ -290,12 +290,14 @@ unavailable errors when it is not (NFR-17).
 
 ### 6.5 Authentication sessions
 
-- FR-22. Browser sessions use one signed and encrypted stateless cookie; the MVP keeps no server-side session
-  records. Sessions expire after 30 minutes of inactivity and no later than 12 hours after authentication. The
-  12-hour maximum anchors at completion of the final login stage — the moment the full authenticated cookie is
-  created — not at the initial password verification.
-  Each successful authenticated HTTP request (including SSE establishment) resets only the idle timer;
-  server-sent heartbeats and background provider work do not.
+- FR-22. Browser sessions keep authenticated state in one signed and encrypted stateless cookie; the MVP keeps no
+  server-side session records. An independently signed browser-generation cookie binds that session to the current
+  browser generation. Sessions expire after 30 minutes of inactivity and no later than 12 hours after authentication.
+  The 12-hour maximum anchors at completion of the final login stage — the moment the full authenticated cookie is
+  created — not at the initial password verification. Ordinary authenticated requests, automatic polling, SSE
+  establishment and reconnection, server-sent heartbeats, and background provider work do not reset the idle timer.
+  Only an explicit authenticated Continue working operation resets the idle timer, capped by the original 12-hour
+  maximum.
 - FR-23. Account, role, assignment, ban, and password-gate state are reloaded from the database on every request —
   never trusted from the cookie. Ban and deletion take effect on the next request. A security-generation mismatch
   clears the cookie and rejects the request.
@@ -304,8 +306,13 @@ unavailable errors when it is not (NFR-17).
   required, a restricted `password-change` stage (replacement and logout only). MFA precedes password
   replacement. Restricted stages expire after 30 non-refreshing minutes; the cookie rotates at every stage
   transition. Completing password replacement starts a new authenticated-session lifetime.
-- FR-25. Logout clears the cookie in the current browser only. Concurrent sessions on multiple devices are
-  allowed, each with its own timers.
+- FR-25. Logout clears the session cookie and rotates the browser generation in the current browser only. A delayed
+  ordinary authenticated or Continue working response cannot restore usable authentication because it does not issue a
+  matching browser marker. A delayed login, MFA-completion, or password-change response admitted before logout may
+  restore authentication because it reissues a matching authentication-cookie and marker pair; clients reconcile this
+  outcome through session discovery. The MVP keeps no server-side browser-session or per-browser revocation records and
+  provides no remote session revocation. Concurrent sessions on multiple devices are allowed, each with its own
+  generation and timers.
 
 ### 6.6 Multi-factor authentication
 

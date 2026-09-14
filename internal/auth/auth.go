@@ -32,10 +32,12 @@ type recoveryMailer interface {
 
 // Register attaches auth routes using the configured recovery-mail adapter.
 func Register(server *httpserver.Server, routes httpserver.AuthRouteRegistrar, database *sql.DB, publicURL string, deliveries *DeliveryManager, smsSender sms.Sender) {
+	server.Public(http.MethodGet, "/api/v1/auth/session", discoverSession(server))
 	server.AuthenticationSensitive(http.MethodPost, "/api/v1/auth/login", login(server, database, smsSender))
 	server.AuthenticationSensitive(http.MethodPost, "/api/v1/auth/password-recovery-requests", passwordRecoveryRequest(server, database, publicURL, deliveries))
 	server.AuthenticationSensitive(http.MethodPost, "/api/v1/auth/password-resets", passwordReset(server, database))
 	routes.POST("/api/v1/auth/logout", "any", logout(server, database))
+	routes.POST("/api/v1/auth/session-continuations", "authenticated", continueSession(server))
 	routes.POST("/api/v1/auth/password-changes", "password-change", changePassword(server, database))
 	routes.POST("/api/v1/auth/mfa-challenges/:id/verifications", "mfa", verifyChallenge(server, database))
 	routes.POST("/api/v1/auth/mfa-challenges/:id/recovery-code-consumptions", "mfa", consumeChallengeRecoveryCode(server, database))
@@ -152,7 +154,7 @@ func login(server *httpserver.Server, database *sql.DB, smsSender sms.Sender) ec
 			return err
 		}
 		server.RotateCSRF(c)
-		return sessionResponseWithChallenge(c, account.ID, stage, challengeID)
+		return sessionResponse(c)
 	}
 }
 
@@ -252,7 +254,7 @@ func changePassword(server *httpserver.Server, database *sql.DB) echo.HandlerFun
 			return err
 		}
 		server.RotateCSRF(c)
-		return sessionResponse(c, accountID, "authenticated")
+		return sessionResponse(c)
 	}
 }
 
@@ -461,17 +463,51 @@ func invalidResetToken(c *echo.Context, database *sql.DB) error {
 
 func instant(value time.Time) string { return value.UTC().Format("2006-01-02T15:04:05.000000Z") }
 
-func sessionResponse(c *echo.Context, id, stage string) error {
-	return sessionResponseWithChallenge(c, id, stage, "")
+func discoverSession(server *httpserver.Server) echo.HandlerFunc {
+	return func(c *echo.Context) error {
+		state, authenticated, err := server.DiscoverSession(c)
+		if err != nil {
+			return err
+		}
+		if !authenticated {
+			server.RotateCSRF(c)
+			c.Response().Header().Set(echo.HeaderContentType, "application/vnd.api+json")
+			return c.JSON(http.StatusOK, map[string]any{"data": nil, "meta": map[string]string{"stage": "anonymous"}})
+		}
+		return writeSessionResponse(c, state)
+	}
 }
 
-func sessionResponseWithChallenge(c *echo.Context, id, stage, challengeID string) error {
-	c.Response().Header().Set(echo.HeaderContentType, "application/vnd.api+json")
-	attributes := map[string]string{"stage": stage}
-	if challengeID != "" {
-		attributes["mfa_challenge_id"] = challengeID
+func continueSession(server *httpserver.Server) echo.HandlerFunc {
+	return func(c *echo.Context) error {
+		state, err := server.ExtendSession(c, time.Now())
+		if err != nil {
+			return err
+		}
+		return writeSessionResponse(c, state)
 	}
-	return c.JSON(http.StatusOK, map[string]any{"data": map[string]any{"type": "auth-sessions", "id": id, "attributes": attributes}})
+}
+
+func sessionResponse(c *echo.Context) error {
+	state, ok := httpserver.CurrentSession(c)
+	if !ok {
+		return httpserver.NewError(httpserver.CodeInternalError)
+	}
+	return writeSessionResponse(c, state)
+}
+
+func writeSessionResponse(c *echo.Context, state httpserver.BrowserSession) error {
+	c.Response().Header().Set(echo.HeaderContentType, "application/vnd.api+json")
+	attributes := map[string]string{
+		"stage":               state.Stage,
+		"idle_expires_at":     httpserver.FormatInstant(state.IdleExpiresAt),
+		"absolute_expires_at": httpserver.FormatInstant(state.AbsoluteExpiresAt),
+	}
+	if state.MFAChallengeID != "" {
+		attributes["mfa_challenge_id"] = state.MFAChallengeID
+	}
+	return c.JSON(http.StatusOK, map[string]any{"data": map[string]any{"type": "auth-sessions", "id": state.UserID,
+		"attributes": attributes}})
 }
 
 func authenticatedUser(c *echo.Context) (string, error) {
@@ -511,7 +547,7 @@ func verifyChallenge(server *httpserver.Server, database *sql.DB) echo.HandlerFu
 			return err
 		}
 		server.RotateCSRF(c)
-		return sessionResponse(c, accountID, transition)
+		return sessionResponse(c)
 	}
 }
 
@@ -591,7 +627,7 @@ func consumeChallengeRecoveryCode(server *httpserver.Server, database *sql.DB) e
 			return err
 		}
 		server.RotateCSRF(c)
-		return sessionResponse(c, accountID, transition)
+		return sessionResponse(c)
 	}
 }
 

@@ -110,7 +110,7 @@ func jobsServer(t *testing.T) *httpserver.Server {
 	return server
 }
 
-func jobsSession(t *testing.T, server *httpserver.Server, accountID string) (*http.Cookie, string) {
+func jobsSession(t *testing.T, server *httpserver.Server, accountID string) ([]*http.Cookie, string) {
 	t.Helper()
 	path := "/issue-jobs-" + accountID
 	server.Echo.GET(path, func(c *echo.Context) error {
@@ -123,27 +123,32 @@ func jobsSession(t *testing.T, server *httpserver.Server, accountID string) (*ht
 	request := httptest.NewRequest(http.MethodGet, "http://mia.test"+path, nil)
 	response := httptest.NewRecorder()
 	server.Echo.ServeHTTP(response, request)
-	var session *http.Cookie
+	var cookies []*http.Cookie
 	csrf := ""
 	for _, cookie := range response.Result().Cookies() {
 		if cookie.Name == server.SessionCookieName() {
-			session = cookie
+			cookies = append(cookies, cookie)
+		}
+		if cookie.Name == server.BrowserCookieName() {
+			cookies = append(cookies, cookie)
 		}
 		if cookie.Name == server.CSRFCookieName() {
 			csrf = cookie.Value
 		}
 	}
-	if session == nil || csrf == "" {
+	if len(cookies) != 2 || csrf == "" {
 		t.Fatal("jobs session cookies missing")
 	}
-	return session, csrf
+	return cookies, csrf
 }
 
-func jobsHTTP(t *testing.T, server *httpserver.Server, path string, session *http.Cookie,
+func jobsHTTP(t *testing.T, server *httpserver.Server, path string, session []*http.Cookie,
 	csrf string) *httptest.ResponseRecorder {
 	t.Helper()
 	request := httptest.NewRequest(http.MethodGet, "http://mia.test"+path, nil)
-	request.AddCookie(session)
+	for _, cookie := range session {
+		request.AddCookie(cookie)
+	}
 	request.AddCookie(&http.Cookie{Name: server.CSRFCookieName(), Value: csrf})
 	request.Header.Set("X-CSRF-Token", csrf)
 	response := httptest.NewRecorder()

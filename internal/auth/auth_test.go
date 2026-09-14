@@ -48,7 +48,7 @@ func TestLoginPasswordGateStrictInputAndAuditEvents(t *testing.T) {
 	}
 	session, rotatedCSRF := authCookies(t, server, login)
 
-	blocked := serve(t, server, http.MethodPost, "/api/v1/auth/logout", rotatedCSRF, []*http.Cookie{session}, "")
+	blocked := serve(t, server, http.MethodPost, "/api/v1/auth/logout", rotatedCSRF, session, "")
 	if blocked.Code != http.StatusNoContent {
 		t.Fatalf("logout status = %d", blocked.Code)
 	}
@@ -77,14 +77,22 @@ func TestPasswordChangeTransitionsAndStaleStagesAreRejected(t *testing.T) {
 	login := serve(t, server, http.MethodPost, "/api/v1/auth/login", csrf, nil, loginBody("student", "correct horse battery"))
 	session, csrf := authCookies(t, server, login)
 
-	changed := serve(t, server, http.MethodPost, "/api/v1/auth/password-changes", csrf, []*http.Cookie{session}, `{"data":{"type":"password-changes","attributes":{"password":"a different strong password","password_confirmation":"a different strong password"}}}`)
+	changed := serve(t, server, http.MethodPost, "/api/v1/auth/password-changes", csrf, session, `{"data":{"type":"password-changes","attributes":{"password":"a different strong password","password_confirmation":"a different strong password"}}}`)
 	assertCode(t, changed, http.StatusOK, "")
 	if stage(t, changed.Body.Bytes()) != "authenticated" {
 		t.Fatalf("changed stage = %q", stage(t, changed.Body.Bytes()))
 	}
+	changedSessionCookie := sessionCookie(t, server, changed)
+	changedBrowserCookie := responseCookie(changed, server.BrowserCookieName())
+	if changedBrowserCookie == nil || changedBrowserCookie.MaxAge != changedSessionCookie.MaxAge ||
+		changedBrowserCookie.MaxAge < int((11*time.Hour+59*time.Minute)/time.Second) {
+		t.Fatal("authenticated transition did not persist the browser generation through the session lifetime")
+	}
 	freshSession, _ := authCookies(t, server, changed)
 	freshRequest := httptest.NewRequest(http.MethodPost, "http://mia.test/api/v1/auth/logout", nil)
-	freshRequest.AddCookie(freshSession)
+	for _, cookie := range freshSession {
+		freshRequest.AddCookie(cookie)
+	}
 	stored, err := server.Sessions.Get(freshRequest, server.SessionCookieName())
 	if err != nil {
 		t.Fatal(err)
@@ -93,7 +101,7 @@ func TestPasswordChangeTransitionsAndStaleStagesAreRejected(t *testing.T) {
 	if !ok || time.Unix(expiresAt, 0).Before(time.Now().Add(11*time.Hour+59*time.Minute)) {
 		t.Fatal("password-change transition did not start a fresh 12-hour session")
 	}
-	stale := serve(t, server, http.MethodPost, "/api/v1/auth/password-changes", csrf, []*http.Cookie{session}, `{"data":{"type":"password-changes","attributes":{"password":"yet another password","password_confirmation":"yet another password"}}}`)
+	stale := serve(t, server, http.MethodPost, "/api/v1/auth/password-changes", csrf, session, `{"data":{"type":"password-changes","attributes":{"password":"yet another password","password_confirmation":"yet another password"}}}`)
 	assertCode(t, stale, http.StatusForbidden, "auth_password_change_required")
 	var gate int
 	if err := database.QueryRow("SELECT must_change_password FROM users WHERE id = ?", account.ID).Scan(&gate); err != nil {
@@ -111,10 +119,10 @@ func TestLocalCookiePolicyAuthTransitions(t *testing.T) {
 	login := serve(t, server, http.MethodPost, "/api/v1/auth/login", csrf, nil, loginBody("student", "correct horse battery"))
 	assertLocalCSRFCookie(t, login)
 	session, csrf := authCookies(t, server, login)
-	changed := serve(t, server, http.MethodPost, "/api/v1/auth/password-changes", csrf, []*http.Cookie{session}, `{"data":{"type":"password-changes","attributes":{"password":"a different strong password","password_confirmation":"a different strong password"}}}`)
+	changed := serve(t, server, http.MethodPost, "/api/v1/auth/password-changes", csrf, session, `{"data":{"type":"password-changes","attributes":{"password":"a different strong password","password_confirmation":"a different strong password"}}}`)
 	assertLocalCSRFCookie(t, changed)
 	session, csrf = authCookies(t, server, changed)
-	logout := serve(t, server, http.MethodPost, "/api/v1/auth/logout", csrf, []*http.Cookie{session}, "")
+	logout := serve(t, server, http.MethodPost, "/api/v1/auth/logout", csrf, session, "")
 	assertLocalCSRFCookie(t, logout)
 }
 
@@ -125,7 +133,9 @@ func TestRestrictedRoutesRequireValidUnexpiredSession(t *testing.T) {
 	login := serve(t, server, http.MethodPost, "/api/v1/auth/login", csrf, nil, loginBody("student", "correct horse battery"))
 	session, csrf := authCookies(t, server, login)
 	request := httptest.NewRequest(http.MethodPost, "http://mia.test/api/v1/auth/logout", nil)
-	request.AddCookie(session)
+	for _, cookie := range session {
+		request.AddCookie(cookie)
+	}
 	stored, err := server.Sessions.Get(request, server.SessionCookieName())
 	if err != nil {
 		t.Fatal(err)
@@ -136,7 +146,8 @@ func TestRestrictedRoutesRequireValidUnexpiredSession(t *testing.T) {
 		t.Fatal(err)
 	}
 	expired := recorder.Result().Cookies()[0]
-	response := serve(t, server, http.MethodPost, "/api/v1/auth/logout", csrf, []*http.Cookie{expired}, "")
+	response := serve(t, server, http.MethodPost, "/api/v1/auth/logout", csrf,
+		replaceSessionCookie(server, session, expired), "")
 	assertCode(t, response, http.StatusUnauthorized, "auth_unauthenticated")
 	_ = account
 }
@@ -224,9 +235,9 @@ func TestCurrentGateAndInvalidSessionsAreEnforcedAndCleared(t *testing.T) {
 	if _, err := database.Exec("UPDATE users SET must_change_password = 1 WHERE id = ?", account.ID); err != nil {
 		t.Fatal(err)
 	}
-	blocked := serve(t, server, http.MethodPost, "/api/v1/test", csrf, []*http.Cookie{session}, "")
+	blocked := serve(t, server, http.MethodPost, "/api/v1/test", csrf, session, "")
 	assertCode(t, blocked, http.StatusForbidden, "auth_password_change_required")
-	changed := serve(t, server, http.MethodPost, "/api/v1/auth/password-changes", csrf, []*http.Cookie{session}, `{"data":{"type":"password-changes","attributes":{"password":"a different strong password","password_confirmation":"a different strong password"}}}`)
+	changed := serve(t, server, http.MethodPost, "/api/v1/auth/password-changes", csrf, session, `{"data":{"type":"password-changes","attributes":{"password":"a different strong password","password_confirmation":"a different strong password"}}}`)
 	assertCode(t, changed, http.StatusOK, "")
 
 	malformed := serve(t, server, http.MethodPost, "/api/v1/auth/logout", csrf, []*http.Cookie{{Name: server.SessionCookieName(), Value: "malformed"}}, "")
@@ -236,14 +247,16 @@ func TestCurrentGateAndInvalidSessionsAreEnforcedAndCleared(t *testing.T) {
 	}
 }
 
-func TestAuthenticatedRefreshesOnlySuccessfulRequests(t *testing.T) {
+func TestOnlyContinueWorkingExtendsAuthenticatedSession(t *testing.T) {
 	server, database := testServer(t)
 	createAccount(t, database, false)
 	csrf := csrfToken(t, server)
 	login := serve(t, server, http.MethodPost, "/api/v1/auth/login", csrf, nil, loginBody("student", "correct horse battery"))
 	session, csrf := authCookies(t, server, login)
 	request := httptest.NewRequest(http.MethodPost, "http://mia.test/api/v1/succeeds", nil)
-	request.AddCookie(session)
+	for _, cookie := range session {
+		request.AddCookie(cookie)
+	}
 	stored, err := server.Sessions.Get(request, server.SessionCookieName())
 	if err != nil {
 		t.Fatal(err)
@@ -258,30 +271,171 @@ func TestAuthenticatedRefreshesOnlySuccessfulRequests(t *testing.T) {
 	if err := server.Sessions.Save(request, olderRecorder, stored); err != nil {
 		t.Fatal(err)
 	}
-	session = sessionCookie(t, server, olderRecorder)
+	session = replaceSessionCookie(server, session, sessionCookie(t, server, olderRecorder))
 	previousIdle, idleOK := stored.Values["idle_until"].(int64)
 	if !idleOK {
 		t.Fatal("older session idle deadline missing")
 	}
 	server.AuthenticatedPOST("/api/v1/succeeds", func(c *echo.Context) error { return c.NoContent(http.StatusNoContent) })
 	server.AuthenticatedPOST("/api/v1/fails", func(*echo.Context) error { return httpserver.NewError(httpserver.CodeInvalidRequest) })
-	success := serve(t, server, http.MethodPost, "/api/v1/succeeds", csrf, []*http.Cookie{session}, "")
-	if !hasSession(server, success) {
-		t.Fatal("successful authenticated request did not refresh session")
+	success := serve(t, server, http.MethodPost, "/api/v1/succeeds", csrf, session, "")
+	if hasSession(server, success) {
+		t.Fatal("ordinary authenticated request refreshed session")
 	}
-	refreshed := sessionCookie(t, server, success)
+	if responseCookie(success, server.BrowserCookieName()) != nil {
+		t.Fatal("ordinary authenticated request refreshed browser generation")
+	}
+	if success.Header().Get("Mia-Session-Idle-Expires-At") != httpserver.FormatInstant(time.Unix(previousIdle, 0)) ||
+		success.Header().Get("Mia-Session-Absolute-Expires-At") != httpserver.FormatInstant(time.Unix(absolute, 0)) {
+		t.Fatal("ordinary response omitted unchanged authoritative deadlines")
+	}
+	continued := serve(t, server, http.MethodPost, "/api/v1/auth/session-continuations", csrf, session, "")
+	assertCode(t, continued, http.StatusOK, "")
+	if responseCookie(continued, server.BrowserCookieName()) != nil {
+		t.Fatal("Continue working refreshed browser generation")
+	}
+	refreshed := replaceSessionCookie(server, session, sessionCookie(t, server, continued))
 	request = httptest.NewRequest(http.MethodPost, "http://mia.test/api/v1/succeeds", nil)
-	request.AddCookie(refreshed)
+	for _, cookie := range refreshed {
+		request.AddCookie(cookie)
+	}
 	stored, err = server.Sessions.Get(request, server.SessionCookieName())
 	refreshedIdle, idleOK := stored.Values["idle_until"].(int64)
 	refreshedAbsolute, absoluteOK := stored.Values["expires_at"].(int64)
 	if err != nil || !idleOK || !absoluteOK || refreshedIdle <= previousIdle || refreshedIdle > refreshedAbsolute || refreshedAbsolute != absolute {
 		t.Fatal("idle refresh did not advance without preserving absolute expiry")
 	}
-	failure := serve(t, server, http.MethodPost, "/api/v1/fails", csrf, []*http.Cookie{session}, "")
+	failure := serve(t, server, http.MethodPost, "/api/v1/fails", csrf, session, "")
 	assertCode(t, failure, http.StatusUnprocessableEntity, "auth_invalid_request")
 	if hasSession(server, failure) {
 		t.Fatal("failed authenticated request refreshed session")
+	}
+}
+
+func TestBrowserRestartRetainsBoundAuthenticatedSession(t *testing.T) {
+	server, database := testServer(t)
+	createAccount(t, database, false)
+	csrf := csrfToken(t, server)
+	login := serve(t, server, http.MethodPost, "/api/v1/auth/login", csrf, nil,
+		loginBody("student", "correct horse battery"))
+	assertCode(t, login, http.StatusOK, "")
+
+	var restartedCookies []*http.Cookie
+	for _, cookie := range login.Result().Cookies() {
+		if cookie.Name != server.SessionCookieName() && cookie.Name != server.BrowserCookieName() {
+			continue
+		}
+		if cookie.MaxAge <= 0 {
+			t.Fatalf("%s is not persistent across a browser restart", cookie.Name)
+		}
+		restartedCookies = append(restartedCookies, cookie)
+	}
+	if len(restartedCookies) != 2 {
+		t.Fatalf("persistent authentication cookies = %d, expected 2", len(restartedCookies))
+	}
+	if restartedCookies[0].MaxAge != restartedCookies[1].MaxAge {
+		t.Fatal("browser generation and authentication cookie lifetimes differ")
+	}
+
+	discovered := serve(t, server, http.MethodGet, "/api/v1/auth/session", "", restartedCookies, "")
+	assertCode(t, discovered, http.StatusOK, "")
+	if stage(t, discovered.Body.Bytes()) != "authenticated" {
+		t.Fatalf("session after browser restart = %s", discovered.Body.String())
+	}
+}
+
+func TestSessionDiscoveryReturnsAnonymousAndAuthoritativeStages(t *testing.T) {
+	server, database := testServer(t)
+	account := createAccount(t, database, true)
+
+	anonymous := serve(t, server, http.MethodGet, "/api/v1/auth/session", "", nil, "")
+	assertCode(t, anonymous, http.StatusOK, "")
+	if !strings.Contains(anonymous.Body.String(), `"data":null`) ||
+		!strings.Contains(anonymous.Body.String(), `"stage":"anonymous"`) {
+		t.Fatalf("anonymous discovery = %s", anonymous.Body.String())
+	}
+	if csrfCookieValue(t, server, anonymous) == "" || responseCookie(anonymous, server.BrowserCookieName()) == nil {
+		t.Fatal("anonymous discovery omitted public browser state")
+	}
+
+	csrf := csrfToken(t, server)
+	login := serve(t, server, http.MethodPost, "/api/v1/auth/login", csrf, nil,
+		loginBody("student", "correct horse battery"))
+	cookies, _ := authCookies(t, server, login)
+	discovered := serve(t, server, http.MethodGet, "/api/v1/auth/session", "", cookies, "")
+	assertCode(t, discovered, http.StatusOK, "")
+	if stage(t, discovered.Body.Bytes()) != "password-change" ||
+		!strings.Contains(discovered.Body.String(), `"idle_expires_at":"`) ||
+		!strings.Contains(discovered.Body.String(), `"absolute_expires_at":"`) {
+		t.Fatalf("staged discovery = %s", discovered.Body.String())
+	}
+	if discovered.Header().Get("Mia-Session-Idle-Expires-At") != login.Header().Get("Mia-Session-Idle-Expires-At") ||
+		discovered.Header().Get("Mia-Session-Absolute-Expires-At") != login.Header().Get("Mia-Session-Absolute-Expires-At") {
+		t.Fatal("discovery changed the login deadlines")
+	}
+	if hasSession(server, discovered) {
+		t.Fatal("session discovery refreshed authentication")
+	}
+
+	if _, err := database.Exec("UPDATE users SET must_change_password = 0 WHERE id = ?", account.ID); err != nil {
+		t.Fatal(err)
+	}
+	stale := serve(t, server, http.MethodGet, "/api/v1/auth/session", "", cookies, "")
+	if !strings.Contains(stale.Body.String(), `"stage":"anonymous"`) || !hasClearedSession(server, stale) {
+		t.Fatalf("stale discovery = %d %s", stale.Code, stale.Body.String())
+	}
+}
+
+func TestMFADiscoveryReturnsOnlyOpaqueChallenge(t *testing.T) {
+	server, database := testServer(t)
+	account := createAccount(t, database, false)
+	const challengeID = "mfc_00000000-0000-4000-8000-000000000001"
+	server.Echo.GET("/issue-mfa-discovery", func(c *echo.Context) error {
+		return server.StartMFASession(c, account.ID, account.SecurityGeneration, challengeID, time.Now())
+	})
+	issued := httptest.NewRecorder()
+	server.Echo.ServeHTTP(issued, httptest.NewRequest(http.MethodGet, "http://mia.test/issue-mfa-discovery", nil))
+	discovered := serve(t, server, http.MethodGet, "/api/v1/auth/session", "", sessionCookies(t, server, issued), "")
+	if stage(t, discovered.Body.Bytes()) != "mfa" ||
+		!strings.Contains(discovered.Body.String(), `"mfa_challenge_id":"`+challengeID+`"`) ||
+		strings.Contains(discovered.Body.String(), "destination") || strings.Contains(discovered.Body.String(), "secret") {
+		t.Fatalf("MFA discovery = %s", discovered.Body.String())
+	}
+}
+
+func TestLogoutReorderingUsesReducedStatelessGuarantee(t *testing.T) {
+	server, database := testServer(t)
+	createAccount(t, database, false)
+	csrf := csrfToken(t, server)
+	firstLogin := serve(t, server, http.MethodPost, "/api/v1/auth/login", csrf, nil,
+		loginBody("student", "correct horse battery"))
+	firstCookies, firstCSRF := authCookies(t, server, firstLogin)
+	secondLogin := serve(t, server, http.MethodPost, "/api/v1/auth/login", csrf, nil,
+		loginBody("student", "correct horse battery"))
+	secondCookies, _ := authCookies(t, server, secondLogin)
+
+	late := serve(t, server, http.MethodPost, "/api/v1/auth/session-continuations", firstCSRF, firstCookies, "")
+	lateSession := sessionCookie(t, server, late)
+	delayedTransition := serve(t, server, http.MethodPost, "/api/v1/auth/login", firstCSRF, firstCookies,
+		loginBody("student", "correct horse battery"))
+	delayedTransitionCookies, _ := authCookies(t, server, delayedTransition)
+	logout := serve(t, server, http.MethodPost, "/api/v1/auth/logout", firstCSRF, firstCookies, "")
+	newMarker := responseCookie(logout, server.BrowserCookieName())
+	if newMarker == nil {
+		t.Fatal("logout omitted rotated browser generation")
+	}
+	staleCookies := []*http.Cookie{lateSession, newMarker}
+	stale := serve(t, server, http.MethodGet, "/api/v1/auth/session", "", staleCookies, "")
+	if !strings.Contains(stale.Body.String(), `"stage":"anonymous"`) {
+		t.Fatalf("late session survived logout: %s", stale.Body.String())
+	}
+	reconciled := serve(t, server, http.MethodGet, "/api/v1/auth/session", "", delayedTransitionCookies, "")
+	if stage(t, reconciled.Body.Bytes()) != "authenticated" {
+		t.Fatalf("delayed authentication transition was not reconciled: %s", reconciled.Body.String())
+	}
+	otherBrowser := serve(t, server, http.MethodGet, "/api/v1/auth/session", "", secondCookies, "")
+	if stage(t, otherBrowser.Body.Bytes()) != "authenticated" {
+		t.Fatalf("other browser invalidated: %s", otherBrowser.Body.String())
 	}
 }
 
@@ -309,7 +463,7 @@ func TestBanDeletionAndSecurityGenerationInvalidateCookies(t *testing.T) {
 			if err := mutate(database, account.ID); err != nil {
 				t.Fatal(err)
 			}
-			response := serve(t, server, http.MethodPost, "/api/v1/auth/logout", csrf, []*http.Cookie{session}, "")
+			response := serve(t, server, http.MethodPost, "/api/v1/auth/logout", csrf, session, "")
 			assertCode(t, response, http.StatusUnauthorized, "auth_unauthenticated")
 			if !hasClearedSession(server, response) {
 				t.Fatal("invalidated cookie was not cleared")
@@ -516,7 +670,7 @@ func TestTOTPEnrollmentLoginAndStepReplay(t *testing.T) {
 	csrf := csrfToken(t, server)
 	login := serve(t, server, http.MethodPost, "/api/v1/auth/login", csrf, nil, loginBody("student", "correct horse battery"))
 	session, csrf := authCookies(t, server, login)
-	enrollment := serve(t, server, http.MethodPost, "/api/v1/users/me/mfa-enrollments", csrf, []*http.Cookie{session}, `{"data":{"type":"mfa-enrollments","attributes":{"method":"totp"}}}`)
+	enrollment := serve(t, server, http.MethodPost, "/api/v1/users/me/mfa-enrollments", csrf, session, `{"data":{"type":"mfa-enrollments","attributes":{"method":"totp"}}}`)
 	if enrollment.Code != http.StatusCreated {
 		t.Fatalf("enrollment status=%d body=%s", enrollment.Code, enrollment.Body.String())
 	}
@@ -533,7 +687,7 @@ func TestTOTPEnrollmentLoginAndStepReplay(t *testing.T) {
 		t.Fatal(err)
 	}
 	code := totpCode(secret, time.Now().Unix()/30)
-	verified := serve(t, server, http.MethodPost, "/api/v1/users/me/mfa-enrollments/"+result.Data.ID+"/verifications", csrf, []*http.Cookie{session}, `{"data":{"type":"mfa-enrollment-verifications","attributes":{"code":"`+code+`"}}}`)
+	verified := serve(t, server, http.MethodPost, "/api/v1/users/me/mfa-enrollments/"+result.Data.ID+"/verifications", csrf, session, `{"data":{"type":"mfa-enrollment-verifications","attributes":{"code":"`+code+`"}}}`)
 	if verified.Code != http.StatusOK {
 		t.Fatalf("verification status=%d body=%s", verified.Code, verified.Body.String())
 	}
@@ -554,7 +708,7 @@ func TestTOTPEnrollmentLoginAndStepReplay(t *testing.T) {
 	}
 	// Enrollment claims the accepted step, so it cannot immediately authenticate
 	// a login challenge for the same factor.
-	replayed := serve(t, server, http.MethodPost, "/api/v1/auth/mfa-challenges/"+challenge.Data.Attributes.Challenge+"/verifications", csrf, []*http.Cookie{mfaSession}, `{"data":{"type":"mfa-verifications","attributes":{"code":"`+code+`"}}}`)
+	replayed := serve(t, server, http.MethodPost, "/api/v1/auth/mfa-challenges/"+challenge.Data.Attributes.Challenge+"/verifications", csrf, mfaSession, `{"data":{"type":"mfa-verifications","attributes":{"code":"`+code+`"}}}`)
 	assertCode(t, replayed, http.StatusForbidden, "auth_mfa_step_used")
 	_ = account
 }
@@ -565,7 +719,7 @@ func TestManagementProofsUseUniqueOpaqueResourceIDs(t *testing.T) {
 	csrf := csrfToken(t, server)
 	login := serve(t, server, http.MethodPost, "/api/v1/auth/login", csrf, nil, loginBody("student", "correct horse battery"))
 	session, csrf := authCookies(t, server, login)
-	enrollment := serve(t, server, http.MethodPost, "/api/v1/users/me/mfa-enrollments", csrf, []*http.Cookie{session}, `{"data":{"type":"mfa-enrollments","attributes":{"method":"totp"}}}`)
+	enrollment := serve(t, server, http.MethodPost, "/api/v1/users/me/mfa-enrollments", csrf, session, `{"data":{"type":"mfa-enrollments","attributes":{"method":"totp"}}}`)
 	if enrollment.Code != http.StatusCreated {
 		t.Fatalf("enrollment status=%d body=%s", enrollment.Code, enrollment.Body.String())
 	}
@@ -581,7 +735,7 @@ func TestManagementProofsUseUniqueOpaqueResourceIDs(t *testing.T) {
 	if err := database.QueryRow("SELECT totp_secret FROM mfa_enrollments WHERE id = ?", created.Data.ID).Scan(&secret); err != nil {
 		t.Fatal(err)
 	}
-	verified := serve(t, server, http.MethodPost, "/api/v1/users/me/mfa-enrollments/"+created.Data.ID+"/verifications", csrf, []*http.Cookie{session}, `{"data":{"type":"mfa-enrollment-verifications","attributes":{"code":"`+totpCode(secret, time.Now().Unix()/30)+`"}}}`)
+	verified := serve(t, server, http.MethodPost, "/api/v1/users/me/mfa-enrollments/"+created.Data.ID+"/verifications", csrf, session, `{"data":{"type":"mfa-enrollment-verifications","attributes":{"code":"`+totpCode(secret, time.Now().Unix()/30)+`"}}}`)
 	if verified.Code != http.StatusOK {
 		t.Fatalf("verification status=%d body=%s", verified.Code, verified.Body.String())
 	}
@@ -600,7 +754,7 @@ func TestManagementProofsUseUniqueOpaqueResourceIDs(t *testing.T) {
 	}
 	seen := map[string]bool{}
 	for _, code := range recovery.Data.Attributes.RecoveryCodes[:2] {
-		response := serve(t, server, http.MethodPost, "/api/v1/auth/mfa-management-proofs", csrf, []*http.Cookie{session}, `{"data":{"type":"mfa-management-proofs","attributes":{"password":"correct horse battery","code":"`+code+`"}}}`)
+		response := serve(t, server, http.MethodPost, "/api/v1/auth/mfa-management-proofs", csrf, session, `{"data":{"type":"mfa-management-proofs","attributes":{"password":"correct horse battery","code":"`+code+`"}}}`)
 		if response.Code != http.StatusCreated {
 			t.Fatalf("proof status=%d body=%s", response.Code, response.Body.String())
 		}
@@ -680,7 +834,7 @@ func TestInvalidRecoveryCodeCountsAsChallengeFailure(t *testing.T) {
 	if err := server.StartMFASession(context, account.ID, account.SecurityGeneration, challengeID, time.Now()); err != nil {
 		t.Fatal(err)
 	}
-	response := serve(t, server, http.MethodPost, "/api/v1/auth/mfa-challenges/"+challengeID+"/recovery-code-consumptions", csrfToken(t, server), []*http.Cookie{sessionCookie(t, server, recorder)}, `{"data":{"type":"mfa-recovery-code-consumptions","attributes":{"code":"invalid"}}}`)
+	response := serve(t, server, http.MethodPost, "/api/v1/auth/mfa-challenges/"+challengeID+"/recovery-code-consumptions", csrfToken(t, server), sessionCookies(t, server, recorder), `{"data":{"type":"mfa-recovery-code-consumptions","attributes":{"code":"invalid"}}}`)
 	assertCode(t, response, http.StatusUnprocessableEntity, "auth_invalid_recovery_code")
 	var failures int
 	if err := database.QueryRow("SELECT failures FROM mfa_challenges WHERE id = ?", challengeID).Scan(&failures); err != nil {
@@ -718,7 +872,7 @@ func TestSMSEnrollmentDeliversAndVerifiesOneCode(t *testing.T) {
 	csrf := csrfToken(t, server)
 	login := serve(t, server, http.MethodPost, "/api/v1/auth/login", csrf, nil, loginBody("student", "correct horse battery"))
 	session, csrf := authCookies(t, server, login)
-	enrollment := serve(t, server, http.MethodPost, "/api/v1/users/me/mfa-enrollments", csrf, []*http.Cookie{session}, `{"data":{"type":"mfa-enrollments","attributes":{"method":"sms"}}}`)
+	enrollment := serve(t, server, http.MethodPost, "/api/v1/users/me/mfa-enrollments", csrf, session, `{"data":{"type":"mfa-enrollments","attributes":{"method":"sms"}}}`)
 	if enrollment.Code != http.StatusCreated {
 		t.Fatalf("SMS enrollment=%d %s", enrollment.Code, enrollment.Body.String())
 	}
@@ -731,7 +885,7 @@ func TestSMSEnrollmentDeliversAndVerifiesOneCode(t *testing.T) {
 		t.Fatal(err)
 	}
 	code := sender.last(t)
-	verified := serve(t, server, http.MethodPost, "/api/v1/users/me/mfa-enrollments/"+result.Data.ID+"/verifications", csrf, []*http.Cookie{session}, `{"data":{"type":"mfa-enrollment-verifications","attributes":{"code":"`+code+`"}}}`)
+	verified := serve(t, server, http.MethodPost, "/api/v1/users/me/mfa-enrollments/"+result.Data.ID+"/verifications", csrf, session, `{"data":{"type":"mfa-enrollment-verifications","attributes":{"code":"`+code+`"}}}`)
 	if verified.Code != http.StatusOK {
 		t.Fatalf("SMS verification=%d %s", verified.Code, verified.Body.String())
 	}
@@ -990,22 +1144,24 @@ func assertCode(t *testing.T, response *httptest.ResponseRecorder, status int, c
 	}
 }
 
-func authCookies(t *testing.T, server *httpserver.Server, response *httptest.ResponseRecorder) (*http.Cookie, string) {
+func authCookies(t *testing.T, server *httpserver.Server, response *httptest.ResponseRecorder) ([]*http.Cookie, string) {
 	t.Helper()
-	var session *http.Cookie
+	var cookies []*http.Cookie
 	var csrf string
 	for _, cookie := range response.Result().Cookies() {
 		switch cookie.Name {
 		case server.SessionCookieName():
-			session = cookie
+			cookies = append(cookies, cookie)
+		case server.BrowserCookieName():
+			cookies = append(cookies, cookie)
 		case server.CSRFCookieName():
 			csrf = cookie.Value
 		}
 	}
-	if session == nil || csrf == "" {
-		t.Fatalf("auth cookies session=%v csrf=%q", session != nil, csrf)
+	if len(cookies) != 2 || csrf == "" {
+		t.Fatalf("auth cookies count=%d csrf=%q", len(cookies), csrf)
 	}
-	return session, csrf
+	return cookies, csrf
 }
 
 func assertLocalCSRFCookie(t *testing.T, response *httptest.ResponseRecorder) {
@@ -1039,6 +1195,15 @@ func hasClearedSession(server *httpserver.Server, response *httptest.ResponseRec
 	return false
 }
 
+func responseCookie(response *httptest.ResponseRecorder, name string) *http.Cookie {
+	for _, cookie := range response.Result().Cookies() {
+		if cookie.Name == name {
+			return cookie
+		}
+	}
+	return nil
+}
+
 func sessionCookie(t *testing.T, server *httpserver.Server, response *httptest.ResponseRecorder) *http.Cookie {
 	t.Helper()
 	for _, cookie := range response.Result().Cookies() {
@@ -1048,6 +1213,43 @@ func sessionCookie(t *testing.T, server *httpserver.Server, response *httptest.R
 	}
 	t.Fatal("response omitted session cookie")
 	return nil
+}
+
+func csrfCookieValue(t *testing.T, server *httpserver.Server, response *httptest.ResponseRecorder) string {
+	t.Helper()
+	for _, cookie := range response.Result().Cookies() {
+		if cookie.Name == server.CSRFCookieName() {
+			return cookie.Value
+		}
+	}
+	t.Fatal("response omitted CSRF cookie")
+	return ""
+}
+
+func sessionCookies(t *testing.T, server *httpserver.Server, response *httptest.ResponseRecorder) []*http.Cookie {
+	t.Helper()
+	var cookies []*http.Cookie
+	for _, cookie := range response.Result().Cookies() {
+		if cookie.Name == server.SessionCookieName() || cookie.Name == server.BrowserCookieName() {
+			cookies = append(cookies, cookie)
+		}
+	}
+	if len(cookies) != 2 {
+		t.Fatalf("response session cookie count = %d", len(cookies))
+	}
+	return cookies
+}
+
+func replaceSessionCookie(server *httpserver.Server, cookies []*http.Cookie, replacement *http.Cookie) []*http.Cookie {
+	result := make([]*http.Cookie, 0, len(cookies))
+	for _, cookie := range cookies {
+		if cookie.Name == server.SessionCookieName() {
+			result = append(result, replacement)
+		} else {
+			result = append(result, cookie)
+		}
+	}
+	return result
 }
 
 func stage(t *testing.T, body []byte) string {

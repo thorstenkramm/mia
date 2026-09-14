@@ -141,7 +141,7 @@ func TestSpeechRoutesReturnStableUnavailable(t *testing.T) {
 	}
 }
 
-func speechCookie(t *testing.T, server *httpserver.Server, accountID string) (*http.Cookie, string) {
+func speechCookie(t *testing.T, server *httpserver.Server, accountID string) ([]*http.Cookie, string) {
 	t.Helper()
 	path := "/issue-speech-" + strings.ReplaceAll(accountID, "_", "-")
 	server.Echo.GET(path, func(c *echo.Context) error {
@@ -154,25 +154,28 @@ func speechCookie(t *testing.T, server *httpserver.Server, accountID string) (*h
 	request := httptest.NewRequest(http.MethodGet, "http://mia.test"+path, nil)
 	response := httptest.NewRecorder()
 	server.Echo.ServeHTTP(response, request)
-	var session *http.Cookie
+	var cookies []*http.Cookie
 	csrf := ""
 	for _, cookie := range response.Result().Cookies() {
 		if cookie.Name == server.SessionCookieName() {
-			session = cookie
+			cookies = append(cookies, cookie)
+		}
+		if cookie.Name == server.BrowserCookieName() {
+			cookies = append(cookies, cookie)
 		}
 		if cookie.Name == server.CSRFCookieName() {
 			csrf = cookie.Value
 		}
 	}
-	require.NotNil(t, session)
-	return session, csrf
+	require.Len(t, cookies, 2)
+	return cookies, csrf
 }
 
-func speechHTTP(server *httpserver.Server, method, path string, session *http.Cookie,
+func speechHTTP(server *httpserver.Server, method, path string, session []*http.Cookie,
 	csrf string) *httptest.ResponseRecorder {
 	request := httptest.NewRequest(method, "http://mia.test"+path, bytes.NewReader(nil))
-	if session != nil {
-		request.AddCookie(session)
+	for _, cookie := range session {
+		request.AddCookie(cookie)
 	}
 	if csrf != "" {
 		request.AddCookie(&http.Cookie{Name: server.CSRFCookieName(), Value: csrf})

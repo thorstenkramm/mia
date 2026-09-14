@@ -79,7 +79,7 @@ AuthSession:
       description: The account ID (named auth-sessions identity exception).
     attributes:
       type: object
-      required: [stage]
+      required: [stage, idle_expires_at, absolute_expires_at]
       properties:
         stage:
           type: string
@@ -87,6 +87,30 @@ AuthSession:
         mfa_challenge_id:
           type: string
           description: Present only in the `mfa` stage.
+        idle_expires_at:
+          type: string
+          format: date-time
+          description: Idle deadline advanced only by Continue working.
+        absolute_expires_at:
+          type: string
+          format: date-time
+          description: Fixed maximum deadline for this login stage or authenticated lifetime.
+SessionDiscoveryDocument:
+  oneOf:
+    - $ref: '#/AuthSessionDocument'
+    - $ref: '#/AnonymousAuthSessionDocument'
+AnonymousAuthSessionDocument:
+  type: object
+  required: [data, meta]
+  properties:
+    data:
+      type: 'null'
+    meta:
+      type: object
+      required: [stage]
+      properties:
+        stage:
+          const: anonymous
 MFAManagementProof:
   type: object
   required: [type, id, attributes]

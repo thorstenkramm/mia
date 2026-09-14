@@ -43,22 +43,27 @@ func TestCookiePolicyAttributesAndLocalHTTPCookieJarCSRF(t *testing.T) {
 			})
 			response := httptest.NewRecorder()
 			server.Echo.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "https://mia.test/issue", nil))
-			if len(response.Result().Cookies()) != 2 {
+			if len(response.Result().Cookies()) != 3 {
 				t.Fatalf("issued cookie count = %d", len(response.Result().Cookies()))
 			}
-			var session, csrf *http.Cookie
+			var session, browser, csrf *http.Cookie
 			for _, cookie := range response.Result().Cookies() {
 				switch cookie.Name {
 				case policy.SessionName:
 					session = cookie
+				case server.BrowserCookieName():
+					browser = cookie
 				case policy.CSRFName:
 					csrf = cookie
 				}
 			}
-			if session == nil || csrf == nil {
+			if session == nil || browser == nil || csrf == nil {
 				t.Fatal("session or CSRF cookie missing")
 			}
-			if session.Secure != policy.Secure || csrf.Secure != policy.Secure || !session.HttpOnly || csrf.HttpOnly || session.Path != "/" || csrf.Path != "/" || session.SameSite != http.SameSiteLaxMode || csrf.SameSite != http.SameSiteLaxMode || session.Domain != "" || csrf.Domain != "" {
+			if session.Secure != policy.Secure || browser.Secure != policy.Secure || csrf.Secure != policy.Secure ||
+				!session.HttpOnly || !browser.HttpOnly || csrf.HttpOnly || session.Path != "/" || browser.Path != "/" ||
+				csrf.Path != "/" || session.SameSite != http.SameSiteLaxMode || browser.SameSite != http.SameSiteLaxMode ||
+				csrf.SameSite != http.SameSiteLaxMode || session.Domain != "" || browser.Domain != "" || csrf.Domain != "" {
 				t.Fatalf("unexpected cookie attributes: session=%#v csrf=%#v", session, csrf)
 			}
 			server.AuthenticatedPOST("/api/v1/cookie-refresh", func(c *echo.Context) error { return c.NoContent(http.StatusNoContent) })
@@ -71,6 +76,7 @@ func TestCookiePolicyAttributesAndLocalHTTPCookieJarCSRF(t *testing.T) {
 			for _, path := range []string{"/api/v1/cookie-refresh", "/api/v1/cookie-clear"} {
 				request := httptest.NewRequest(http.MethodPost, "https://mia.test"+path, nil)
 				request.AddCookie(session)
+				request.AddCookie(browser)
 				request.AddCookie(csrf)
 				request.Header.Set("X-CSRF-Token", csrf.Value)
 				result := httptest.NewRecorder()
@@ -79,11 +85,12 @@ func TestCookiePolicyAttributesAndLocalHTTPCookieJarCSRF(t *testing.T) {
 					t.Fatalf("%s status = %d", path, result.Code)
 				}
 				cookies := result.Result().Cookies()
-				if len(cookies) != 1 || cookies[0].Name != policy.SessionName || cookies[0].Secure != policy.Secure || !cookies[0].HttpOnly || cookies[0].Path != "/" || cookies[0].SameSite != http.SameSiteLaxMode {
-					t.Fatalf("%s cookies = %#v", path, cookies)
+				if path == "/api/v1/cookie-refresh" && len(cookies) != 0 {
+					t.Fatalf("ordinary request returned cookies = %#v", cookies)
 				}
-				if path == "/api/v1/cookie-clear" && cookies[0].MaxAge >= 0 {
-					t.Fatal("clear did not expire the active session cookie")
+				if path == "/api/v1/cookie-clear" && (len(cookies) != 2 || cookies[0].Name != policy.SessionName ||
+					cookies[0].MaxAge >= 0 || cookies[1].Name != server.BrowserCookieName()) {
+					t.Fatalf("clear cookies = %#v", cookies)
 				}
 			}
 			server.Echo.POST("/api/v1/csrf-policy", func(c *echo.Context) error { return c.NoContent(http.StatusNoContent) })
@@ -152,7 +159,7 @@ func TestCookiePolicyAttributesAndLocalHTTPCookieJarCSRF(t *testing.T) {
 	if err := response.Body.Close(); err != nil {
 		t.Fatal(err)
 	}
-	var token, session string
+	var token, session, browser string
 	for _, cookie := range jar.Cookies(response.Request.URL) {
 		if cookie.Name == "mia_csrf" {
 			token = cookie.Value
@@ -160,8 +167,11 @@ func TestCookiePolicyAttributesAndLocalHTTPCookieJarCSRF(t *testing.T) {
 		if cookie.Name == "mia_session" {
 			session = cookie.Value
 		}
+		if cookie.Name == "mia_browser" {
+			browser = cookie.Value
+		}
 	}
-	if token == "" || session == "" {
+	if token == "" || session == "" || browser == "" {
 		t.Fatal("cookie jar did not retain local session and CSRF cookies")
 	}
 	request, err := http.NewRequest(http.MethodPost, httpServer.URL+"/api/v1/local-cookie-jar", nil)

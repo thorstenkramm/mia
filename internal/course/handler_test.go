@@ -278,7 +278,9 @@ func TestCourseLogoRoutesAreExemptFromJSONAPIAcceptNegotiation(t *testing.T) {
 		request := httptest.NewRequest(method, "http://mia.test/api/v1/courses/"+created.ID+"/logo",
 			bytes.NewReader([]byte("not an image")))
 		request.Header.Set("Accept", `application/vnd.api+json;profile="a,b"`)
-		request.AddCookie(session)
+		for _, cookie := range session {
+			request.AddCookie(cookie)
+		}
 		if method == http.MethodPut {
 			request.Header.Set("Content-Type", "image/png")
 			request.AddCookie(&http.Cookie{Name: server.CSRFCookieName(), Value: csrf})
@@ -582,7 +584,7 @@ func courseDatabaseAt(t *testing.T, directory string) *sql.DB {
 	return database
 }
 
-func courseSession(t *testing.T, server *httpserver.Server, accountID string) (*http.Cookie, string) {
+func courseSession(t *testing.T, server *httpserver.Server, accountID string) ([]*http.Cookie, string) {
 	return courseSessionGeneration(t, server, accountID, 1)
 }
 
@@ -591,7 +593,7 @@ func courseSessionGeneration(
 	server *httpserver.Server,
 	accountID string,
 	generation int64,
-) (*http.Cookie, string) {
+) ([]*http.Cookie, string) {
 	t.Helper()
 	path := "/issue-course-" + accountID + "-" + strconv.FormatInt(generation, 10)
 	server.Echo.GET(path, func(c *echo.Context) error {
@@ -604,27 +606,32 @@ func courseSessionGeneration(
 	request := httptest.NewRequest(http.MethodGet, "http://mia.test"+path, nil)
 	response := httptest.NewRecorder()
 	server.Echo.ServeHTTP(response, request)
-	var session *http.Cookie
+	var cookies []*http.Cookie
 	csrf := ""
 	for _, cookie := range response.Result().Cookies() {
 		if cookie.Name == server.SessionCookieName() {
-			session = cookie
+			cookies = append(cookies, cookie)
+		}
+		if cookie.Name == server.BrowserCookieName() {
+			cookies = append(cookies, cookie)
 		}
 		if cookie.Name == server.CSRFCookieName() {
 			csrf = cookie.Value
 		}
 	}
-	if session == nil || csrf == "" {
+	if len(cookies) != 2 || csrf == "" {
 		t.Fatal("course session cookies missing")
 	}
-	return session, csrf
+	return cookies, csrf
 }
 
-func courseHTTP(t *testing.T, server *httpserver.Server, method, path string, session *http.Cookie, csrf,
+func courseHTTP(t *testing.T, server *httpserver.Server, method, path string, session []*http.Cookie, csrf,
 	contentType string, body []byte) *httptest.ResponseRecorder {
 	t.Helper()
 	request := httptest.NewRequest(method, "http://mia.test"+path, bytes.NewReader(body))
-	request.AddCookie(session)
+	for _, cookie := range session {
+		request.AddCookie(cookie)
+	}
 	request.AddCookie(&http.Cookie{Name: server.CSRFCookieName(), Value: csrf})
 	request.Header.Set("X-CSRF-Token", csrf)
 	if contentType != "" {
@@ -635,12 +642,14 @@ func courseHTTP(t *testing.T, server *httpserver.Server, method, path string, se
 	return response
 }
 
-func courseHTTPUnknownLength(t *testing.T, server *httpserver.Server, method, path string, session *http.Cookie, csrf,
+func courseHTTPUnknownLength(t *testing.T, server *httpserver.Server, method, path string, session []*http.Cookie, csrf,
 	contentType string, body []byte) *httptest.ResponseRecorder {
 	t.Helper()
 	request := httptest.NewRequest(method, "http://mia.test"+path, bytes.NewReader(body))
 	request.ContentLength = -1
-	request.AddCookie(session)
+	for _, cookie := range session {
+		request.AddCookie(cookie)
+	}
 	request.AddCookie(&http.Cookie{Name: server.CSRFCookieName(), Value: csrf})
 	request.Header.Set("X-CSRF-Token", csrf)
 	request.Header.Set("Content-Type", contentType)

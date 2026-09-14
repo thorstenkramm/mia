@@ -251,7 +251,7 @@ func TestInvitationCreateAndCommandResourcesRejectClientGeneratedIDs(t *testing.
 	csrf, session := loginSession(t, server, "id-admin", "correct horse battery")
 	for _, testCase := range []struct {
 		name, path, body, code string
-		cookie                 *http.Cookie
+		cookie                 []*http.Cookie
 	}{
 		{name: "invitation create", path: "/api/v1/invitations", code: "auth_invalid_request", cookie: session,
 			body: `{"data":{"type":"invitations","id":"client-id","attributes":{"email":"id@example.test","role":"supervisor"}}}`},
@@ -575,7 +575,7 @@ func csrfToken(t *testing.T, server *httpserver.Server) string {
 	return ""
 }
 
-func loginSession(t *testing.T, server *httpserver.Server, username, password string) (string, *http.Cookie) {
+func loginSession(t *testing.T, server *httpserver.Server, username, password string) (string, []*http.Cookie) {
 	t.Helper()
 	csrf := csrfToken(t, server)
 	body := `{"data":{"type":"login-attempts","attributes":{"username":"` + username + `","password":"` + password + `"}}}`
@@ -583,23 +583,25 @@ func loginSession(t *testing.T, server *httpserver.Server, username, password st
 	if response.Code != http.StatusOK {
 		t.Fatalf("login failed: %d %s", response.Code, response.Body.String())
 	}
-	var session *http.Cookie
+	var cookies []*http.Cookie
 	var newCSRF string
 	for _, cookie := range response.Result().Cookies() {
 		switch cookie.Name {
 		case server.SessionCookieName():
-			session = cookie
+			cookies = append(cookies, cookie)
+		case server.BrowserCookieName():
+			cookies = append(cookies, cookie)
 		case server.CSRFCookieName():
 			newCSRF = cookie.Value
 		}
 	}
-	if session == nil || newCSRF == "" {
+	if len(cookies) != 2 || newCSRF == "" {
 		t.Fatal("login did not return session cookies")
 	}
-	return newCSRF, session
+	return newCSRF, cookies
 }
 
-func serve(t *testing.T, server *httpserver.Server, method, path, csrf string, session *http.Cookie, body string) *httptest.ResponseRecorder {
+func serve(t *testing.T, server *httpserver.Server, method, path, csrf string, session []*http.Cookie, body string) *httptest.ResponseRecorder {
 	t.Helper()
 	request := httptest.NewRequest(method, "http://mia.test"+path, bytes.NewBufferString(body))
 	request.Header.Set("Content-Type", "application/vnd.api+json")
@@ -607,8 +609,8 @@ func serve(t *testing.T, server *httpserver.Server, method, path, csrf string, s
 	if csrf != "" {
 		request.AddCookie(&http.Cookie{Name: server.CSRFCookieName(), Value: csrf})
 	}
-	if session != nil {
-		request.AddCookie(session)
+	for _, cookie := range session {
+		request.AddCookie(cookie)
 	}
 	response := httptest.NewRecorder()
 	server.Echo.ServeHTTP(response, request)

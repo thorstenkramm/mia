@@ -102,7 +102,7 @@ func auditServer(t *testing.T) *httpserver.Server {
 	return server
 }
 
-func auditSession(t *testing.T, server *httpserver.Server, accountID string) *http.Cookie {
+func auditSession(t *testing.T, server *httpserver.Server, accountID string) []*http.Cookie {
 	t.Helper()
 	path := "/issue-audit-session-" + accountID
 	server.Echo.GET(path, func(c *echo.Context) error {
@@ -111,18 +111,23 @@ func auditSession(t *testing.T, server *httpserver.Server, accountID string) *ht
 	request := httptest.NewRequest(http.MethodGet, "http://mia.test"+path, nil)
 	response := httptest.NewRecorder()
 	server.Echo.ServeHTTP(response, request)
+	var cookies []*http.Cookie
 	for _, cookie := range response.Result().Cookies() {
-		if cookie.Name == "__Host-mia_session" {
-			return cookie
+		if cookie.Name == server.SessionCookieName() || cookie.Name == server.BrowserCookieName() {
+			cookies = append(cookies, cookie)
 		}
 	}
-	t.Fatal("audit session cookie missing")
-	return nil
+	if len(cookies) != 2 {
+		t.Fatal("audit session cookies missing")
+	}
+	return cookies
 }
 
-func auditRequest(server *httpserver.Server, path string, session *http.Cookie) *httptest.ResponseRecorder {
+func auditRequest(server *httpserver.Server, path string, session []*http.Cookie) *httptest.ResponseRecorder {
 	request := httptest.NewRequest(http.MethodGet, "http://mia.test"+path, nil)
-	request.AddCookie(session)
+	for _, cookie := range session {
+		request.AddCookie(cookie)
+	}
 	response := httptest.NewRecorder()
 	server.Echo.ServeHTTP(response, request)
 	return response

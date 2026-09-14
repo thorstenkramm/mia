@@ -126,13 +126,23 @@ These settings are fixed for the MVP and are not operator-configurable.
 ### Browser cookie policy
 
 - `main.public_url` derives one immutable browser cookie policy during startup.
-  HTTPS uses secure `__Host-mia_session` and `__Host-mia_csrf` cookies. A loopback
-  HTTP origin uses non-Secure `mia_session` and `mia_csrf` cookies.
+  HTTPS uses secure `__Host-mia_session`, `__Host-mia_browser`, and
+  `__Host-mia_csrf` cookies. A loopback HTTP origin uses non-Secure
+  `mia_session`, `mia_browser`, and `mia_csrf` cookies.
 - Loopback HTTP requires a loopback TCP listener and rejects trusted proxies.
   Wildcard, remote TCP, and Unix listeners are rejected before the server starts.
   Operators must not expose it through an undeclared local reverse proxy.
 - Gorilla sessions and custom double-submit CSRF middleware consume the same
   policy. It is server wiring, never derived from a request or forwarded header.
+- The session cookie is bound to an independently signed browser-generation
+  cookie. Logout clears authentication and rotates only that browser's marker.
+  This rejects delayed ordinary authenticated and Continue working responses,
+  which do not issue a matching marker. A delayed authentication transition may
+  restore a matching cookie pair and must be reconciled through session
+  discovery. The stateless MVP has no server-side browser-session or per-browser
+  revocation record and no remote revocation. Ordinary requests and SSE do not
+  extend idle expiry; only the explicit Continue working operation does, and it
+  does not reissue the marker.
 
 ## Tutor Context And Retrieval
 

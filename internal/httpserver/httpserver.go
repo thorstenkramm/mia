@@ -176,6 +176,20 @@ type IdentityState struct {
 // IdentityLoader reloads account state for every protected request.
 type IdentityLoader func(context.Context, string) (IdentityState, error)
 
+const (
+	sessionIdleHeader     = "Mia-Session-Idle-Expires-At"
+	sessionAbsoluteHeader = "Mia-Session-Absolute-Expires-At"
+)
+
+// BrowserSession is the authoritative, request-scoped view of a valid browser session.
+type BrowserSession struct {
+	UserID            string
+	Stage             string
+	MFAChallengeID    string
+	IdleExpiresAt     time.Time
+	AbsoluteExpiresAt time.Time
+}
+
 // RotateCSRF invalidates the current browser CSRF token after an auth boundary.
 func (server *Server) RotateCSRF(c *echo.Context) {
 	server.setCSRFCookie(c, randomToken(32))
@@ -186,6 +200,14 @@ func (server *Server) SessionCookieName() string { return server.cookiePolicy.Se
 
 // CSRFCookieName returns this server's immutable CSRF cookie name.
 func (server *Server) CSRFCookieName() string { return server.cookiePolicy.CSRFName }
+
+// BrowserCookieName returns the independently signed browser-generation cookie name.
+func (server *Server) BrowserCookieName() string {
+	if server.cookiePolicy.Secure {
+		return "__Host-mia_browser"
+	}
+	return "mia_browser"
+}
 
 // PrivateAvatarPNG writes a normalized private avatar with shared download-safety headers.
 func PrivateAvatarPNG(c *echo.Context, data []byte) error {
@@ -245,12 +267,12 @@ func (registrar AuthRouteRegistrar) DELETE(path, stage string, next echo.Handler
 // StartSession creates a new login-stage cookie. It is used after successful
 // login and stage transitions, each of which starts with a fresh CSRF token.
 func (server *Server) StartSession(c *echo.Context, userID string, generation int64, stage string, now time.Time) error {
-	return saveSession(c, server.Sessions, server.cookiePolicy, userID, generation, stage, "", now)
+	return server.saveSession(c, userID, generation, stage, "", now)
 }
 
 // StartMFASession creates the restricted MFA stage bound to one server-side challenge.
 func (server *Server) StartMFASession(c *echo.Context, userID string, generation int64, challengeID string, now time.Time) error {
-	return saveSession(c, server.Sessions, server.cookiePolicy, userID, generation, "mfa", challengeID, now)
+	return server.saveSession(c, userID, generation, "mfa", challengeID, now)
 }
 
 // TransitionSession moves the validated current session to another stage.
@@ -260,13 +282,65 @@ func (server *Server) TransitionSession(c *echo.Context, stage string, now time.
 	if !userOK || !generationOK || userID == "" || generation == 0 {
 		return NewError(CodeUnauthenticated)
 	}
-	return saveSession(c, server.Sessions, server.cookiePolicy, userID, generation, stage, "", now)
+	return server.saveSession(c, userID, generation, stage, "", now)
 }
 
 // EndSession clears the validated current browser session.
 func (server *Server) EndSession(c *echo.Context) error {
-	c.Set("mia.auth.end_session", true)
-	return clearSession(c, server.Sessions, server.cookiePolicy)
+	if err := clearSession(c, server.Sessions, server.cookiePolicy); err != nil {
+		return err
+	}
+	return server.rotateBrowserGeneration(c)
+}
+
+// DiscoverSession returns current authoritative state without extending its deadlines.
+// Missing, malformed, stale, banned, deleted, and generation-invalid cookies all
+// collapse to the same anonymous result.
+func (server *Server) DiscoverSession(c *echo.Context) (BrowserSession, bool, error) {
+	state, session, err := server.loadSession(c)
+	if err == nil {
+		server.exposeSession(c, state)
+		c.Set("mia.auth.session", session)
+		return state, true, nil
+	}
+	if !errors.Is(err, ErrIdentityNotFound) {
+		return BrowserSession{}, false, err
+	}
+	if clearErr := clearSession(c, server.Sessions, server.cookiePolicy); clearErr != nil {
+		return BrowserSession{}, false, clearErr
+	}
+	if _, markerErr := server.ensureBrowserGeneration(c, 0); markerErr != nil {
+		return BrowserSession{}, false, markerErr
+	}
+	return BrowserSession{}, false, nil
+}
+
+// ExtendSession advances only the idle deadline of the validated full session.
+func (server *Server) ExtendSession(c *echo.Context, now time.Time) (BrowserSession, error) {
+	state, ok := c.Get("mia.auth.session_state").(BrowserSession)
+	session, sessionOK := c.Get("mia.auth.session").(*sessions.Session)
+	if !ok || !sessionOK || state.Stage != "authenticated" {
+		return BrowserSession{}, NewError(CodeUnauthenticated)
+	}
+	now = now.UTC().Truncate(time.Second)
+	idle := now.Add(30 * time.Minute)
+	if idle.After(state.AbsoluteExpiresAt) {
+		idle = state.AbsoluteExpiresAt
+	}
+	session.Values["idle_until"] = idle.Unix()
+	session.Options = sessionOptions(server.cookiePolicy, now, state.AbsoluteExpiresAt)
+	if err := server.Sessions.Save(c.Request(), c.Response(), session); err != nil {
+		return BrowserSession{}, fmt.Errorf("extend authenticated session: %w", err)
+	}
+	state.IdleExpiresAt = idle
+	server.exposeSession(c, state)
+	return state, nil
+}
+
+// CurrentSession returns session state established by authenticated middleware or a transition.
+func CurrentSession(c *echo.Context) (BrowserSession, bool) {
+	state, ok := c.Get("mia.auth.session_state").(BrowserSession)
+	return state, ok
 }
 
 func (server *Server) authenticatedPOST(path, stage string, next echo.HandlerFunc) {
@@ -279,62 +353,22 @@ func (server *Server) authenticatedDELETE(path, stage string, next echo.HandlerF
 
 func (server *Server) authenticated(path, stage string, next echo.HandlerFunc, register func(string, echo.HandlerFunc, ...echo.MiddlewareFunc) echo.RouteInfo) {
 	register(path, func(c *echo.Context) error {
-		if server.identityLoader == nil {
-			return NewError(CodeInternalError)
-		}
-		session, err := server.Sessions.Get(c.Request(), server.cookiePolicy.SessionName)
-		if err != nil {
+		currentState, session, err := server.loadSession(c)
+		if errors.Is(err, ErrIdentityNotFound) {
 			return server.clearedStageError(c, stage)
 		}
-		userID, userOK := session.Values["user_id"].(string)
-		current, stageOK := session.Values["stage"].(string)
-		generation, generationOK := session.Values["security_generation"].(int64)
-		absolute, absoluteOK := session.Values["expires_at"].(int64)
-		idle, idleOK := session.Values["idle_until"].(int64)
-		if !userOK || !stageOK || !generationOK || !absoluteOK || !idleOK || time.Now().After(time.Unix(absolute, 0)) || time.Now().After(time.Unix(idle, 0)) {
-			return server.clearedStageError(c, stage)
-		}
-		state, err := server.identityLoader(c.Request().Context(), userID)
 		if err != nil {
-			if errors.Is(err, ErrIdentityNotFound) {
-				return server.clearedStageError(c, stage)
-			}
 			return err
-		}
-		if state.Banned || state.SecurityGeneration != generation {
-			return server.clearedStageError(c, stage)
-		}
-		if current == "password-change" && !state.MustChangePassword {
-			if err := clearSession(c, server.Sessions, server.cookiePolicy); err != nil {
-				return err
-			}
-			return NewError(CodePasswordChangeRequired)
 		}
 		// MFA always precedes password replacement. A password gate therefore must
 		// not block the challenge-bound MFA actions that advance to that gate.
-		if state.MustChangePassword && stage != "password-change" && stage != "any" && (stage != "mfa" || current != "mfa") {
+		if currentState.Stage == "password-change" && stage != "password-change" && stage != "any" {
 			return NewError(CodePasswordChangeRequired)
 		}
-		if stage != "any" && current != stage && (stage != "password-change" || !state.MustChangePassword || current != "authenticated") {
+		if stage != "any" && currentState.Stage != stage {
 			return NewError(CodePasswordChangeRequired)
 		}
-		c.Set("mia.auth.user_id", userID)
-		c.Set("mia.auth.security_generation", generation)
-		c.Set("mia.auth.stage", current)
-		if challengeID, ok := session.Values["mfa_challenge_id"].(string); ok {
-			c.Set("mia.auth.mfa_challenge_id", challengeID)
-		}
-		response, unwrapErr := echo.UnwrapResponse(c.Response())
-		if unwrapErr != nil {
-			return fmt.Errorf("unwrap authenticated response: %w", unwrapErr)
-		}
-		response.Before(func() {
-			if current == "authenticated" && stage == "authenticated" && c.Get("mia.auth.end_session") != true && response.Status >= http.StatusOK && response.Status < http.StatusMultipleChoices {
-				if err := refreshSession(c, server.Sessions, server.cookiePolicy, session, time.Now()); err != nil {
-					c.Logger().Error("refresh authenticated session", "error", err)
-				}
-			}
-		})
+		server.installSession(c, currentState, session)
 		return next(c)
 	})
 }
@@ -349,18 +383,25 @@ func (server *Server) clearedStageError(c *echo.Context, stage string) error {
 	return NewError(CodeUnauthenticated)
 }
 
-func saveSession(c *echo.Context, store *sessions.CookieStore, policy CookiePolicy, userID string, generation int64, stage, challengeID string, now time.Time) error {
-	session, err := store.New(c.Request(), policy.SessionName)
-	if err != nil {
-		return err
-	}
+func (server *Server) saveSession(c *echo.Context, userID string, generation int64, stage, challengeID string, now time.Time) error {
+	now = now.UTC().Truncate(time.Second)
 	expires := now.Add(12 * time.Hour)
 	if stage != "authenticated" {
 		expires = now.Add(30 * time.Minute)
 	}
+	options := sessionOptions(server.cookiePolicy, now, expires)
+	browserGeneration, err := server.ensureBrowserGeneration(c, options.MaxAge)
+	if err != nil {
+		return err
+	}
+	session, err := server.Sessions.New(c.Request(), server.cookiePolicy.SessionName)
+	if err != nil {
+		return err
+	}
 	session.Values["user_id"] = userID
 	session.Values["stage"] = stage
 	session.Values["security_generation"] = generation
+	session.Values["browser_generation"] = browserGeneration
 	if challengeID != "" {
 		session.Values["mfa_challenge_id"] = challengeID
 	}
@@ -370,23 +411,150 @@ func saveSession(c *echo.Context, store *sessions.CookieStore, policy CookiePoli
 		idleUntil = expires
 	}
 	session.Values["idle_until"] = idleUntil.Unix()
-	session.Options = &sessions.Options{Path: "/", MaxAge: int(time.Until(expires).Seconds()), Secure: policy.Secure, HttpOnly: true, SameSite: http.SameSiteLaxMode}
-	return store.Save(c.Request(), c.Response(), session)
+	session.Options = options
+	if err := server.Sessions.Save(c.Request(), c.Response(), session); err != nil {
+		return err
+	}
+	server.installSession(c, BrowserSession{UserID: userID, Stage: stage, MFAChallengeID: challengeID,
+		IdleExpiresAt: idleUntil, AbsoluteExpiresAt: expires}, session)
+	return nil
 }
 
-func refreshSession(c *echo.Context, store *sessions.CookieStore, policy CookiePolicy, session *sessions.Session, now time.Time) error {
-	absolute, ok := session.Values["expires_at"].(int64)
-	if !ok || !now.Before(time.Unix(absolute, 0)) {
-		return errors.New("authenticated session has invalid absolute expiry")
+func sessionOptions(policy CookiePolicy, now, absolute time.Time) *sessions.Options {
+	return &sessions.Options{Path: "/", MaxAge: max(1, int(absolute.Sub(now).Seconds())), Secure: policy.Secure,
+		HttpOnly: true, SameSite: http.SameSiteLaxMode}
+}
+
+// loadSession authenticates both stateless cookies and reloads account state.
+// Every malformed or stale client-controlled state is collapsed to
+// ErrIdentityNotFound so callers cannot disclose why authentication failed.
+func (server *Server) loadSession(c *echo.Context) (BrowserSession, *sessions.Session, error) {
+	if server.identityLoader == nil {
+		return BrowserSession{}, nil, NewError(CodeInternalError)
 	}
-	idleUntil := now.Add(30 * time.Minute)
-	absoluteExpiry := time.Unix(absolute, 0)
-	if idleUntil.After(absoluteExpiry) {
-		idleUntil = absoluteExpiry
+	if cookieCount(c.Request(), server.cookiePolicy.SessionName) != 1 ||
+		cookieCount(c.Request(), server.BrowserCookieName()) != 1 {
+		return BrowserSession{}, nil, ErrIdentityNotFound
 	}
-	session.Values["idle_until"] = idleUntil.Unix()
-	session.Options = &sessions.Options{Path: "/", MaxAge: int(time.Unix(absolute, 0).Sub(now).Seconds()), Secure: policy.Secure, HttpOnly: true, SameSite: http.SameSiteLaxMode}
-	return store.Save(c.Request(), c.Response(), session)
+	session, err := server.Sessions.Get(c.Request(), server.cookiePolicy.SessionName)
+	if err != nil {
+		return BrowserSession{}, nil, ErrIdentityNotFound
+	}
+	marker, err := server.Sessions.Get(c.Request(), server.BrowserCookieName())
+	if err != nil {
+		return BrowserSession{}, nil, ErrIdentityNotFound
+	}
+	userID, userOK := session.Values["user_id"].(string)
+	stage, stageOK := session.Values["stage"].(string)
+	generation, generationOK := session.Values["security_generation"].(int64)
+	browserGeneration, browserOK := session.Values["browser_generation"].(string)
+	markerGeneration, markerOK := marker.Values["generation"].(string)
+	absoluteUnix, absoluteOK := session.Values["expires_at"].(int64)
+	idleUnix, idleOK := session.Values["idle_until"].(int64)
+	validStage := stage == "authenticated" || stage == "mfa" || stage == "password-change"
+	challengeValue, challengePresent := session.Values["mfa_challenge_id"]
+	challengeID, challengeOK := challengeValue.(string)
+	validChallenge := (stage == "mfa" && challengePresent && challengeOK && challengeID != "") ||
+		(stage != "mfa" && (!challengePresent || (challengeOK && challengeID == "")))
+	now := time.Now()
+	absolute := time.Unix(absoluteUnix, 0).UTC()
+	idle := time.Unix(idleUnix, 0).UTC()
+	if !userOK || userID == "" || !stageOK || !validStage || !generationOK || generation < 1 ||
+		!browserOK || !markerOK || browserGeneration == "" || browserGeneration != markerGeneration ||
+		!absoluteOK || !idleOK || idle.After(absolute) || !now.Before(absolute) || !now.Before(idle) || !validChallenge {
+		return BrowserSession{}, nil, ErrIdentityNotFound
+	}
+	identityState, err := server.identityLoader(c.Request().Context(), userID)
+	if err != nil {
+		if errors.Is(err, ErrIdentityNotFound) {
+			return BrowserSession{}, nil, ErrIdentityNotFound
+		}
+		return BrowserSession{}, nil, err
+	}
+	if identityState.Banned || identityState.SecurityGeneration != generation {
+		return BrowserSession{}, nil, ErrIdentityNotFound
+	}
+	if stage == "password-change" && !identityState.MustChangePassword {
+		return BrowserSession{}, nil, ErrIdentityNotFound
+	}
+	if identityState.MustChangePassword && stage == "authenticated" {
+		stage = "password-change"
+	}
+	return BrowserSession{UserID: userID, Stage: stage, MFAChallengeID: challengeID,
+		IdleExpiresAt: idle, AbsoluteExpiresAt: absolute}, session, nil
+}
+
+func (server *Server) installSession(c *echo.Context, state BrowserSession, session *sessions.Session) {
+	c.Set("mia.auth.user_id", state.UserID)
+	generation, ok := session.Values["security_generation"].(int64)
+	if !ok {
+		panic("httpserver: installing session without security generation")
+	}
+	c.Set("mia.auth.security_generation", generation)
+	c.Set("mia.auth.stage", state.Stage)
+	if state.MFAChallengeID != "" {
+		c.Set("mia.auth.mfa_challenge_id", state.MFAChallengeID)
+	}
+	c.Set("mia.auth.session", session)
+	c.Set("mia.auth.session_state", state)
+	server.exposeSession(c, state)
+}
+
+func (server *Server) exposeSession(c *echo.Context, state BrowserSession) {
+	c.Response().Header().Set(sessionIdleHeader, FormatInstant(state.IdleExpiresAt))
+	c.Response().Header().Set(sessionAbsoluteHeader, FormatInstant(state.AbsoluteExpiresAt))
+}
+
+// ensureBrowserGeneration reuses a valid marker and reissues it only when maxAge
+// binds it to a newly issued authentication stage. A zero maxAge creates public
+// anonymous state without turning ordinary requests into lifetime refreshes.
+func (server *Server) ensureBrowserGeneration(c *echo.Context, maxAge int) (string, error) {
+	if cookieCount(c.Request(), server.BrowserCookieName()) == 1 {
+		marker, err := server.Sessions.Get(c.Request(), server.BrowserCookieName())
+		if err == nil {
+			if generation, ok := marker.Values["generation"].(string); ok && generation != "" {
+				if maxAge > 0 {
+					if err := server.setBrowserGeneration(c, generation, maxAge); err != nil {
+						return "", err
+					}
+				}
+				return generation, nil
+			}
+		}
+	}
+	generation := randomToken(24)
+	if err := server.setBrowserGeneration(c, generation, maxAge); err != nil {
+		return "", err
+	}
+	return generation, nil
+}
+
+func (server *Server) rotateBrowserGeneration(c *echo.Context) error {
+	return server.setBrowserGeneration(c, randomToken(24), 0)
+}
+
+func (server *Server) setBrowserGeneration(c *echo.Context, generation string, maxAge int) error {
+	marker, err := server.Sessions.New(c.Request(), server.BrowserCookieName())
+	if err != nil {
+		return fmt.Errorf("create browser generation: %w", err)
+	}
+	marker.Values["generation"] = generation
+	marker.Options = &sessions.Options{Path: "/", MaxAge: maxAge, Secure: server.cookiePolicy.Secure, HttpOnly: true,
+		SameSite: http.SameSiteLaxMode}
+	if err := server.Sessions.Save(c.Request(), c.Response(), marker); err != nil {
+		return fmt.Errorf("save browser generation: %w", err)
+	}
+	return nil
+}
+
+func cookieCount(request *http.Request, name string) int {
+	count := 0
+	for _, cookie := range request.Cookies() {
+		if cookie.Name == name {
+			count++
+		}
+	}
+	return count
 }
 
 func clearSession(c *echo.Context, store *sessions.CookieStore, policy CookiePolicy) error {

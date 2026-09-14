@@ -40,6 +40,10 @@ security:
 paths:
   /api/v1/auth/login:
     $ref: paths/auth.yaml#/login
+  /api/v1/auth/session:
+    $ref: paths/auth.yaml#/sessionDiscovery
+  /api/v1/auth/session-continuations:
+    $ref: paths/auth.yaml#/sessionContinuations
   /api/v1/auth/logout:
     $ref: paths/auth.yaml#/logout
   /api/v1/auth/password-changes:
@@ -180,12 +184,24 @@ components:
     CacheControlNoStore:
       description: Prohibits browsers and intermediaries from storing or replaying the API response.
       schema: { type: string, const: no-store }
+    SessionIdleExpiresAt:
+      description: Authoritative idle deadline, unchanged except after Continue working.
+      schema: { type: string, format: date-time }
+    SessionAbsoluteExpiresAt:
+      description: Authoritative fixed absolute browser-session deadline.
+      schema: { type: string, format: date-time }
   securitySchemes:
     sessionCookie:
       type: apiKey
       in: cookie
       name: __Host-mia_session
-      description: Signed and encrypted HttpOnly browser session cookie for HTTPS. Loopback HTTP uses mia_session.
+      description: >-
+        Signed and encrypted HttpOnly browser session cookie for HTTPS. It is valid only with the independently signed
+        __Host-mia_browser generation cookie. Loopback HTTP uses mia_session and mia_browser. Logout rotates the marker
+        so delayed ordinary authenticated and Continue working responses cannot restore usable authentication.
+        Authentication transitions persist and reissue the marker for the bound session's absolute lifetime; a delayed
+        transition admitted before logout may therefore restore authentication and requires session discovery
+        reconciliation. The stateless MVP has no server-side per-browser revocation or remote revocation.
     csrfToken:
       type: apiKey
       in: header

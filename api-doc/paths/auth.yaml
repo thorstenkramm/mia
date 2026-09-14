@@ -28,11 +28,57 @@ login:
         $ref: ../responses/errors.yaml#/RateLimited
         description: Global or layered login limit (`rate_limited` or `auth_login_throttled`).
 
+sessionDiscovery:
+  get:
+    tags: [Authentication]
+    operationId: discoverSession
+    summary: Discover current browser session
+    description: >-
+      Returns anonymous state for absent, stale, malformed, banned, deleted, or generation-invalid authentication.
+      Discovery never extends a session. Anonymous discovery refreshes the public CSRF cookie. Clients use this route
+      to reconcile a delayed authentication-transition response that arrives after an attempted logout.
+    security: [{}, { sessionCookie: [] }]
+    responses:
+      '200':
+        headers:
+          Cache-Control: { $ref: ../openapi.yaml#/components/headers/CacheControlNoStore }
+          Mia-Session-Idle-Expires-At: { $ref: ../openapi.yaml#/components/headers/SessionIdleExpiresAt }
+          Mia-Session-Absolute-Expires-At: { $ref: ../openapi.yaml#/components/headers/SessionAbsoluteExpiresAt }
+        description: Authoritative anonymous or current staged session state.
+        content:
+          application/vnd.api+json:
+            schema: { $ref: ../schemas/resources/resources.yaml#/SessionDiscoveryDocument }
+      '406': { $ref: ../responses/errors.yaml#/NotAcceptable }
+      '429': { $ref: ../responses/errors.yaml#/RateLimited }
+
+sessionContinuations:
+  post:
+    tags: [Authentication]
+    operationId: continueSession
+    summary: Continue working
+    description: >-
+      Deliberately advances only the idle deadline of a full authenticated session. It does not open or reconnect an
+      SSE stream.
+    security: [{ sessionCookie: [], csrfToken: [] }]
+    responses:
+      '200': { $ref: '#/Session' }
+      '401': { $ref: ../responses/errors.yaml#/Unauthorized }
+      '403':
+        $ref: ../responses/errors.yaml#/Forbidden
+        description: CSRF or restricted-stage validation failed (`csrf_invalid` or `auth_password_change_required`).
+      '406': { $ref: ../responses/errors.yaml#/NotAcceptable }
+
 logout:
   post:
     tags: [Authentication]
     operationId: logout
     summary: Logout
+    description: >-
+      Clears authentication and rotates the signed marker in the current browser. Delayed ordinary authenticated and
+      Continue working responses cannot restore a matching cookie pair. A login, MFA-completion, or password-change
+      response admitted before logout may reissue a matching pair and restore authentication; clients must wait for
+      outstanding authentication transitions or reconcile their later responses through session discovery. The MVP
+      has no server-side per-browser revocation or remote session revocation.
     security: [{ sessionCookie: [], csrfToken: [] }]
     responses:
       '204':
@@ -356,7 +402,10 @@ mfaEnrollment:
 
 Session:
   description: Current singleton auth-sessions resource.
-  headers: { Cache-Control: { $ref: ../openapi.yaml#/components/headers/CacheControlNoStore } }
+  headers:
+    Cache-Control: { $ref: ../openapi.yaml#/components/headers/CacheControlNoStore }
+    Mia-Session-Idle-Expires-At: { $ref: ../openapi.yaml#/components/headers/SessionIdleExpiresAt }
+    Mia-Session-Absolute-Expires-At: { $ref: ../openapi.yaml#/components/headers/SessionAbsoluteExpiresAt }
   content:
     application/vnd.api+json:
       schema: { $ref: ../schemas/resources/resources.yaml#/AuthSessionDocument }

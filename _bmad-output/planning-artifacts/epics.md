@@ -304,8 +304,8 @@ package, while `[BCG]` refers specifically to `BACKEND-CONTRACT-GAPS.md`.
 - UX-DR-002: Represent anonymous, MFA, password-change, and authenticated stages authoritatively. [BCG-001]
 - UX-DR-003: Return the MFA challenge ID and relevant restricted, idle, and absolute UTC expiry instants. [BCG-001]
 - UX-DR-004: Define CSRF rotation and stale or invalid cookie clearing for every authentication transition. [BCG-001]
-- UX-DR-005: Prevent any response authorized before confirmed logout from reinstalling authenticated cookie state.
-  [BCG-001]
+- UX-DR-005: Prevent delayed ordinary authenticated and Continue working responses from restoring authentication after
+  logout; reconcile delayed authentication-transition responses through session discovery. [BCG-001]
 - UX-DR-006: Support non-refreshing ordered session, capability, scope, resource, work-state, and SSE checks. [BCG-001]
 - UX-DR-007: Provide one Continue working operation returning refreshed idle and unchanged absolute deadlines. [BCG-001]
 - UX-DR-008: Define explicit SSE reconnect that does not refresh idle and its relationship to Continue working. [BCG-001]
@@ -420,7 +420,9 @@ package, while `[BCG]` refers specifically to `BACKEND-CONTRACT-GAPS.md`.
 
 - Only the explicit Continue working operation refreshes idle expiry; authenticated reads, other mutations, and SSE do
   not. [BCG-001]
-- An independent signed browser marker makes a pre-logout response's late authentication cookie unusable. [BCG-001]
+- An independent signed browser marker makes delayed ordinary authenticated and Continue working cookies unusable after
+  logout. A delayed pre-logout authentication transition may restore a matching cookie pair and requires session
+  discovery reconciliation; the MVP has no server-side per-browser revocation state. [BCG-001]
 - Every API response uses `Cache-Control: no-store`; authenticated images have no exception. [BCG-005]
 - API errors are valid UTF-8 JSON:API no larger than 64 KiB, with unsafe or oversized detail replaced generically.
   [BCG-007]
@@ -455,7 +457,7 @@ package, while `[BCG]` refers specifically to `BACKEND-CONTRACT-GAPS.md`.
 - FR-22: Epic 1 baseline; Epic 2 - Non-refreshing checks and explicit idle refresh.
 - FR-23: Epic 1 baseline; Epic 2 - Current account and authorization discovery.
 - FR-24: Epic 1 baseline; Epic 2 - Authoritative restricted-session discovery.
-- FR-25: Epic 1 baseline; Epic 2 - Late-response-safe logout semantics.
+- FR-25: Epic 1 baseline; Epic 2 - Reduced late-response logout semantics and transition reconciliation.
 - FR-26: Epic 1 baseline; Epic 2 - Current MFA-factor discovery.
 - FR-27: Epic 1 baseline; Epic 2 - MFA method and destination state.
 - FR-28: Epic 1 baseline; Epic 2 - MFA lifecycle and resend observability.
@@ -614,8 +616,8 @@ payloads
 
 As a MIA browser user,
 I want authoritative session state with deliberate idle extension and reliable logout,
-So that the interface can enforce each authentication stage without background activity keeping me signed in or stale
-responses restoring access.
+So that the interface can enforce each authentication stage without background activity keeping me signed in and can
+reconcile the documented logout race.
 
 **Requirements:** FR-22 through FR-25; NFR-1, NFR-2, NFR-8 through NFR-10; AR-08, AR-20 through AR-22; UX-DR-001
 through UX-DR-010
@@ -652,11 +654,17 @@ through UX-DR-010
 **Then** it rotates the required session and CSRF values according to the documented transition
 **And** stale or invalid cookies are cleared without exposing why authentication failed.
 
-**Given** a browser contains an authenticated cookie issued by a response authorized before a confirmed logout
-**When** that response arrives after logout or the cookie is used afterward
-**Then** an independent signed browser generation marker makes the old authenticated cookie unusable
+**Given** an ordinary authenticated or Continue working response was authorized before a confirmed logout
+**When** its authentication cookie arrives after logout or is used afterward
+**Then** the rotated signed browser generation marker makes that cookie unusable because the response issued no marker
 **And** the next session discovery returns anonymous state and clears stale authentication without invalidating other
 browser sessions.
+
+**Given** a login, MFA-completion, or password-change response was admitted before logout
+**When** that delayed response arrives after the logout response
+**Then** its matching authentication-cookie and browser-marker pair may restore authentication in the stateless MVP
+**And** the client treats logout as incomplete while the transition is outstanding and reconciles the result through
+session discovery.
 
 **Given** an SSE connection or reconnect
 **When** MIA authorizes and serves it
@@ -665,7 +673,8 @@ browser sessions.
 
 **Given** concurrent session, transition, Continue working, and logout requests
 **When** HTTP integration tests exercise response reordering
-**Then** no pre-logout response can restore usable authenticated state
+**Then** ordinary and Continue working responses cannot restore usable authenticated state after logout
+**And** a delayed authentication-transition response is reconciled as the authoritative session state it restored
 **And** idle, absolute, CSRF, restricted-stage, account-state, rate-limit, and `no-store` behavior matches OpenAPI and the
 human-readable contracts.
 

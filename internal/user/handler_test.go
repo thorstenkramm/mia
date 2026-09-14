@@ -152,7 +152,9 @@ func TestAvatarHandlersNormalizeServeSafelyAndDeleteIdempotently(t *testing.T) {
 		t.Fatalf("served avatar dimensions = %dx%d", configuration.Width, configuration.Height)
 	}
 	conditionalRequest := httptest.NewRequest(http.MethodGet, "http://mia.test/api/v1/users/me/avatar", nil)
-	conditionalRequest.AddCookie(session)
+	for _, cookie := range session {
+		conditionalRequest.AddCookie(cookie)
+	}
 	conditionalRequest.Header.Set("If-None-Match", `"stale-validator"`)
 	conditional := httptest.NewRecorder()
 	server.Echo.ServeHTTP(conditional, conditionalRequest)
@@ -190,7 +192,9 @@ func TestAvatarRoutesAreExemptFromJSONAPIAcceptNegotiation(t *testing.T) {
 		request := httptest.NewRequest(testCase.method, "http://mia.test/api/v1/users/me/avatar",
 			strings.NewReader("not an image"))
 		request.Header.Set("Accept", `application/vnd.api+json;profile="a,b"`)
-		request.AddCookie(session)
+		for _, cookie := range session {
+			request.AddCookie(cookie)
+		}
 		if testCase.method == http.MethodPut {
 			request.Header.Set("Content-Type", testCase.contentType)
 			request.AddCookie(&http.Cookie{Name: server.CSRFCookieName(), Value: csrf})
@@ -319,7 +323,7 @@ func handlerAccount(t *testing.T, database *sql.DB, username string, roles []Rol
 	return account.ID
 }
 
-func issueSession(t *testing.T, server *httpserver.Server, accountID string) (*http.Cookie, string) {
+func issueSession(t *testing.T, server *httpserver.Server, accountID string) ([]*http.Cookie, string) {
 	t.Helper()
 	server.Echo.GET("/issue-"+accountID, func(c *echo.Context) error {
 		if err := server.StartSession(c, accountID, 1, "authenticated", time.Now()); err != nil {
@@ -330,33 +334,37 @@ func issueSession(t *testing.T, server *httpserver.Server, accountID string) (*h
 	})
 	response := httptest.NewRecorder()
 	server.Echo.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "http://mia.test/issue-"+accountID, nil))
-	var session *http.Cookie
+	var cookies []*http.Cookie
 	csrf := ""
 	for _, cookie := range response.Result().Cookies() {
 		switch cookie.Name {
 		case server.SessionCookieName():
-			session = cookie
+			cookies = append(cookies, cookie)
+		case server.BrowserCookieName():
+			cookies = append(cookies, cookie)
 		case server.CSRFCookieName():
 			csrf = cookie.Value
 		}
 	}
-	if session == nil || csrf == "" {
+	if len(cookies) != 2 || csrf == "" {
 		t.Fatal("session issuance did not return both cookies")
 	}
-	return session, csrf
+	return cookies, csrf
 }
 
-func profileRequest(t *testing.T, server *httpserver.Server, method, path string, session *http.Cookie, csrf,
+func profileRequest(t *testing.T, server *httpserver.Server, method, path string, session []*http.Cookie, csrf,
 	contentType, body string) *httptest.ResponseRecorder {
 	t.Helper()
 	return profileRequestBytes(t, server, method, path, session, csrf, contentType, []byte(body))
 }
 
-func profileRequestBytes(t *testing.T, server *httpserver.Server, method, path string, session *http.Cookie, csrf,
+func profileRequestBytes(t *testing.T, server *httpserver.Server, method, path string, session []*http.Cookie, csrf,
 	contentType string, body []byte) *httptest.ResponseRecorder {
 	t.Helper()
 	request := httptest.NewRequest(method, "http://mia.test"+path, bytes.NewReader(body))
-	request.AddCookie(session)
+	for _, cookie := range session {
+		request.AddCookie(cookie)
+	}
 	if contentType != "" {
 		request.Header.Set("Content-Type", contentType)
 	}

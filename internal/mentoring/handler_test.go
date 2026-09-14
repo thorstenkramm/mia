@@ -128,7 +128,7 @@ func TestMentoringRoutesUseSharedProtocolAndHideScope(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, trailing.Code)
 }
 
-func mentoringCookie(t *testing.T, server *httpserver.Server, accountID string) (*http.Cookie, string) {
+func mentoringCookie(t *testing.T, server *httpserver.Server, accountID string) ([]*http.Cookie, string) {
 	t.Helper()
 	path := "/issue-mentoring-" + strings.ReplaceAll(accountID, "_", "-")
 	server.Echo.GET(path, func(c *echo.Context) error {
@@ -141,25 +141,28 @@ func mentoringCookie(t *testing.T, server *httpserver.Server, accountID string) 
 	request := httptest.NewRequest(http.MethodGet, "http://mia.test"+path, nil)
 	response := httptest.NewRecorder()
 	server.Echo.ServeHTTP(response, request)
-	var session *http.Cookie
+	var cookies []*http.Cookie
 	csrf := ""
 	for _, cookie := range response.Result().Cookies() {
 		if cookie.Name == server.SessionCookieName() {
-			session = cookie
+			cookies = append(cookies, cookie)
+		}
+		if cookie.Name == server.BrowserCookieName() {
+			cookies = append(cookies, cookie)
 		}
 		if cookie.Name == server.CSRFCookieName() {
 			csrf = cookie.Value
 		}
 	}
-	require.NotNil(t, session)
-	return session, csrf
+	require.Len(t, cookies, 2)
+	return cookies, csrf
 }
 
-func mentoringHTTP(server *httpserver.Server, method, path string, session *http.Cookie, csrf, contentType string,
+func mentoringHTTP(server *httpserver.Server, method, path string, session []*http.Cookie, csrf, contentType string,
 	body []byte) *httptest.ResponseRecorder {
 	request := httptest.NewRequest(method, "http://mia.test"+path, bytes.NewReader(body))
-	if session != nil {
-		request.AddCookie(session)
+	for _, cookie := range session {
+		request.AddCookie(cookie)
 	}
 	if csrf != "" {
 		request.AddCookie(&http.Cookie{Name: server.CSRFCookieName(), Value: csrf})

@@ -527,17 +527,25 @@ profile operations.
   server-side session records.
 - An authenticated browser session expires after 30 minutes without an
   authenticated user action.
-- Each successful authenticated HTTP request, including establishment of an SSE
-  connection, resets the inactivity timer. Server-sent heartbeats and background
-  provider work do not.
+- Ordinary authenticated requests, automatic polling, SSE establishment and
+  reconnection, server-sent heartbeats, and background provider work do not
+  reset the inactivity timer. Only the explicit authenticated Continue working
+  operation resets it, capped by the original 12-hour maximum.
 - A session expires no later than 12 hours after authentication, regardless of
   activity. The 12-hour maximum anchors at completion of the final login stage —
   the moment the full authenticated cookie is created — not at the initial
   password verification.
 - After either timeout, the user must authenticate again.
 - The 12-hour maximum is not extended by session activity.
-- Logout clears the cookie in the current browser. MIA does not provide session
-  listing or individual remote-session revocation in the MVP.
+- Logout clears the authentication cookie and rotates the signed browser marker
+  in the current browser. A delayed ordinary authenticated or Continue working
+  response cannot restore usable authentication because it does not issue a
+  matching marker.
+- A delayed login, MFA-completion, or password-change response admitted before
+  logout may restore authentication because it reissues a matching cookie and
+  marker pair. Clients reconcile this outcome through session discovery.
+- MIA has no server-side browser-session or per-browser revocation records and
+  does not provide session listing or remote-session revocation in the MVP.
 
 ### Concurrent sessions
 

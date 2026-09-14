@@ -34,7 +34,7 @@ func newKernelServer(t *testing.T) *Server {
 	return server
 }
 
-func issueKernelSession(t *testing.T, server *Server) *http.Cookie {
+func issueKernelSession(t *testing.T, server *Server) []*http.Cookie {
 	t.Helper()
 	server.SetIdentityLoader(func(context.Context, string) (IdentityState, error) {
 		return IdentityState{SecurityGeneration: 1}, nil
@@ -47,13 +47,16 @@ func issueKernelSession(t *testing.T, server *Server) *http.Cookie {
 	})
 	response := httptest.NewRecorder()
 	server.Echo.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "http://mia.test/issue-session", nil))
+	var cookies []*http.Cookie
 	for _, cookie := range response.Result().Cookies() {
-		if cookie.Name == "__Host-mia_session" {
-			return cookie
+		if cookie.Name == server.SessionCookieName() || cookie.Name == server.BrowserCookieName() {
+			cookies = append(cookies, cookie)
 		}
 	}
-	t.Fatal("session issuance did not return a session cookie")
-	return nil
+	if len(cookies) != 2 {
+		t.Fatal("session issuance did not return session cookies")
+	}
+	return cookies
 }
 
 func TestAcceptNegotiationIsSpecMinimal(t *testing.T) {
@@ -110,7 +113,9 @@ func TestAcceptNegotiationExemptsNonJSONRepresentations(t *testing.T) {
 	})
 	request := httptest.NewRequest(http.MethodGet, "http://mia.test/api/v1/binary-test", nil)
 	request.Header.Set("Accept", "application/vnd.api+json;charset=utf-8")
-	request.AddCookie(session)
+	for _, cookie := range session {
+		request.AddCookie(cookie)
+	}
 	response := httptest.NewRecorder()
 	server.Echo.ServeHTTP(response, request)
 	if response.Code != http.StatusOK {
@@ -118,7 +123,9 @@ func TestAcceptNegotiationExemptsNonJSONRepresentations(t *testing.T) {
 	}
 	request = httptest.NewRequest(http.MethodGet, "http://mia.test/api/v1/json-test", nil)
 	request.Header.Set("Accept", "application/vnd.api+json;charset=utf-8")
-	request.AddCookie(session)
+	for _, cookie := range session {
+		request.AddCookie(cookie)
+	}
 	response = httptest.NewRecorder()
 	server.Echo.ServeHTTP(response, request)
 	conformance.Error(t, response, http.StatusNotAcceptable, "not_acceptable")
@@ -134,7 +141,9 @@ func TestAuthenticatedRoutesDoNotConsumePublicLimit(t *testing.T) {
 	for attempt := 0; attempt < 40; attempt++ {
 		request := httptest.NewRequest(http.MethodGet, "http://mia.test/api/v1/authenticated-test", nil)
 		request.RemoteAddr = "198.51.100.7:1234"
-		request.AddCookie(session)
+		for _, cookie := range session {
+			request.AddCookie(cookie)
+		}
 		response := httptest.NewRecorder()
 		server.Echo.ServeHTTP(response, request)
 		if response.Code != http.StatusNoContent {
@@ -230,7 +239,9 @@ func TestAuthRegistrarStagesClassifyPublicLimitConsumption(t *testing.T) {
 			for attempt := 0; attempt < 31; attempt++ {
 				request := httptest.NewRequest(http.MethodPost, "http://mia.test"+path, nil)
 				request.RemoteAddr = "198.51.100.10:1234"
-				request.AddCookie(session)
+				for _, cookie := range session {
+					request.AddCookie(cookie)
+				}
 				request.AddCookie(&http.Cookie{Name: "__Host-mia_csrf", Value: "token"})
 				request.Header.Set("X-CSRF-Token", "token")
 				response := httptest.NewRecorder()
@@ -275,21 +286,27 @@ func TestUnknownRoutesAndMethodsPrecedeAcceptNegotiation(t *testing.T) {
 	}
 }
 
-func issueKernelStageSession(t *testing.T, server *Server, stage string) *http.Cookie {
+func issueKernelStageSession(t *testing.T, server *Server, stage string) []*http.Cookie {
 	t.Helper()
 	path := "/issue-stage-" + stage
 	server.Echo.GET(path, func(c *echo.Context) error {
+		if stage == "mfa" {
+			return server.StartMFASession(c, "user-1", 1, "mfc_test", time.Now())
+		}
 		return server.StartSession(c, "user-1", 1, stage, time.Now())
 	})
 	response := httptest.NewRecorder()
 	server.Echo.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "http://mia.test"+path, nil))
+	var cookies []*http.Cookie
 	for _, cookie := range response.Result().Cookies() {
-		if cookie.Name == "__Host-mia_session" {
-			return cookie
+		if cookie.Name == server.SessionCookieName() || cookie.Name == server.BrowserCookieName() {
+			cookies = append(cookies, cookie)
 		}
 	}
-	t.Fatal("stage session cookie missing")
-	return nil
+	if len(cookies) != 2 {
+		t.Fatal("stage session cookies missing")
+	}
+	return cookies
 }
 
 func TestTrailingSlashVariantsReturnStrictNotFound(t *testing.T) {

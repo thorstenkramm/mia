@@ -105,7 +105,9 @@ func TestMaterialNonJSONRoutesAreAcceptExemptAndAuthenticatedRoutesDoNotConsumeP
 	} {
 		request := httptest.NewRequest(http.MethodGet, "http://mia.test"+path, nil)
 		request.Header.Set("Accept", parameterizedAccept)
-		request.AddCookie(session)
+		for _, cookie := range session {
+			request.AddCookie(cookie)
+		}
 		response := httptest.NewRecorder()
 		server.Echo.ServeHTTP(response, request)
 		conformance.Error(t, response, http.StatusNotFound, "material_not_found")
@@ -114,7 +116,9 @@ func TestMaterialNonJSONRoutesAreAcceptExemptAndAuthenticatedRoutesDoNotConsumeP
 		"http://mia.test/api/v1/materials/"+created.ID+"/files", strings.NewReader("invalid multipart"))
 	uploadRequest.Header.Set("Accept", parameterizedAccept)
 	uploadRequest.Header.Set("Content-Type", "multipart/form-data")
-	uploadRequest.AddCookie(session)
+	for _, cookie := range session {
+		uploadRequest.AddCookie(cookie)
+	}
 	uploadRequest.AddCookie(&http.Cookie{Name: server.CSRFCookieName(), Value: csrf})
 	uploadRequest.Header.Set("X-CSRF-Token", csrf)
 	uploadResponse := httptest.NewRecorder()
@@ -138,7 +142,9 @@ func TestMaterialNonJSONRoutesAreAcceptExemptAndAuthenticatedRoutesDoNotConsumeP
 				request := httptest.NewRequest(testCase.method, "http://mia.test"+testCase.path,
 					bytes.NewReader(testCase.body))
 				request.RemoteAddr = remote
-				request.AddCookie(session)
+				for _, cookie := range session {
+					request.AddCookie(cookie)
+				}
 				if testCase.contentType != "" {
 					request.Header.Set("Content-Type", testCase.contentType)
 					request.AddCookie(&http.Cookie{Name: server.CSRFCookieName(), Value: csrf})
@@ -220,7 +226,7 @@ func materialServer(t *testing.T) (*httpserver.Server, *Service, string, string,
 	return server, service, supervisor, student, courseID
 }
 
-func materialSession(t *testing.T, server *httpserver.Server, accountID string) (*http.Cookie, string) {
+func materialSession(t *testing.T, server *httpserver.Server, accountID string) ([]*http.Cookie, string) {
 	t.Helper()
 	path := "/issue-material-" + strings.ReplaceAll(accountID, "_", "-")
 	server.Echo.GET(path, func(c *echo.Context) error {
@@ -233,27 +239,32 @@ func materialSession(t *testing.T, server *httpserver.Server, accountID string) 
 	request := httptest.NewRequest(http.MethodGet, "http://mia.test"+path, nil)
 	response := httptest.NewRecorder()
 	server.Echo.ServeHTTP(response, request)
-	var session *http.Cookie
+	var cookies []*http.Cookie
 	csrf := ""
 	for _, cookie := range response.Result().Cookies() {
 		if cookie.Name == server.SessionCookieName() {
-			session = cookie
+			cookies = append(cookies, cookie)
+		}
+		if cookie.Name == server.BrowserCookieName() {
+			cookies = append(cookies, cookie)
 		}
 		if cookie.Name == server.CSRFCookieName() {
 			csrf = cookie.Value
 		}
 	}
-	if session == nil || csrf == "" {
+	if len(cookies) != 2 || csrf == "" {
 		t.Fatal("material session cookies missing")
 	}
-	return session, csrf
+	return cookies, csrf
 }
 
-func materialHTTP(t *testing.T, server *httpserver.Server, method, path string, session *http.Cookie, csrf,
+func materialHTTP(t *testing.T, server *httpserver.Server, method, path string, session []*http.Cookie, csrf,
 	contentType string, body []byte) *httptest.ResponseRecorder {
 	t.Helper()
 	request := httptest.NewRequest(method, "http://mia.test"+path, bytes.NewReader(body))
-	request.AddCookie(session)
+	for _, cookie := range session {
+		request.AddCookie(cookie)
+	}
 	request.AddCookie(&http.Cookie{Name: server.CSRFCookieName(), Value: csrf})
 	request.Header.Set("X-CSRF-Token", csrf)
 	if contentType != "" {
