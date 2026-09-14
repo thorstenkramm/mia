@@ -58,18 +58,22 @@ const (
 	CodeInvitationDeliveryAmbiguous    Code = "invitation_delivery_ambiguous"
 	CodeInvitationDeliveryRejected     Code = "invitation_delivery_rejected"
 
-	CodeUserRoleUnauthorized       Code = "user_role_unauthorized"
-	CodeUserNotFound               Code = "user_not_found"
-	CodeUsernameTaken              Code = "username_taken"
-	CodeUserProfileInvalid         Code = "user_profile_invalid"
-	CodeUserProfileUnauthorized    Code = "user_profile_unauthorized"
-	CodeUserMobileUnavailable      Code = "user_mobile_unavailable"
-	CodeUserMobileChallengeInvalid Code = "user_mobile_challenge_invalid"
-	CodeUserMobileCodeInvalid      Code = "user_mobile_code_invalid"
-	CodeUserAvatarInvalid          Code = "user_avatar_invalid"
-	CodeUserDeletionUnauthorized   Code = "user_deletion_unauthorized"
-	CodeUserLastAdministrator      Code = "user_last_administrator"
-	CodeUserSoleSupervisor         Code = "user_sole_supervisor"
+	CodeUserRoleUnauthorized            Code = "user_role_unauthorized"
+	CodeUserNotFound                    Code = "user_not_found"
+	CodeUsernameTaken                   Code = "username_taken"
+	CodeUserProfileInvalid              Code = "user_profile_invalid"
+	CodeUserProfileUnauthorized         Code = "user_profile_unauthorized"
+	CodeUserMobileUnavailable           Code = "user_mobile_unavailable"
+	CodeUserMobileChallengeInvalid      Code = "user_mobile_challenge_invalid"
+	CodeUserMobileCodeInvalid           Code = "user_mobile_code_invalid"
+	CodeUserAvatarInvalid               Code = "user_avatar_invalid"
+	CodeUserDeletionUnauthorized        Code = "user_deletion_unauthorized"
+	CodeUserLastAdministrator           Code = "user_last_administrator"
+	CodeUserSoleSupervisor              Code = "user_sole_supervisor"
+	CodeUserAdministrationUnauthorized  Code = "user_administration_unauthorized"
+	CodeUserAccountQueryInvalid         Code = "user_account_query_invalid"
+	CodeUserAccountPreconditionRequired Code = "user_account_precondition_required"
+	CodeUserAccountPreconditionFailed   Code = "user_account_precondition_failed"
 
 	CodeInvitationListUnauthorized Code = "invitation_list_unauthorized"
 
@@ -167,18 +171,22 @@ var errorRegistry = map[Code]definition{
 	CodeInvitationDeliveryAmbiguous:    {},
 	CodeInvitationDeliveryRejected:     {},
 
-	CodeUserRoleUnauthorized:       {http.StatusForbidden, "Unauthorized", "The request could not be completed."},
-	CodeUserNotFound:               {http.StatusNotFound, "Not Found", "The requested resource was not found."},
-	CodeUsernameTaken:              {http.StatusConflict, "Username Taken", "The request could not be completed."},
-	CodeUserProfileInvalid:         {http.StatusUnprocessableEntity, "Invalid Profile", "The request could not be completed."},
-	CodeUserProfileUnauthorized:    {http.StatusForbidden, "Unauthorized", "The request could not be completed."},
-	CodeUserMobileUnavailable:      {http.StatusServiceUnavailable, "Mobile Verification Unavailable", "The request could not be completed."},
-	CodeUserMobileChallengeInvalid: {http.StatusUnprocessableEntity, "Invalid Mobile Challenge", "The request could not be completed."},
-	CodeUserMobileCodeInvalid:      {http.StatusUnprocessableEntity, "Invalid Mobile Code", "The request could not be completed."},
-	CodeUserAvatarInvalid:          {http.StatusUnprocessableEntity, "Invalid Avatar", "The request could not be completed."},
-	CodeUserDeletionUnauthorized:   {http.StatusForbidden, "Unauthorized", "The request could not be completed."},
-	CodeUserLastAdministrator:      {http.StatusConflict, "Administrator Required", "The last administrator cannot be deleted."},
-	CodeUserSoleSupervisor:         {http.StatusConflict, "Supervisor Required", "The account is required to supervise a course."},
+	CodeUserRoleUnauthorized:            {http.StatusForbidden, "Unauthorized", "The request could not be completed."},
+	CodeUserNotFound:                    {http.StatusNotFound, "Not Found", "The requested resource was not found."},
+	CodeUsernameTaken:                   {http.StatusConflict, "Username Taken", "The request could not be completed."},
+	CodeUserProfileInvalid:              {http.StatusUnprocessableEntity, "Invalid Profile", "The request could not be completed."},
+	CodeUserProfileUnauthorized:         {http.StatusForbidden, "Unauthorized", "The request could not be completed."},
+	CodeUserMobileUnavailable:           {http.StatusServiceUnavailable, "Mobile Verification Unavailable", "The request could not be completed."},
+	CodeUserMobileChallengeInvalid:      {http.StatusUnprocessableEntity, "Invalid Mobile Challenge", "The request could not be completed."},
+	CodeUserMobileCodeInvalid:           {http.StatusUnprocessableEntity, "Invalid Mobile Code", "The request could not be completed."},
+	CodeUserAvatarInvalid:               {http.StatusUnprocessableEntity, "Invalid Avatar", "The request could not be completed."},
+	CodeUserDeletionUnauthorized:        {http.StatusForbidden, "Unauthorized", "The request could not be completed."},
+	CodeUserLastAdministrator:           {http.StatusConflict, "Administrator Required", "The last administrator cannot be deleted."},
+	CodeUserSoleSupervisor:              {http.StatusConflict, "Supervisor Required", "The account is required to supervise a course."},
+	CodeUserAdministrationUnauthorized:  {http.StatusForbidden, "Unauthorized", "The request could not be completed."},
+	CodeUserAccountQueryInvalid:         {http.StatusUnprocessableEntity, "Invalid Account Query", "The request could not be completed."},
+	CodeUserAccountPreconditionRequired: {http.StatusPreconditionRequired, "Precondition Required", "Review the current account before trying again."},
+	CodeUserAccountPreconditionFailed:   {http.StatusPreconditionFailed, "Precondition Failed", "The account changed. Review it before trying again."},
 
 	CodeInvitationListUnauthorized:  {http.StatusForbidden, "Unauthorized", "The request could not be completed."},
 	CodeCourseNotFound:              {http.StatusNotFound, "Not Found", "The requested resource was not found."},

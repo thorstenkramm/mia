@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/labstack/echo/v5"
+	"github.com/thorstenkramm/mia/internal/course"
 	"github.com/thorstenkramm/mia/internal/httpserver"
 	"github.com/thorstenkramm/mia/internal/httpserver/conformance"
 	"github.com/thorstenkramm/mia/internal/identity"
@@ -484,7 +485,7 @@ func testServer(t *testing.T) (*httpserver.Server, *sql.DB) {
 	deliveries := NewDeliveryManager(service, database, successMailer{}, nil)
 	t.Cleanup(deliveries.Close)
 	Register(server, service, "https://mia.test", deliveries)
-	RegisterRoleRoutes(server, database, nil)
+	RegisterRoleRoutes(server, database, nil, course.IsSoleSupervisor)
 	registerLoginRoute(t, server, database)
 	return server, database
 }
@@ -625,6 +626,41 @@ func serve(t *testing.T, server *httpserver.Server, method, path, csrf string, s
 	return response
 }
 
+func serveReviewedRoleGrant(t *testing.T, server *httpserver.Server, database *sql.DB, actorUsername,
+	targetID, csrf string, session []*http.Cookie, role user.Role) *httptest.ResponseRecorder {
+	t.Helper()
+	actor, err := user.FindForLogin(context.Background(), database, actorUsername)
+	if err != nil {
+		t.Fatal(err)
+	}
+	detail, err := user.GetAdministrationAccount(context.Background(), database, actor.ID, targetID,
+		course.IsSoleSupervisor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return serveRoleGrant(t, server, targetID, csrf, session, role, detail.ETag)
+}
+
+func serveRoleGrant(t *testing.T, server *httpserver.Server, targetID, csrf string, session []*http.Cookie,
+	role user.Role, etag string) *httptest.ResponseRecorder {
+	t.Helper()
+	body := `{"data":{"type":"user-roles","attributes":{"role":"` + string(role) + `"}}}`
+	request := httptest.NewRequest(http.MethodPost, "http://mia.test/api/v1/users/"+targetID+"/roles",
+		strings.NewReader(body))
+	request.Header.Set("Content-Type", "application/vnd.api+json")
+	request.Header.Set("If-Match", etag)
+	request.Header.Set("X-CSRF-Token", csrf)
+	if csrf != "" {
+		request.AddCookie(&http.Cookie{Name: server.CSRFCookieName(), Value: csrf})
+	}
+	for _, cookie := range session {
+		request.AddCookie(cookie)
+	}
+	response := httptest.NewRecorder()
+	server.Echo.ServeHTTP(response, request)
+	return response
+}
+
 func serveIfMatch(
 	t *testing.T, server *httpserver.Server, path, csrf string, session []*http.Cookie, etag string,
 ) *httptest.ResponseRecorder {
@@ -665,8 +701,8 @@ func TestDirectRoleGrant(t *testing.T) {
 	csrf, session := loginSession(t, server, "admin", "correct horse battery")
 
 	// Admin can grant supervisor role to existing staff.
-	response := serve(t, server, http.MethodPost, "/api/v1/users/"+supervisor.ID+"/roles", csrf, session,
-		`{"data":{"type":"user-roles","attributes":{"role":"administrator"}}}`)
+	response := serveReviewedRoleGrant(t, server, database, "admin", supervisor.ID, csrf, session,
+		user.Administrator)
 	assertStatus(t, response, http.StatusNoContent)
 
 	// Verify role was granted.
@@ -679,6 +715,43 @@ func TestDirectRoleGrant(t *testing.T) {
 	}
 
 	_ = admin
+}
+
+func TestRoleGrantRouteRequiresAuthenticationCSRFAndReviewedState(t *testing.T) {
+	server, database := testServer(t)
+	admin := createAdminAccount(t, database, "precondition-admin")
+	target := createMentorAccount(t, database, "precondition-target")
+	csrf, session := loginSession(t, server, "precondition-admin", "correct horse battery")
+	detail, err := user.GetAdministrationAccount(context.Background(), database, admin.ID, target.ID,
+		course.IsSoleSupervisor)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	unauthenticated := serveRoleGrant(t, server, target.ID, csrf, nil, user.Administrator, detail.ETag)
+	assertCode(t, unauthenticated, http.StatusUnauthorized, "auth_unauthenticated")
+	expired := conformance.ExpireSession(t, server.Sessions, server.SessionCookieName(), session)
+	expiredResponse := serveRoleGrant(t, server, target.ID, csrf, expired, user.Administrator, detail.ETag)
+	assertCode(t, expiredResponse, http.StatusUnauthorized, "auth_unauthenticated")
+	csrfRejected := serveRoleGrant(t, server, target.ID, "", session, user.Administrator, detail.ETag)
+	assertCode(t, csrfRejected, http.StatusForbidden, "csrf_invalid")
+	missing := serveRoleGrant(t, server, target.ID, csrf, session, user.Administrator, "")
+	assertCode(t, missing, http.StatusPreconditionRequired, "user_account_precondition_required")
+
+	if _, err := database.Exec("UPDATE users SET username = ?, username_key = ? WHERE id = ?",
+		"changed-target", "changed-target", target.ID); err != nil {
+		t.Fatal(err)
+	}
+	stale := serveRoleGrant(t, server, target.ID, csrf, session, user.Administrator, detail.ETag)
+	assertCode(t, stale, http.StatusPreconditionFailed, "user_account_precondition_failed")
+	var count int
+	if err := database.QueryRow("SELECT COUNT(*) FROM user_roles WHERE user_id = ? AND role = 'administrator'",
+		target.ID).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("stale reviewed state granted administrator role")
+	}
 }
 
 func TestTokenGenerationPreventsStaleDeliveryMarking(t *testing.T) {
@@ -1063,13 +1136,13 @@ func TestRoleGrantIdempotency(t *testing.T) {
 	csrf, session := loginSession(t, server, "admin", "correct horse battery")
 
 	// Grant administrator role to supervisor.
-	response1 := serve(t, server, http.MethodPost, "/api/v1/users/"+supervisor.ID+"/roles", csrf, session,
-		`{"data":{"type":"user-roles","attributes":{"role":"administrator"}}}`)
+	response1 := serveReviewedRoleGrant(t, server, database, "admin", supervisor.ID, csrf, session,
+		user.Administrator)
 	assertStatus(t, response1, http.StatusNoContent)
 
 	// Grant same role again - should be idempotent.
-	response2 := serve(t, server, http.MethodPost, "/api/v1/users/"+supervisor.ID+"/roles", csrf, session,
-		`{"data":{"type":"user-roles","attributes":{"role":"administrator"}}}`)
+	response2 := serveReviewedRoleGrant(t, server, database, "admin", supervisor.ID, csrf, session,
+		user.Administrator)
 	assertStatus(t, response2, http.StatusNoContent)
 
 	// Verify only one role entry exists.
@@ -1092,8 +1165,8 @@ func TestSupervisorGrantIncludesStudentRole(t *testing.T) {
 	csrf, session := loginSession(t, server, "admin", "correct horse battery")
 
 	// Grant supervisor role to mentor.
-	response := serve(t, server, http.MethodPost, "/api/v1/users/"+mentor.ID+"/roles", csrf, session,
-		`{"data":{"type":"user-roles","attributes":{"role":"supervisor"}}}`)
+	response := serveReviewedRoleGrant(t, server, database, "admin", mentor.ID, csrf, session,
+		user.Supervisor)
 	assertStatus(t, response, http.StatusNoContent)
 
 	// Verify student role was also granted.
@@ -1116,8 +1189,8 @@ func TestRoleGrantToStudentOnlyFails(t *testing.T) {
 	csrf, session := loginSession(t, server, "admin", "correct horse battery")
 
 	// Try to grant administrator role to student-only account - should fail.
-	response := serve(t, server, http.MethodPost, "/api/v1/users/"+student.ID+"/roles", csrf, session,
-		`{"data":{"type":"user-roles","attributes":{"role":"administrator"}}}`)
+	response := serveReviewedRoleGrant(t, server, database, "admin", student.ID, csrf, session,
+		user.Administrator)
 	assertCode(t, response, http.StatusNotFound, "user_not_found")
 }
 
@@ -1135,8 +1208,8 @@ func TestRoleGrantToBannedAccountFails(t *testing.T) {
 	csrf, session := loginSession(t, server, "admin", "correct horse battery")
 
 	// Try to grant role to banned account - should fail.
-	response := serve(t, server, http.MethodPost, "/api/v1/users/"+mentor.ID+"/roles", csrf, session,
-		`{"data":{"type":"user-roles","attributes":{"role":"administrator"}}}`)
+	response := serveReviewedRoleGrant(t, server, database, "admin", mentor.ID, csrf, session,
+		user.Administrator)
 	assertCode(t, response, http.StatusNotFound, "user_not_found")
 }
 
@@ -1154,8 +1227,8 @@ func TestRoleGrantToUnverifiedAccountFails(t *testing.T) {
 	csrf, session := loginSession(t, server, "admin", "correct horse battery")
 
 	// Try to grant role to unverified account - should fail.
-	response := serve(t, server, http.MethodPost, "/api/v1/users/"+mentor.ID+"/roles", csrf, session,
-		`{"data":{"type":"user-roles","attributes":{"role":"administrator"}}}`)
+	response := serveReviewedRoleGrant(t, server, database, "admin", mentor.ID, csrf, session,
+		user.Administrator)
 	assertCode(t, response, http.StatusNotFound, "user_not_found")
 }
 
@@ -1185,8 +1258,8 @@ func TestRoleGrantAudited(t *testing.T) {
 	}
 
 	// Grant role.
-	response := serve(t, server, http.MethodPost, "/api/v1/users/"+supervisor.ID+"/roles", csrf, session,
-		`{"data":{"type":"user-roles","attributes":{"role":"administrator"}}}`)
+	response := serveReviewedRoleGrant(t, server, database, "admin", supervisor.ID, csrf, session,
+		user.Administrator)
 	assertStatus(t, response, http.StatusNoContent)
 
 	// Verify audit event was created with metadata.
@@ -2517,8 +2590,8 @@ func TestDeniedRoleGrantIsAudited(t *testing.T) {
 	}
 
 	// Try to grant role to student-only account - should fail and be audited.
-	response := serve(t, server, http.MethodPost, "/api/v1/users/"+student.ID+"/roles", csrf, session,
-		`{"data":{"type":"user-roles","attributes":{"role":"administrator"}}}`)
+	response := serveReviewedRoleGrant(t, server, database, "admin", student.ID, csrf, session,
+		user.Administrator)
 	assertCode(t, response, http.StatusNotFound, "user_not_found")
 
 	// Verify denial was audited.
@@ -2678,8 +2751,8 @@ func TestDirectGrantAuthorizationMatrix(t *testing.T) {
 		_ = createAdminAccount(t, database, "admin")
 		supervisor := createSupervisorAccount(t, database, "supervisor")
 		csrf, session := loginSession(t, server, "admin", "correct horse battery")
-		response := serve(t, server, http.MethodPost, "/api/v1/users/"+supervisor.ID+"/roles", csrf, session,
-			`{"data":{"type":"user-roles","attributes":{"role":"administrator"}}}`)
+		response := serveReviewedRoleGrant(t, server, database, "admin", supervisor.ID, csrf, session,
+			user.Administrator)
 		assertStatus(t, response, http.StatusNoContent)
 	})
 
@@ -2689,8 +2762,8 @@ func TestDirectGrantAuthorizationMatrix(t *testing.T) {
 		_ = createAdminAccount(t, database, "admin")
 		mentor := createMentorAccount(t, database, "mentor")
 		csrf, session := loginSession(t, server, "admin", "correct horse battery")
-		response := serve(t, server, http.MethodPost, "/api/v1/users/"+mentor.ID+"/roles", csrf, session,
-			`{"data":{"type":"user-roles","attributes":{"role":"supervisor"}}}`)
+		response := serveReviewedRoleGrant(t, server, database, "admin", mentor.ID, csrf, session,
+			user.Supervisor)
 		assertStatus(t, response, http.StatusNoContent)
 	})
 

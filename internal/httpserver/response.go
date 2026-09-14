@@ -30,8 +30,14 @@ func Resource(c *echo.Context, status int, resourceType, id string, attributes a
 
 // Collection writes a paginated JSON:API collection with navigation links.
 func Collection(c *echo.Context, data []map[string]any, page Page, hasMore bool) error {
+	return CollectionWithFilters(c, data, page, hasMore, nil)
+}
+
+// CollectionWithFilters writes a collection whose navigation preserves validated filters.
+func CollectionWithFilters(c *echo.Context, data []map[string]any, page Page, hasMore bool,
+	filters map[string]string) error {
 	document := map[string]any{"data": data, "meta": map[string]any{"has_more": hasMore}}
-	if links := CollectionLinks(c.Request().URL.Path, page, hasMore); links != nil {
+	if links := CollectionLinksWithFilters(c.Request().URL.Path, page, hasMore, filters); links != nil {
 		document["links"] = links
 	}
 	return JSONAPI(c, http.StatusOK, document)

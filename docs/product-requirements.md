@@ -233,10 +233,20 @@ mobile numbers. Accounts with any staff role use staff self-service rules.
 ### User and roster visibility
 
 - Every user can view their own account.
+- Every authenticated account can read a server-authored release-one capability
+  catalog with explicit global, course, student, and own-resource scope. The
+  catalog reflects current role, assignment, membership, ban, and account state
+  on each explicit non-refreshing check. Empty and unavailable scope is explicit,
+  and each operation still authorizes independently.
 - Assigned supervisors can view students and staff relationships in their
   assigned courses.
 - Mentors see only minimal identity — username, name, nickname, and avatar —
   for students explicitly assigned to them.
+- Administrators can page and exactly filter a minimal global account directory
+  and inspect a target by opaque user ID. These reads expose only username,
+  account class and state, permanent roles, supported action eligibility, and
+  viewer-safe consequence identifiers. Email, other profile fields, security
+  data, and course, tutoring, or mentoring content are excluded.
 - Students cannot view a course roster.
 - Administrators see account and relationship metadata needed for global
   administration, but that role alone does not grant private course-content

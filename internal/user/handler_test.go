@@ -28,19 +28,29 @@ import (
 func TestAccountDeletionHandlerEnforcesAdministratorAndSafeguards(t *testing.T) {
 	server, database, staff, student, dataDir := profileServer(t)
 	administrator := handlerAccount(t, database, "deletion-admin", []Role{Administrator}, true)
-	RegisterDeletionRoutes(server, NewDeletionService(database, dataDir, &lifecycle.Registry{}, nil))
+	deletionService := NewDeletionService(database, dataDir, &lifecycle.Registry{}, nil)
+	deletionService.SetSoleSupervisorCheck(noSoleSupervisor)
+	RegisterDeletionRoutes(server, deletionService)
 	staffSession, staffCSRF := issueSession(t, server, staff)
 	denied := profileRequest(t, server, http.MethodDelete, "/api/v1/users/"+student,
 		staffSession, staffCSRF, "", "")
 	conformance.Error(t, denied, http.StatusForbidden, "user_deletion_unauthorized")
 	adminSession, adminCSRF := issueSession(t, server, administrator)
-	deleted := profileRequest(t, server, http.MethodDelete, "/api/v1/users/"+student,
-		adminSession, adminCSRF, "", "")
+	detail, detailErr := deletionService.GetAccount(context.Background(), administrator, student)
+	if detailErr != nil {
+		t.Fatal(detailErr)
+	}
+	deleted := administrationDelete(t, server, "/api/v1/users/"+student,
+		adminSession, adminCSRF, detail.ETag)
 	if deleted.Code != http.StatusNoContent {
 		t.Fatalf("student deletion status/body = %d %s", deleted.Code, deleted.Body.String())
 	}
-	lastAdministrator := profileRequest(t, server, http.MethodDelete, "/api/v1/users/"+administrator,
-		adminSession, adminCSRF, "", "")
+	adminDetail, detailErr := deletionService.GetAccount(context.Background(), administrator, administrator)
+	if detailErr != nil {
+		t.Fatal(detailErr)
+	}
+	lastAdministrator := administrationDelete(t, server, "/api/v1/users/"+administrator,
+		adminSession, adminCSRF, adminDetail.ETag)
 	conformance.Error(t, lastAdministrator, http.StatusConflict, "user_last_administrator")
 }
 

@@ -21,6 +21,7 @@ import (
 	"github.com/thorstenkramm/mia/internal/httpserver"
 	"github.com/thorstenkramm/mia/internal/httpserver/conformance"
 	"github.com/thorstenkramm/mia/internal/identity"
+	"github.com/thorstenkramm/mia/internal/lifecycle"
 	miSQLite "github.com/thorstenkramm/mia/internal/sqlite"
 	"github.com/thorstenkramm/mia/internal/user"
 )
@@ -186,6 +187,52 @@ func TestCourseHandlersCreateAndBlockActivationUntilMaterialOwnerIsWired(t *test
 	if err := database.QueryRow(`SELECT COUNT(*) FROM audit_events WHERE action = 'course.mutation.denied'
 		AND json_extract(metadata, '$.outcome_code') = 'course_not_found'`).Scan(&audits); err != nil || audits != 1 {
 		t.Fatalf("post-deletion denial audit count = %d, %v", audits, err)
+	}
+}
+
+func TestReviewedAccountDeletionRejectsNewSoleSupervisorAssignment(t *testing.T) {
+	server, database, dataDir := courseServerFixture(t)
+	admin := createAccount(t, database, "sole-review-admin", user.Administrator)
+	target := createAccount(t, database, "sole-review-target", user.Supervisor)
+	service := user.NewDeletionService(database, dataDir, &lifecycle.Registry{}, nil)
+	service.SetSoleSupervisorCheck(IsSoleSupervisor)
+	user.RegisterAdministrationRoutes(server, service)
+	user.RegisterDeletionRoutes(server, service)
+	session, csrf := courseSession(t, server, admin)
+
+	detail := courseHTTP(t, server, http.MethodGet, "/api/v1/users/"+target, session, "", "", nil)
+	if detail.Code != http.StatusOK || detail.Header().Get("ETag") == "" {
+		t.Fatalf("account detail = %d %s, ETag %q", detail.Code, detail.Body.String(), detail.Header().Get("ETag"))
+	}
+	if _, err := database.Exec(`INSERT INTO courses (id, name, name_normalized, created_at)
+		VALUES ('cou_sole_review', 'Sole Review', 'sole review', '2026-09-14T00:00:00.000000Z')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`INSERT INTO course_supervisors (course_id, supervisor_user_id, assigned_at)
+		VALUES ('cou_sole_review', ?, '2026-09-14T00:00:00.000000Z')`, target); err != nil {
+		t.Fatal(err)
+	}
+
+	request := httptest.NewRequest(http.MethodDelete, "http://mia.test/api/v1/users/"+target, nil)
+	for _, cookie := range session {
+		request.AddCookie(cookie)
+	}
+	request.AddCookie(&http.Cookie{Name: server.CSRFCookieName(), Value: csrf})
+	request.Header.Set("X-CSRF-Token", csrf)
+	request.Header.Set("If-Match", detail.Header().Get("ETag"))
+	stale := httptest.NewRecorder()
+	server.Echo.ServeHTTP(stale, request)
+	conformance.Error(t, stale, http.StatusPreconditionFailed, "user_account_precondition_failed")
+	var accountCount, assignmentCount int
+	if err := database.QueryRow("SELECT COUNT(*) FROM users WHERE id = ?", target).Scan(&accountCount); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.QueryRow(`SELECT COUNT(*) FROM course_supervisors
+		WHERE supervisor_user_id = ?`, target).Scan(&assignmentCount); err != nil {
+		t.Fatal(err)
+	}
+	if accountCount != 1 || assignmentCount != 1 {
+		t.Fatalf("stale deletion mutated account or assignment: account=%d assignment=%d", accountCount, assignmentCount)
 	}
 }
 

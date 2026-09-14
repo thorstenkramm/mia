@@ -37,6 +37,37 @@ type Service struct {
 	profiles *user.Service
 }
 
+// CapabilityAssignment is one course-and-student scope that must not be widened into independent lists.
+type CapabilityAssignment struct {
+	CourseID  string `json:"course_id"`
+	StudentID string `json:"student_id"`
+}
+
+// LoadCapabilityAssignments returns the mentor's current paired assignment scope.
+func LoadCapabilityAssignments(ctx context.Context, query miSQLite.Querier,
+	actorID string) ([]CapabilityAssignment, error) {
+	rows, err := query.QueryContext(ctx, `SELECT course_id, student_user_id FROM mentor_assignments
+		WHERE mentor_user_id = ? ORDER BY course_id, student_user_id`, actorID)
+	if err != nil {
+		return nil, fmt.Errorf("load mentoring capability scope: %w", err)
+	}
+	assignments := make([]CapabilityAssignment, 0)
+	for rows.Next() {
+		var assignment CapabilityAssignment
+		if err := rows.Scan(&assignment.CourseID, &assignment.StudentID); err != nil {
+			return nil, errors.Join(fmt.Errorf("scan mentoring capability scope: %w", err), rows.Close())
+		}
+		assignments = append(assignments, assignment)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, errors.Join(fmt.Errorf("iterate mentoring capability scope: %w", err), rows.Close())
+	}
+	if err := rows.Close(); err != nil {
+		return nil, fmt.Errorf("close mentoring capability scope: %w", err)
+	}
+	return assignments, nil
+}
+
 func NewService(database *sql.DB, profiles *user.Service, logger *slog.Logger) *Service {
 	if logger == nil {
 		logger = slog.Default()

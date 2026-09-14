@@ -55,7 +55,7 @@ development_status:
   2-1-protect-browser-responses-and-bound-error-disclosure: done
   2-2-discover-and-extend-browser-sessions-safely: done
   2-3-manage-invitations-through-delivery-ambiguity: done
-  2-4-discover-account-capabilities-and-administration-targets: backlog
+  2-4-discover-account-capabilities-and-administration-targets: done
   2-5-inspect-mfa-state-and-recover-lost-factors: backlog
   2-6-observe-and-continue-mobile-verification: backlog
   2-7-understand-course-readiness-and-confirm-destructive-course-a: backlog

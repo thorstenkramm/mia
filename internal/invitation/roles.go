@@ -17,12 +17,16 @@ import (
 var roleLogger *slog.Logger
 
 // RegisterRoleRoutes attaches direct role grant routes to the server.
-func RegisterRoleRoutes(server *httpserver.Server, database *sql.DB, logger *slog.Logger) {
+func RegisterRoleRoutes(server *httpserver.Server, database *sql.DB, logger *slog.Logger,
+	soleSupervisor user.SoleSupervisorCheck) {
+	if soleSupervisor == nil {
+		panic("invitation: sole-supervisor check is required for role routes")
+	}
 	if logger == nil {
 		logger = slog.Default()
 	}
 	roleLogger = logger
-	server.AuthenticatedPOST("/api/v1/users/:id/roles", grantRoleHandler(database))
+	server.AuthenticatedPOST("/api/v1/users/:id/roles", grantRoleHandler(database, soleSupervisor))
 }
 
 type grantRoleRequest struct {
@@ -35,7 +39,7 @@ type grantRoleRequest struct {
 	} `json:"data"`
 }
 
-func grantRoleHandler(database *sql.DB) echo.HandlerFunc {
+func grantRoleHandler(database *sql.DB, soleSupervisor user.SoleSupervisorCheck) echo.HandlerFunc {
 	return func(c *echo.Context) error {
 		actorID, err := authenticatedUser(c)
 		if err != nil {
@@ -54,12 +58,26 @@ func grantRoleHandler(database *sql.DB) echo.HandlerFunc {
 			return httpserver.NewError(httpserver.CodeInvalidRequest)
 		}
 		err = miSQLite.WithTx(c.Request().Context(), database, func(tx *sql.Tx) error {
+			if role == user.Administrator || role == user.Supervisor {
+				if err := user.RequireReviewedRoleGrant(c.Request().Context(), tx, targetID, actorID,
+					c.Request().Header.Get("If-Match"), soleSupervisor); err != nil {
+					return err
+				}
+			}
 			if err := user.GrantRole(c.Request().Context(), tx, targetID, role, actorID); err != nil {
 				return err
 			}
 			return audit.WriteWithMetadata(c.Request().Context(), tx, audit.ActionUserUserRoleGranted, actorID, targetID, audit.Metadata{Role: string(role)})
 		})
 		if err != nil {
+			if errors.Is(err, user.ErrAccountPreconditionRequired) {
+				auditDeniedRoleGrant(c, database, actorID, string(role))
+				return httpserver.NewError(httpserver.CodeUserAccountPreconditionRequired)
+			}
+			if errors.Is(err, user.ErrAccountPreconditionFailed) {
+				auditDeniedRoleGrant(c, database, actorID, string(role))
+				return httpserver.NewError(httpserver.CodeUserAccountPreconditionFailed)
+			}
 			if isNotFoundError(err) {
 				// Audit denied mutation without revealing existence (no targetID in audit).
 				auditDeniedRoleGrant(c, database, actorID, string(role))

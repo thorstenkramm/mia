@@ -80,6 +80,10 @@ paths:
     $ref: paths/invitations.yaml#/invitationAcceptances
   /api/v1/users/me:
     $ref: paths/users.yaml#/me
+  /api/v1/users/me/capabilities:
+    $ref: paths/users.yaml#/capabilities
+  /api/v1/users:
+    $ref: paths/users.yaml#/accounts
   /api/v1/users/me/mobile-change-challenges:
     $ref: paths/users.yaml#/mobileChallenges
   /api/v1/users/me/mobile-change-challenges/{id}/verifications:
@@ -97,6 +101,8 @@ paths:
   /api/v1/users/{id}/bans:
     $ref: paths/courses.yaml#/bans
   /api/v1/users/{id}:
+    get:
+      $ref: paths/users.yaml#/account/get
     patch:
       $ref: paths/mentoring.yaml#/studentProfile/patch
     delete:
@@ -220,7 +226,7 @@ components:
       name: If-Match
       in: header
       required: true
-      description: Exact strong ETag obtained from the latest authorized invitation GET.
+      description: Exact strong ETag obtained from the latest authorized review GET for this resource.
       schema: { type: string, pattern: '^"[0-9a-f]{64}"$' }
     UserID:
       name: user_id

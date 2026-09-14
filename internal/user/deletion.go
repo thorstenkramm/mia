@@ -23,10 +23,42 @@ var (
 
 // DeletionService owns account deletion transactions. It is safe for concurrent use.
 type DeletionService struct {
-	database  *sql.DB
-	dataDir   string
-	lifecycle *lifecycle.Registry
-	logger    *slog.Logger
+	database       *sql.DB
+	dataDir        string
+	lifecycle      *lifecycle.Registry
+	logger         *slog.Logger
+	soleSupervisor SoleSupervisorCheck
+}
+
+// SoleSupervisorCheck is supplied by the course table owner.
+type SoleSupervisorCheck func(context.Context, miSQLite.Querier, string) (bool, error)
+
+// SetSoleSupervisorCheck installs the course-owned account deletion guard reader.
+func (service *DeletionService) SetSoleSupervisorCheck(check SoleSupervisorCheck) {
+	service.soleSupervisor = check
+}
+
+// ListAccounts reads one coherent administration page in a transaction snapshot.
+func (service *DeletionService) ListAccounts(ctx context.Context, actorID string,
+	filter AccountFilter) (AdministrationList, error) {
+	var result AdministrationList
+	err := miSQLite.WithTx(ctx, service.database, func(tx *sql.Tx) error {
+		var loadErr error
+		result, loadErr = ListAdministrationAccounts(ctx, tx, actorID, filter, service.soleSupervisor)
+		return loadErr
+	})
+	return result, err
+}
+
+// GetAccount reads one coherent administration target and effect validator.
+func (service *DeletionService) GetAccount(ctx context.Context, actorID, accountID string) (AdministrationAccount, error) {
+	var account AdministrationAccount
+	err := miSQLite.WithTx(ctx, service.database, func(tx *sql.Tx) error {
+		var loadErr error
+		account, loadErr = GetAdministrationAccount(ctx, tx, actorID, accountID, service.soleSupervisor)
+		return loadErr
+	})
+	return account, err
 }
 
 func NewDeletionService(database *sql.DB, dataDir string, registry *lifecycle.Registry,
@@ -43,6 +75,15 @@ func NewDeletionService(database *sql.DB, dataDir string, registry *lifecycle.Re
 // Delete removes one account and every registered account-scoped dependency in
 // one transaction. It intentionally does not coordinate with asynchronous work.
 func (service *DeletionService) Delete(ctx context.Context, actorID, accountID string) error {
+	return service.delete(ctx, actorID, accountID, nil)
+}
+
+// DeleteReviewed requires the effect-complete validator returned by account detail.
+func (service *DeletionService) DeleteReviewed(ctx context.Context, actorID, accountID, expectedETag string) error {
+	return service.delete(ctx, actorID, accountID, &expectedETag)
+}
+
+func (service *DeletionService) delete(ctx context.Context, actorID, accountID string, expectedETag *string) error {
 	err := miSQLite.WithTx(ctx, service.database, func(tx *sql.Tx) error {
 		administrator, err := HasRole(ctx, tx, actorID, Administrator)
 		if err != nil {
@@ -51,9 +92,24 @@ func (service *DeletionService) Delete(ctx context.Context, actorID, accountID s
 		if !administrator {
 			return ErrDeletionUnauthorized
 		}
-		roles, err := deletionRoles(ctx, tx, accountID)
+		snapshot, err := loadAdministrationSnapshot(ctx, tx, accountID, actorID, service.soleSupervisor)
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrDeletionNotFound
+		}
 		if err != nil {
 			return err
+		}
+		if expectedETag != nil {
+			if *expectedETag == "" {
+				return ErrAccountPreconditionRequired
+			}
+			if *expectedETag != snapshot.ETag {
+				return ErrAccountPreconditionFailed
+			}
+		}
+		roles := make(map[Role]bool, len(snapshot.Roles))
+		for _, role := range snapshot.Roles {
+			roles[role] = true
 		}
 		if roles[Administrator] {
 			var count int
@@ -100,32 +156,6 @@ func (service *DeletionService) Delete(ctx context.Context, actorID, accountID s
 		service.logger.WarnContext(ctx, "remove deleted account files", "account_id", accountID, "error", err)
 	}
 	return nil
-}
-
-func deletionRoles(ctx context.Context, query miSQLite.Querier, accountID string) (map[Role]bool, error) {
-	rows, err := query.QueryContext(ctx, `SELECT role FROM user_roles
-		WHERE user_id = ? AND role IN ('administrator', 'supervisor', 'mentor', 'student')`, accountID)
-	if err != nil {
-		return nil, fmt.Errorf("load deletion target roles: %w", err)
-	}
-	roles := make(map[Role]bool, 4)
-	for rows.Next() {
-		var role Role
-		if err := rows.Scan(&role); err != nil {
-			return nil, errors.Join(fmt.Errorf("scan deletion target role: %w", err), rows.Close())
-		}
-		roles[role] = true
-	}
-	if err := rows.Err(); err != nil {
-		return nil, errors.Join(fmt.Errorf("iterate deletion target roles: %w", err), rows.Close())
-	}
-	if err := rows.Close(); err != nil {
-		return nil, fmt.Errorf("close deletion target roles: %w", err)
-	}
-	if len(roles) == 0 {
-		return nil, ErrDeletionNotFound
-	}
-	return roles, nil
 }
 
 // AuditDeletionDenied records a valid denied mutation without retaining the

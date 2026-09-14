@@ -24,6 +24,7 @@ import (
 	"github.com/spf13/pflag"
 	"github.com/thorstenkramm/mia/internal/audit"
 	"github.com/thorstenkramm/mia/internal/auth"
+	"github.com/thorstenkramm/mia/internal/capability"
 	"github.com/thorstenkramm/mia/internal/config"
 	"github.com/thorstenkramm/mia/internal/course"
 	"github.com/thorstenkramm/mia/internal/httpserver"
@@ -549,7 +550,6 @@ func newServeCommand() *cobra.Command {
 		invitationDeliveries := invitation.NewDeliveryManager(invitationService, database, smtp.New(configuration, logger.Slog()), logger.Slog())
 		defer invitationDeliveries.Close()
 		invitation.Register(server, invitationService, configuration.Main.PublicURL, invitationDeliveries)
-		invitation.RegisterRoleRoutes(server, database, logger.Slog())
 		lifecycleRegistry := &lifecycle.Registry{}
 		lifecycleRegistry.RegisterAccount(invitationService)
 		if err := material.EnsureInstructions(configuration.Main.DataDir); err != nil {
@@ -616,8 +616,12 @@ func newServeCommand() *cobra.Command {
 			material.MaterialReady, tutoringService.ActiveInCourse,
 			tutoringService.StudentActiveInCourse, auth.InvalidateSecurityArtifacts, logger.Slog())
 		lifecycleRegistry.RegisterAccount(courseService)
-		user.RegisterDeletionRoutes(server, user.NewDeletionService(database, configuration.Main.DataDir,
-			lifecycleRegistry, logger.Slog()))
+		deletionService := user.NewDeletionService(database, configuration.Main.DataDir, lifecycleRegistry, logger.Slog())
+		deletionService.SetSoleSupervisorCheck(course.IsSoleSupervisor)
+		user.RegisterDeletionRoutes(server, deletionService)
+		user.RegisterAdministrationRoutes(server, deletionService)
+		invitation.RegisterRoleRoutes(server, database, logger.Slog(), course.IsSoleSupervisor)
+		capability.Register(server, capability.New(database, mentoring.LoadCapabilityAssignments))
 		audit.Register(server, audit.NewOversight(database,
 			func(ctx context.Context, query miSQLite.Querier, actorID string) (bool, error) {
 				return user.HasRole(ctx, query, actorID, user.Administrator)

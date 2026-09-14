@@ -47,6 +47,63 @@ me:
         $ref: ../responses/errors.yaml#/Unprocessable
         description: Invalid identity, empty patch, or profile field (`user_profile_invalid`).
 
+capabilities:
+  get:
+    tags: [Users]
+    operationId: getCurrentAccountCapabilities
+    summary: Get current account capabilities and scopes
+    description: Navigation guidance only; every operation independently reauthorizes current state.
+    security: [{ sessionCookie: [] }]
+    responses:
+      '200':
+        description: Stable release-one actions with explicit current scope, including unavailable actions.
+        headers: { Cache-Control: { $ref: ../openapi.yaml#/components/headers/CacheControlNoStore } }
+        content:
+          application/vnd.api+json:
+            schema: { $ref: ../schemas/resources/resources.yaml#/AccountCapabilitiesDocument }
+      '401': { $ref: ../responses/errors.yaml#/Unauthorized }
+      '403':
+        $ref: ../responses/errors.yaml#/Forbidden
+        description: Restricted session (`auth_password_change_required`).
+      '406': { $ref: ../responses/errors.yaml#/NotAcceptable }
+
+accounts:
+  get:
+    tags: [Users]
+    operationId: listAdministrationAccounts
+    summary: List minimal account administration targets
+    security: [{ sessionCookie: [] }]
+    parameters:
+      - { $ref: ../openapi.yaml#/components/parameters/PageLimit }
+      - { $ref: ../openapi.yaml#/components/parameters/PageOffset }
+      - name: filter[username]
+        in: query
+        schema: { type: string, minLength: 3, maxLength: 32 }
+        description: Exact username after ASCII-lowercase normalization.
+      - name: filter[account_class]
+        in: query
+        schema: { type: string, enum: [staff, student_only] }
+      - name: filter[role]
+        in: query
+        schema: { type: string, enum: [administrator, supervisor, mentor, student] }
+      - name: filter[state]
+        in: query
+        schema: { type: string, enum: [active, banned] }
+    responses:
+      '200':
+        description: Minimal accounts ordered by normalized username and opaque ID; no matches returns an empty page.
+        headers: { Cache-Control: { $ref: ../openapi.yaml#/components/headers/CacheControlNoStore } }
+        content:
+          application/vnd.api+json:
+            schema: { $ref: ../schemas/resources/resources.yaml#/AdministrationAccountCollectionDocument }
+      '401': { $ref: ../responses/errors.yaml#/Unauthorized }
+      '403':
+        $ref: ../responses/errors.yaml#/Forbidden
+        description: Restricted session or non-administrator (`user_administration_unauthorized`).
+      '406': { $ref: ../responses/errors.yaml#/NotAcceptable }
+      '422':
+        $ref: ../responses/errors.yaml#/Unprocessable
+        description: Unsupported, duplicate, empty, malformed, or excessive query (`user_account_query_invalid`).
 mobileChallenges:
   post:
     tags: [Users]
@@ -230,7 +287,15 @@ roles:
     operationId: grantRole
     summary: Grant permanent staff role
     security: [{ sessionCookie: [], csrfToken: [] }]
-    parameters: [{ $ref: ../openapi.yaml#/components/parameters/ResourceID }]
+    parameters:
+      - { $ref: ../openapi.yaml#/components/parameters/ResourceID }
+      - name: If-Match
+        in: header
+        required: false
+        description: >-
+          Exact account-detail ETag; required for administrator and supervisor grants by an administrator. Mentor grants
+          retain their supervisor-scoped target contract until the focused mentor-target preflight is implemented.
+        schema: { type: string, pattern: '^"[0-9a-f]{64}"$' }
     requestBody:
       required: true
       content:
@@ -251,13 +316,38 @@ roles:
         $ref: ../responses/errors.yaml#/NotFound
         description: Missing or ineligible target is hidden (`user_not_found`).
       '406': { $ref: ../responses/errors.yaml#/NotAcceptable }
+      '412': { $ref: ../responses/errors.yaml#/PreconditionFailed }
       '413': { $ref: ../responses/errors.yaml#/RequestTooLarge }
       '415': { $ref: ../responses/errors.yaml#/UnsupportedMediaType }
       '422':
         $ref: ../responses/errors.yaml#/Unprocessable
         description: Invalid resource type or role (`auth_invalid_request`).
+      '428': { $ref: ../responses/errors.yaml#/PreconditionRequired }
 
 account:
+  get:
+    tags: [Users]
+    operationId: getAdministrationAccount
+    summary: Get a minimal account administration target
+    security: [{ sessionCookie: [] }]
+    parameters: [{ $ref: ../openapi.yaml#/components/parameters/ResourceID }]
+    responses:
+      '200':
+        description: Current target state, action eligibility, consequence identifiers, and review validator.
+        headers:
+          Cache-Control: { $ref: ../openapi.yaml#/components/headers/CacheControlNoStore }
+          ETag: { $ref: ../openapi.yaml#/components/headers/StrongETag }
+        content:
+          application/vnd.api+json:
+            schema: { $ref: ../schemas/resources/resources.yaml#/AdministrationAccountDocument }
+      '401': { $ref: ../responses/errors.yaml#/Unauthorized }
+      '403':
+        $ref: ../responses/errors.yaml#/Forbidden
+        description: Restricted session or non-administrator (`user_administration_unauthorized`).
+      '404':
+        $ref: ../responses/errors.yaml#/NotFound
+        description: Missing or inaccessible target (`user_not_found`).
+      '406': { $ref: ../responses/errors.yaml#/NotAcceptable }
   delete:
     tags: [Users]
     operationId: deleteUser
@@ -266,7 +356,9 @@ account:
       An administrator may delete a student-only account. Staff accounts require a different administrator.
       The last administrator and a sole course supervisor cannot be deleted.
     security: [{ sessionCookie: [], csrfToken: [] }]
-    parameters: [{ $ref: ../openapi.yaml#/components/parameters/ResourceID }]
+    parameters:
+      - { $ref: ../openapi.yaml#/components/parameters/ResourceID }
+      - { $ref: ../openapi.yaml#/components/parameters/IfMatch }
     responses:
       '204':
         $ref: ../responses/success.yaml#/NoContent
@@ -287,3 +379,5 @@ account:
         description: >-
           Protected last administrator or sole course supervisor (`user_last_administrator` or
           `user_sole_supervisor`).
+      '412': { $ref: ../responses/errors.yaml#/PreconditionFailed }
+      '428': { $ref: ../responses/errors.yaml#/PreconditionRequired }

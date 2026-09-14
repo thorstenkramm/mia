@@ -351,6 +351,14 @@ OpenAPI defines current-profile, MFA, mobile, and avatar transport details. For
 the singleton `/users/me` alias, PATCH identity is the authenticated account ID,
 not the literal string `me`.
 
+`GET /users/me/capabilities` is the authoritative, non-refreshing navigation
+projection for the current account. It returns the complete release-one action
+catalog on every check. Each action has an explicit availability flag and
+global, course-ID, student-ID, paired course-and-student, and own-resource scope fields; unavailable and
+empty scopes are represented rather than omitted. The projection is recomputed
+from current roles, assignments, memberships, and account state. It guides shell
+and entry-scope visibility but never authorizes a later operation.
+
 Field-level authorization still applies to `PATCH /users/me`. Student-only
 accounts cannot mutate their profiles. Administrators, supervisors, and mentors
 may change their own name, nickname, language, country, time zone, avatar, and TTS
@@ -388,8 +396,23 @@ downloaded representation remains PNG.
 
 ## User administration
 
-The implemented operations are listed in OpenAPI. Planned user-administration
-operations do not create a generic administrator override. Each operation
+The implemented operations are listed in OpenAPI. `GET /users` gives
+administrators a bounded global account collection ordered by normalized
+username and opaque ID. It supports only exact normalized username, account
+class, permanent role, and account-state filters. `GET /users/{id}` returns the
+minimal reviewed target: ID, username, class, state, roles, server-authored
+eligibility, and consequence identifiers. Neither read returns email, other
+profile fields, security state, or course, tutoring, and mentoring content.
+
+Account detail carries a strong `ETag` covering target state, actor authority,
+role-grant prerequisites, administrator count, and sole-supervisor protection.
+Administrator grants of the administrator or supervisor role and account
+deletion require that exact value in `If-Match`. Missing and stale validators
+return `428` and `412` respectively without mutation. The transaction rechecks
+authorization and all effect-driving state before role coupling, cleanup, and
+audit commit.
+
+These user-administration operations do not create a generic administrator override. Each operation
 enforces its role, course, student, and protected-field rules. Student
 provisioning and course membership use the course routes below.
 

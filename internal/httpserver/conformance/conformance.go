@@ -5,9 +5,12 @@ package conformance
 
 import (
 	"encoding/json"
+	"net/http"
 	"net/http/httptest"
 	"strconv"
 	"testing"
+
+	"github.com/gorilla/sessions"
 )
 
 // ContentType is the JSON:API media type every document response must use.
@@ -30,6 +33,33 @@ func Document(t *testing.T, response *httptest.ResponseRecorder) map[string]any 
 		t.Fatalf("document must contain data XOR errors: %s", response.Body.String())
 	}
 	return document
+}
+
+// ExpireSession returns cookies whose encrypted session has an elapsed idle deadline.
+func ExpireSession(t *testing.T, store *sessions.CookieStore, sessionName string,
+	cookies []*http.Cookie) []*http.Cookie {
+	t.Helper()
+	request := httptest.NewRequest(http.MethodGet, "http://mia.test/", nil)
+	for _, cookie := range cookies {
+		request.AddCookie(cookie)
+	}
+	stored, err := store.Get(request, sessionName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored.Values["idle_until"] = int64(1)
+	response := httptest.NewRecorder()
+	if err := store.Save(request, response, stored); err != nil {
+		t.Fatal(err)
+	}
+	replacement := response.Result().Cookies()[0]
+	result := append([]*http.Cookie(nil), cookies...)
+	for index, cookie := range result {
+		if cookie.Name == sessionName {
+			result[index] = replacement
+		}
+	}
+	return result
 }
 
 // Resource asserts one resource object carries the expected type, a non-empty

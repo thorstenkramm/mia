@@ -26,17 +26,29 @@ type Page struct {
 // with defaults 25 and 0. It rejects duplicate, unknown, empty, non-integer,
 // negative, and out-of-range parameters.
 func ParsePagination(values url.Values) (Page, error) {
+	page, _, err := ParsePaginationWithFilters(values, nil)
+	return page, err
+}
+
+// ParsePaginationWithFilters validates pagination plus a route-owned allowlist of
+// single, non-empty exact-match filters. Returned filters preserve navigation.
+func ParsePaginationWithFilters(values url.Values, allowedFilters map[string]bool) (Page, map[string]string, error) {
 	page := Page{Limit: DefaultPageLimit}
+	filters := make(map[string]string)
 	for key, entries := range values {
 		if key != "page[limit]" && key != "page[offset]" {
-			return Page{}, ErrInvalidPagination
+			if !allowedFilters[key] || len(entries) != 1 || entries[0] == "" {
+				return Page{}, nil, ErrInvalidPagination
+			}
+			filters[key] = entries[0]
+			continue
 		}
 		if len(entries) != 1 || entries[0] == "" {
-			return Page{}, ErrInvalidPagination
+			return Page{}, nil, ErrInvalidPagination
 		}
 		value, err := strconv.Atoi(entries[0])
 		if err != nil {
-			return Page{}, ErrInvalidPagination
+			return Page{}, nil, ErrInvalidPagination
 		}
 		if key == "page[limit]" {
 			page.Limit = value
@@ -45,7 +57,7 @@ func ParsePagination(values url.Values) (Page, error) {
 		}
 	}
 	if page.Limit < 1 || page.Limit > MaxPageLimit || page.Offset < 0 || page.Offset > MaxPageOffset {
-		return Page{}, ErrInvalidPagination
+		return Page{}, nil, ErrInvalidPagination
 	}
-	return page, nil
+	return page, filters, nil
 }

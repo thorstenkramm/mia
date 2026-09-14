@@ -50,6 +50,163 @@ User:
         avatar_url:
           type: [string, 'null']
           description: Relative avatar download URL, or null without an avatar.
+CapabilityScope:
+  type: object
+  required: [global, course_ids, student_ids, course_students, own_resource]
+  additionalProperties: false
+  properties:
+    global: { type: boolean }
+    course_ids:
+      type: array
+      items: { type: string }
+    student_ids:
+      type: array
+      items: { type: string }
+    course_students:
+      type: array
+      description: Paired scope for actions that require both course and student assignment.
+      items:
+        type: object
+        required: [course_id, student_id]
+        additionalProperties: false
+        properties:
+          course_id: { type: string }
+          student_id: { type: string }
+    own_resource: { type: boolean }
+AccountCapability:
+  type: object
+  required: [action, available, scope]
+  additionalProperties: false
+  properties:
+    action:
+      type: string
+      enum:
+        - profile.view
+        - profile.edit
+        - accounts.administer
+        - audit.view
+        - jobs.view
+        - courses.create
+        - course_records.manage
+        - course_supervisors.manage
+        - courses.supervise
+        - students.manage
+        - students.ban
+        - students.unban
+        - learning.participate
+        - mentoring.fulfill
+    available: { type: boolean }
+    scope: { $ref: '#/CapabilityScope' }
+AccountCapabilities:
+  type: object
+  required: [type, id, attributes]
+  properties:
+    type: { const: account-capabilities }
+    id: { type: string }
+    attributes:
+      type: object
+      required: [capabilities]
+      additionalProperties: false
+      properties:
+        capabilities:
+          type: array
+          minItems: 14
+          maxItems: 14
+          items: { $ref: '#/AccountCapability' }
+AdministrationActionEligibility:
+  type: object
+  required: [eligible, blockers, consequences]
+  additionalProperties: false
+  properties:
+    eligible: { type: boolean }
+    blockers:
+      type: array
+      items: { $ref: '#/AdministrationActionBlocker' }
+    consequences:
+      type: array
+      items: { $ref: '#/AdministrationActionConsequence' }
+AdministrationActionBlocker:
+  type: string
+  enum:
+    - registered_verified_staff_required
+    - different_administrator_required
+    - last_administrator
+    - sole_course_supervisor
+  description: |
+    Stable reason that a reviewed action is unavailable:
+    * `registered_verified_staff_required` — role grants require an active, verified staff account.
+    * `different_administrator_required` — a staff account must be deleted by another administrator.
+    * `last_administrator` — deleting the final administrator is prohibited.
+    * `sole_course_supervisor` — deletion would leave a course without a supervisor.
+AdministrationActionConsequence:
+  type: string
+  enum:
+    - grant_administrator_role
+    - grant_supervisor_role
+    - grant_student_role
+    - delete_account_operational_data
+    - deidentify_audit_history
+    - remove_assignments
+    - triage_open_work
+    - clear_actor_references
+  description: |
+    Stable effect included in the reviewed state:
+    * `grant_administrator_role` — add the permanent administrator role.
+    * `grant_supervisor_role` — add the permanent supervisor role.
+    * `grant_student_role` — add the coupled permanent student role with a supervisor grant.
+    * `delete_account_operational_data` — remove retained operational data owned by the account.
+    * `deidentify_audit_history` — preserve content-free audit history without the deleted actor reference.
+    * `remove_assignments` — remove the staff account's current assignments.
+    * `triage_open_work` — return affected open work to supervisor triage.
+    * `clear_actor_references` — clear historical actor references required by deletion.
+AdministrationActions:
+  type: object
+  required: [grant_role, delete]
+  additionalProperties: false
+  properties:
+    grant_role:
+      type: object
+      required: [administrator, supervisor]
+      additionalProperties: false
+      properties:
+        administrator: { $ref: '#/AdministrationActionEligibility' }
+        supervisor: { $ref: '#/AdministrationActionEligibility' }
+    delete: { $ref: '#/AdministrationActionEligibility' }
+AdministrationAccount:
+  type: object
+  required: [type, id, attributes]
+  properties:
+    type: { const: administration-accounts }
+    id: { type: string }
+    attributes:
+      type: object
+      required: [username, account_class, account_state, permanent_roles]
+      additionalProperties: false
+      properties:
+        username: { type: string }
+        account_class: { type: string, enum: [staff, student_only] }
+        account_state: { type: string, enum: [active, banned] }
+        permanent_roles:
+          type: array
+          items: { type: string, enum: [administrator, supervisor, mentor, student] }
+AdministrationAccountDetail:
+  type: object
+  required: [type, id, attributes]
+  properties:
+    type: { const: administration-accounts }
+    id: { type: string }
+    attributes:
+      type: object
+      required: [username, account_class, account_state, permanent_roles, actions]
+      additionalProperties: false
+      properties:
+        username: { type: string }
+        account_class: { type: string, enum: [staff, student_only] }
+        account_state: { type: string, enum: [active, banned] }
+        permanent_roles:
+          type: array
+          items: { type: string, enum: [administrator, supervisor, mentor, student] }
+        actions: { $ref: '#/AdministrationActions' }
 CreatedUser:
   description: >-
     Identity-only users resource returned by invitation acceptance. Attributes
@@ -1182,6 +1339,25 @@ UserDocument:
   properties:
     data:
       $ref: '#/User'
+AccountCapabilitiesDocument:
+  type: object
+  required: [data]
+  properties:
+    data: { $ref: '#/AccountCapabilities' }
+AdministrationAccountDocument:
+  type: object
+  required: [data]
+  properties:
+    data: { $ref: '#/AdministrationAccountDetail' }
+AdministrationAccountCollectionDocument:
+  type: object
+  required: [data, meta]
+  properties:
+    data:
+      type: array
+      items: { $ref: '#/AdministrationAccount' }
+    meta: { $ref: ../json-api/documents.yaml#/PageMeta }
+    links: { $ref: ../json-api/documents.yaml#/PageLinks }
 CreatedUserDocument:
   type: object
   required: [data]

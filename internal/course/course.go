@@ -97,6 +97,45 @@ type MembershipListResult struct {
 	HasMore     bool
 }
 
+// CapabilityScope contains course-owned IDs used only for current-account navigation guidance.
+type CapabilityScope struct {
+	SupervisedCourseIDs []string
+	JoinedCourseIDs     []string
+	ManagedStudentIDs   []string
+}
+
+// LoadCapabilityScope returns the actor's current assignments and memberships.
+func LoadCapabilityScope(ctx context.Context, query miSQLite.Querier, actorID string) (CapabilityScope, error) {
+	var scope CapabilityScope
+	var err error
+	if scope.SupervisedCourseIDs, err = queryStrings(ctx, query, `SELECT course_id FROM course_supervisors
+		WHERE supervisor_user_id = ? ORDER BY course_id`, actorID); err != nil {
+		return CapabilityScope{}, fmt.Errorf("load supervised course scope: %w", err)
+	}
+	if scope.JoinedCourseIDs, err = queryStrings(ctx, query, `SELECT course_id FROM course_students
+		WHERE student_user_id = ? ORDER BY course_id`, actorID); err != nil {
+		return CapabilityScope{}, fmt.Errorf("load joined course scope: %w", err)
+	}
+	if scope.ManagedStudentIDs, err = queryStrings(ctx, query, `SELECT DISTINCT student.student_user_id
+		FROM course_students student JOIN course_supervisors supervisor ON supervisor.course_id = student.course_id
+		WHERE supervisor.supervisor_user_id = ? ORDER BY student.student_user_id`, actorID); err != nil {
+		return CapabilityScope{}, fmt.Errorf("load managed student scope: %w", err)
+	}
+	return scope, nil
+}
+
+func queryStrings(ctx context.Context, query miSQLite.Querier, statement string, args ...any) ([]string, error) {
+	rows, err := query.QueryContext(ctx, statement, args...)
+	if err != nil {
+		return nil, err
+	}
+	values, err := miSQLite.ScanStrings(rows)
+	if values == nil {
+		values = []string{}
+	}
+	return values, err
+}
+
 type ProvisionStudentInput struct {
 	Username, Password, Language, Country, TimeZone string
 	ActorID                                         string
@@ -878,16 +917,11 @@ func (service *Service) Delete(ctx context.Context, courseID, actorID string) er
 // DeleteAccountData enforces the course supervisor invariant, then removes the
 // deleted account's current course relationships in the caller's transaction.
 func (service *Service) DeleteAccountData(ctx context.Context, query miSQLite.Querier, accountID string) error {
-	var sole int
-	err := query.QueryRowContext(ctx, `SELECT EXISTS(
-		SELECT 1 FROM course_supervisors target WHERE target.supervisor_user_id = ?
-		AND NOT EXISTS(SELECT 1 FROM course_supervisors other
-			WHERE other.course_id = target.course_id AND other.supervisor_user_id <> target.supervisor_user_id)
-	)`, accountID).Scan(&sole)
+	sole, err := IsSoleSupervisor(ctx, query, accountID)
 	if err != nil {
-		return fmt.Errorf("check sole course supervisor: %w", err)
+		return err
 	}
-	if sole != 0 {
+	if sole {
 		return lifecycle.ErrAccountDeletionBlocked
 	}
 	if _, err := query.ExecContext(ctx, "DELETE FROM course_students WHERE student_user_id = ?", accountID); err != nil {
@@ -897,6 +931,20 @@ func (service *Service) DeleteAccountData(ctx context.Context, query miSQLite.Qu
 		return fmt.Errorf("delete account supervisor assignments: %w", err)
 	}
 	return nil
+}
+
+// IsSoleSupervisor reports whether removing an account would leave a course unsupervised.
+func IsSoleSupervisor(ctx context.Context, query miSQLite.Querier, accountID string) (bool, error) {
+	var sole int
+	err := query.QueryRowContext(ctx, `SELECT EXISTS(
+		SELECT 1 FROM course_supervisors target WHERE target.supervisor_user_id = ?
+		AND NOT EXISTS(SELECT 1 FROM course_supervisors other
+			WHERE other.course_id = target.course_id AND other.supervisor_user_id <> target.supervisor_user_id)
+	)`, accountID).Scan(&sole)
+	if err != nil {
+		return false, fmt.Errorf("check sole course supervisor: %w", err)
+	}
+	return sole != 0, nil
 }
 
 func loadScoped(ctx context.Context, query miSQLite.Querier, courseID, actorID string, supervisorOnly bool) (Course, error) {

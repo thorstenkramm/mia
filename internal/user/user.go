@@ -49,6 +49,46 @@ type Account struct {
 	Banned             bool
 }
 
+// StudentOnlyState returns whether an account is student-only and its ban state.
+func StudentOnlyState(ctx context.Context, query miSQLite.Querier, userID string) (bool, bool, error) {
+	var student, staff, banned int
+	err := query.QueryRowContext(ctx, `SELECT
+		EXISTS(SELECT 1 FROM user_roles WHERE user_id = users.id AND role = 'student'),
+		EXISTS(SELECT 1 FROM user_roles WHERE user_id = users.id AND role IN ('administrator','supervisor','mentor')),
+		is_banned FROM users WHERE id = ?`, userID).Scan(&student, &staff, &banned)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, false, nil
+	}
+	if err != nil {
+		return false, false, fmt.Errorf("load student-only state: %w", err)
+	}
+	return student != 0 && staff == 0, banned != 0, nil
+}
+
+// Roles returns the account's permanent roles in stable product order.
+func Roles(ctx context.Context, query miSQLite.Querier, userID string) ([]Role, error) {
+	rows, err := query.QueryContext(ctx, `SELECT role FROM user_roles WHERE user_id = ?
+		ORDER BY CASE role WHEN 'administrator' THEN 1 WHEN 'supervisor' THEN 2 WHEN 'mentor' THEN 3 ELSE 4 END`, userID)
+	if err != nil {
+		return nil, fmt.Errorf("list user roles: %w", err)
+	}
+	roles := make([]Role, 0, 4)
+	for rows.Next() {
+		var role Role
+		if err := rows.Scan(&role); err != nil {
+			return nil, errors.Join(fmt.Errorf("scan user role: %w", err), rows.Close())
+		}
+		roles = append(roles, role)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, errors.Join(fmt.Errorf("iterate user roles: %w", err), rows.Close())
+	}
+	if err := rows.Close(); err != nil {
+		return nil, fmt.Errorf("close user roles: %w", err)
+	}
+	return roles, nil
+}
+
 // MFAProfile contains the account data auth needs for MFA flows. user owns
 // these account-record reads even when auth owns the MFA tables.
 type MFAProfile struct {
