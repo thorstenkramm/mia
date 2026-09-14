@@ -1184,6 +1184,9 @@ Columns:
 - `owner_user_id`, nullable owning student ID, cascade on account deletion
 - `created_at`, not null
 - `available_at`, not null
+- `state_changed_at`, nullable authoritative UTC instant of the latest job-state
+  transition; legacy in-progress retries remain null when that historical instant
+  cannot be recovered during migration
 - `started_at`, nullable
 - `lease_token`, nullable random claim value
 - `lease_expires_at`, nullable
@@ -1201,7 +1204,9 @@ Constraints:
 - Failure fields never store raw provider payloads, prompts, material content, or
   chat content.
 - Queue claiming, creation of a unique two-minute lease token, and state
-  transition are atomic. A running worker renews its lease every 30 seconds.
+  transition are atomic. Every queued, running, retry-scheduled, succeeded,
+  failed, or cancelled transition updates `state_changed_at`. A running worker
+  renews its lease every 30 seconds without changing that instant.
 - Claiming a queued job increments `attempt_count` in the same transaction. The
   counter enforces the three-attempt bound and survives restart.
 - Result commits require matching running state and lease token. An expired or

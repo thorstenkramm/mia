@@ -718,9 +718,25 @@ generating. Response retry is available only when the session is idle.
 Completed sessions reject new message creation and response retry but still
 return retained identical message replays.
 
-An assigned supervisor may request summary generation manually only for a
-completed session with no summary, no queued or running summary job, and at least
-one earlier terminally failed summary job.
+Every authorized session read carries a summary lifecycle independent from the
+nullable summary fields. The lifecycle is one of queued, generating,
+automatic-retry-scheduled, generated, supervisor-corrected, terminal-failure, or
+unavailable. It contains the authoritative state-change instant, read instant,
+and scheduled-retry instant only when applicable. It exposes no job identity,
+attempt count, failure diagnostic, lease, provider payload, or usage value.
+An immediate startup recovery remains queued with no scheduled-retry instant;
+only a delayed transient retry is automatic-retry-scheduled.
+A delayed retry retained across migration remains automatic-retry-scheduled when
+its durable attempt count and future availability prove that state, while its
+unrecoverable historical state-change instant remains null.
+
+Regeneration eligibility is a separate server-authored boolean. It is true only
+to an assigned supervisor for a completed session with no summary, no queued or
+running summary job, and at least one earlier terminally failed summary job. A
+student can read their summary lifecycle but never receives regeneration
+eligibility. Successful regeneration returns `202` with the session and its
+queued lifecycle. A conflict or ambiguous transport outcome is reconciled by
+reading the session; the client does not replay the mutation automatically.
 
 Assigned supervisors can see active-session status — including the session's
 start and last-activity instants — but cannot retrieve messages until

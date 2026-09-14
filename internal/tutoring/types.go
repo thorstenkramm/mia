@@ -25,6 +25,16 @@ type Session struct {
 	StartedAt, LastActivityAt                      time.Time
 	CompletedAt, SummaryUpdatedAt                  *time.Time
 	SelectedMaterialIDs                            []string
+	SummaryLifecycle                               SummaryLifecycle
+}
+
+// SummaryLifecycle is the safe tutoring-domain projection of summary work.
+type SummaryLifecycle struct {
+	State                 string
+	StateChangedAt        *time.Time
+	LastCheckedAt         time.Time
+	RetryScheduledFor     *time.Time
+	RegenerationAvailable bool
 }
 
 // ActiveSession is the minimal owned-session and course context used for cross-course discovery.

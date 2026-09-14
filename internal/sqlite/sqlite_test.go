@@ -64,6 +64,7 @@ func TestMFAFactorMigrationBackfillsOpaqueRequiredID(t *testing.T) {
 		DROP INDEX tutor_responses_retry_request_idx;
 		ALTER TABLE tutor_responses DROP COLUMN retry_request_digest;
 		ALTER TABLE tutor_responses DROP COLUMN retry_request_id;
+		ALTER TABLE jobs DROP COLUMN state_changed_at;
 		UPDATE schema_migrations SET version = 17, dirty = 0;`)
 	if err != nil {
 		t.Fatal(err)
@@ -94,6 +95,61 @@ func TestMFAFactorMigrationBackfillsOpaqueRequiredID(t *testing.T) {
 	}
 }
 
+func TestJobStateTimingMigrationPreservesUnknownRetryTransition(t *testing.T) {
+	directory := t.TempDir()
+	if err := os.Chmod(directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	database, err := Open(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	createdAt := "2026-09-14T10:00:00.000000Z"
+	availableAt := "2026-09-14T10:05:00.000000Z"
+	statements := []struct {
+		query string
+		args  []any
+	}{
+		{`INSERT INTO users (id, username, username_key, password_hash, preferred_language, country, time_zone, created_at)
+			VALUES ('u_retry', 'retry', 'retry', 'hash', 'en', 'DE', 'UTC', ?)`, []any{createdAt}},
+		{`INSERT INTO courses (id, name, name_normalized, created_at, created_by)
+			VALUES ('cou_retry', 'Retry', 'retry', ?, 'u_retry')`, []any{createdAt}},
+		{`INSERT INTO jobs (id, type, subject_type, subject_id, course_id, state, attempt_count, available_at,
+			created_at, state_changed_at) VALUES ('job_retry', 'material-summary', 'material', 'mat_retry', 'cou_retry',
+			'queued', 1, ?, ?, ?)`, []any{availableAt, createdAt, createdAt}},
+		{"ALTER TABLE jobs DROP COLUMN state_changed_at", nil},
+		{"UPDATE schema_migrations SET version = 19, dirty = 0", nil},
+	}
+	for _, statement := range statements {
+		if _, err := database.ExecContext(ctx, statement.query, statement.args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+	database, err = Open(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := database.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
+	var attempt int
+	var migratedAvailable string
+	var stateChanged sql.NullString
+	if err := database.QueryRowContext(ctx, `SELECT attempt_count, available_at, state_changed_at FROM jobs
+		WHERE id = 'job_retry'`).Scan(&attempt, &migratedAvailable, &stateChanged); err != nil {
+		t.Fatal(err)
+	}
+	if attempt != 1 || migratedAvailable != availableAt || stateChanged.Valid {
+		t.Fatalf("migrated retry attempt=%d available=%q state_changed=%#v", attempt, migratedAvailable, stateChanged)
+	}
+}
+
 func TestOpenRejectsInsecureRestoredDatabase(t *testing.T) {
 	directory := t.TempDir()
 	if err := os.Chmod(directory, 0o700); err != nil {
@@ -116,7 +172,7 @@ func TestOpenRejectsInsecureRestoredDatabase(t *testing.T) {
 }
 
 func TestOpenRejectsDirtyAndNewerSchema(t *testing.T) {
-	for name, statement := range map[string]string{"dirty": "UPDATE schema_migrations SET dirty = 1", "newer": "UPDATE schema_migrations SET version = 20"} {
+	for name, statement := range map[string]string{"dirty": "UPDATE schema_migrations SET dirty = 1", "newer": "UPDATE schema_migrations SET version = 21"} {
 		t.Run(name, func(t *testing.T) {
 			directory := t.TempDir()
 			if err := os.Chmod(directory, 0o700); err != nil {

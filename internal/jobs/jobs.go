@@ -52,6 +52,49 @@ type Result struct {
 	ProviderOutputUnits int64
 }
 
+// SubjectState is the durable work state exposed to an owning feature. It is not an HTTP representation.
+type SubjectState struct {
+	State                   string
+	Attempt, Active, Failed int
+	AvailableAt             time.Time
+	StateChangedAt          *time.Time
+}
+
+// InspectSubject returns the current active job or latest retained job for one feature-owned subject.
+func InspectSubject(ctx context.Context, query miSQLite.Querier, jobType, subjectType,
+	subjectID string) (SubjectState, bool, error) {
+	var value SubjectState
+	var available string
+	var changed sql.NullString
+	err := query.QueryRowContext(ctx, `SELECT state, attempt_count, available_at,
+		state_changed_at,
+		(SELECT COUNT(*) FROM jobs active WHERE active.type = ? AND active.subject_type = ?
+			AND active.subject_id = ? AND active.state IN ('queued', 'running')),
+		(SELECT COUNT(*) FROM jobs failed WHERE failed.type = ? AND failed.subject_type = ?
+			AND failed.subject_id = ? AND failed.state = 'failed')
+		FROM jobs WHERE type = ? AND subject_type = ? AND subject_id = ?
+		ORDER BY CASE WHEN state IN ('queued', 'running') THEN 0 ELSE 1 END, created_at DESC, id DESC LIMIT 1`,
+		jobType, subjectType, subjectID, jobType, subjectType, subjectID, jobType, subjectType, subjectID).
+		Scan(&value.State, &value.Attempt, &available, &changed, &value.Active, &value.Failed)
+	if errors.Is(err, sql.ErrNoRows) {
+		return SubjectState{}, false, nil
+	}
+	if err != nil {
+		return SubjectState{}, false, fmt.Errorf("inspect subject jobs: %w", err)
+	}
+	if value.AvailableAt, err = parseInstant(available); err != nil {
+		return SubjectState{}, false, err
+	}
+	if changed.Valid {
+		parsed, parseErr := parseInstant(changed.String)
+		if parseErr != nil {
+			return SubjectState{}, false, parseErr
+		}
+		value.StateChangedAt = &parsed
+	}
+	return value, true, nil
+}
+
 // Handler executes one registered type. Commit runs in the same transaction as
 // the lease-guarded job transition. Its returned finalizer receives true only
 // after that transaction commits, allowing reversible file publication.
@@ -112,8 +155,9 @@ func Enqueue(ctx context.Context, query miSQLite.Querier, jobType, subjectType, 
 	id := "job_" + uuid.NewString()
 	now := instant(time.Now())
 	_, err := query.ExecContext(ctx, `INSERT INTO jobs
-		(id, type, subject_type, subject_id, course_id, owner_user_id, available_at, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, id, jobType, subjectType, subjectID, courseID, nullable(ownerID), now, now)
+		(id, type, subject_type, subject_id, course_id, owner_user_id, available_at, created_at, state_changed_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, id, jobType, subjectType, subjectID, courseID, nullable(ownerID), now, now,
+		now)
 	if err != nil {
 		return "", fmt.Errorf("enqueue job: %w", err)
 	}
@@ -145,9 +189,10 @@ func (worker *Worker) Recover(ctx context.Context) error {
 		}
 		for _, job := range abandoned {
 			if job.Attempt < maxAttempts {
+				now := instant(time.Now())
 				if _, err := tx.ExecContext(ctx, `UPDATE jobs SET state = 'queued', lease_token = NULL,
-					lease_expires_at = NULL, available_at = ?, failure_code = 'worker_restarted'
-					WHERE id = ? AND state = 'running' AND lease_token = ?`, instant(time.Now()), job.ID,
+					lease_expires_at = NULL, available_at = ?, failure_code = 'worker_restarted', state_changed_at = ?
+					WHERE id = ? AND state = 'running' AND lease_token = ?`, now, now, job.ID,
 					job.LeaseToken); err != nil {
 					return fmt.Errorf("requeue abandoned job: %w", err)
 				}
@@ -279,8 +324,9 @@ func (worker *Worker) claim(ctx context.Context) (Job, bool, error) {
 		job.Attempt++
 		now := time.Now()
 		result, err := tx.ExecContext(ctx, `UPDATE jobs SET state = 'running', attempt_count = ?, lease_token = ?,
-			lease_expires_at = ?, started_at = COALESCE(started_at, ?) WHERE id = ? AND state = 'queued'`, job.Attempt,
-			job.LeaseToken, instant(now.Add(leaseDuration)), instant(now), job.ID)
+			lease_expires_at = ?, started_at = COALESCE(started_at, ?), state_changed_at = ?
+			WHERE id = ? AND state = 'queued'`, job.Attempt, job.LeaseToken, instant(now.Add(leaseDuration)), instant(now),
+			instant(now), job.ID)
 		if err != nil {
 			return fmt.Errorf("claim due job: %w", err)
 		}
@@ -368,11 +414,12 @@ func (worker *Worker) finishSuccess(ctx context.Context, job Job, handler Handle
 		if err != nil {
 			return err
 		}
+		now := instant(time.Now())
 		_, err = tx.ExecContext(ctx, `UPDATE jobs SET state = 'succeeded', lease_token = NULL,
 			lease_expires_at = NULL, failure_code = NULL, finished_at = ?,
-			provider_input_units = provider_input_units + ?, provider_output_units = provider_output_units + ?
-			WHERE id = ? AND state = 'running' AND lease_token = ?`, instant(time.Now()), result.ProviderInputUnits,
-			result.ProviderOutputUnits, job.ID, job.LeaseToken)
+			provider_input_units = provider_input_units + ?, provider_output_units = provider_output_units + ?,
+			state_changed_at = ? WHERE id = ? AND state = 'running' AND lease_token = ?`, now,
+			result.ProviderInputUnits, result.ProviderOutputUnits, now, job.ID, job.LeaseToken)
 		return err
 	})
 	if finalize != nil {
@@ -394,11 +441,12 @@ func (worker *Worker) finishFailure(ctx context.Context, job Job, failure *Failu
 			if failure.RetryAfter > delay {
 				delay = min(failure.RetryAfter, time.Hour)
 			}
+			now := time.Now()
 			_, err := tx.ExecContext(ctx, `UPDATE jobs SET state = 'queued', lease_token = NULL,
 				lease_expires_at = NULL, available_at = ?, failure_code = ?,
-				provider_input_units = provider_input_units + ?, provider_output_units = provider_output_units + ?
-				WHERE id = ? AND lease_token = ?`, instant(time.Now().Add(delay)), failure.Code,
-				failure.ProviderInputUnits, failure.ProviderOutputUnits, job.ID, job.LeaseToken)
+				provider_input_units = provider_input_units + ?, provider_output_units = provider_output_units + ?,
+				state_changed_at = ? WHERE id = ? AND lease_token = ?`, instant(now.Add(delay)), failure.Code,
+				failure.ProviderInputUnits, failure.ProviderOutputUnits, instant(now), job.ID, job.LeaseToken)
 			return err
 		}
 		return worker.failTerminalWithUsage(ctx, tx, job, failure.Code, failure.ProviderInputUnits,
@@ -427,10 +475,11 @@ func (worker *Worker) failTerminalWithUsage(
 			return err
 		}
 	}
+	now := instant(time.Now())
 	_, err := tx.ExecContext(ctx, `UPDATE jobs SET state = 'failed', lease_token = NULL,
 		lease_expires_at = NULL, failure_code = ?, finished_at = ?,
-		provider_input_units = provider_input_units + ?, provider_output_units = provider_output_units + ?
-		WHERE id = ? AND state = 'running'`, code, instant(time.Now()), inputUnits, outputUnits, job.ID)
+		provider_input_units = provider_input_units + ?, provider_output_units = provider_output_units + ?,
+		state_changed_at = ? WHERE id = ? AND state = 'running'`, code, now, inputUnits, outputUnits, now, job.ID)
 	return err
 }
 
@@ -467,9 +516,10 @@ func RetryAfter(value string) time.Duration {
 }
 
 func CancelBySubject(ctx context.Context, query miSQLite.Querier, subjectType, subjectID string) error {
+	now := instant(time.Now())
 	_, err := query.ExecContext(ctx, `UPDATE jobs SET state = 'cancelled', lease_token = NULL, lease_expires_at = NULL,
-		finished_at = ? WHERE subject_type = ? AND subject_id = ? AND state IN ('queued', 'running')`, instant(time.Now()),
-		subjectType, subjectID)
+		finished_at = ?, state_changed_at = ? WHERE subject_type = ? AND subject_id = ?
+		AND state IN ('queued', 'running')`, now, now, subjectType, subjectID)
 	return err
 }
 
@@ -483,7 +533,8 @@ func CancelSubjects(ctx context.Context, query miSQLite.Querier, subjectIDs []st
 		return nil
 	}
 	placeholders := make([]string, len(subjectIDs))
-	args := []any{instant(time.Now())}
+	now := instant(time.Now())
+	args := []any{now, now}
 	for index, id := range subjectIDs {
 		placeholders[index] = "?"
 		args = append(args, id)
@@ -494,7 +545,7 @@ func CancelSubjects(ctx context.Context, query miSQLite.Querier, subjectIDs []st
 		args = append(args, excludeJobID)
 	}
 	_, err := query.ExecContext(ctx, `UPDATE jobs SET state = 'cancelled', lease_token = NULL,
-		lease_expires_at = NULL, finished_at = ? WHERE subject_id IN (`+strings.Join(placeholders, ",")+
+		lease_expires_at = NULL, finished_at = ?, state_changed_at = ? WHERE subject_id IN (`+strings.Join(placeholders, ",")+
 		`) AND state IN ('queued', 'running')`+condition, args...)
 	return err
 }

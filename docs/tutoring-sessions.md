@@ -165,6 +165,35 @@ message. Identical replay returns the existing linked response, including after
 session completion; changed payload reuse conflicts. A new retry still requires
 an active idle session.
 
+## Session summary lifecycle
+
+Completing an idle session and queuing its summary job are one transaction. The
+returned session therefore reports queued summary lifecycle immediately, while
+the completed transcript is independently available to the student and assigned
+supervisors.
+
+Authorized session reads report summary lifecycle as queued, generating,
+automatic-retry-scheduled, generated, supervisor-corrected, terminal-failure, or
+unavailable. This state does not depend on whether summary content is null. The
+projection includes only its authoritative state-change instant, the current
+read instant, and the scheduled retry instant while one applies. It omits job
+identity, attempts, leases, diagnostics, usage, and provider data.
+Immediate startup recovery reports queued with no scheduled-retry instant. Only
+a delayed retry following transient failure reports automatic-retry-scheduled.
+A migrated delayed retry may retain a null state-change instant when that history
+cannot be recovered; a prior attempt and future availability still distinguish
+it from immediate restart recovery.
+
+Regeneration eligibility is separate from lifecycle. It is visible as true only
+to an assigned supervisor after terminal failure while the session remains
+completed, no summary exists, and no summary work is queued or running. The
+student can follow lifecycle but cannot request regeneration. A successful
+domain regeneration action returns the queued lifecycle. Concurrent or ambiguous
+requests are reconciled by reading the session rather than replaying the action.
+Supervisor correction marks queued or running summary work cancelled in the same
+transaction and always takes precedence over delayed generated results. It does
+not wait for or promise cancellation of a provider call already in flight.
+
 ## Starting a tutoring session
 
 A student can conduct only one session at a time across all courses. Starting

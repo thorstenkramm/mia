@@ -181,10 +181,31 @@ session-owned summary job.
 
 The generated summary and follow-up are drafts. An assigned supervisor can
 correct them, and every correction is audited. Regeneration must not silently
-overwrite supervisor corrections. The completed chat history remains immutable.
+overwrite supervisor corrections. Correction marks queued or running summary
+work cancelled transactionally, and lease guards discard a delayed result. It
+does not coordinate with an in-flight provider call. The completed chat history
+remains immutable.
 
 Session completion atomically queues one summary job. After automatic attempts
 end in a terminally failed summary job, an assigned supervisor may request
 regeneration only while the session remains completed, the summary is absent, and
 no summary job is queued or running. This domain action creates a new job; MIA
 exposes no generic job-retry route.
+
+Student owners and currently assigned supervisors follow this work through the
+tutoring-session summary lifecycle, not through generic job records. The domain
+projection maps work to queued, generating, automatic-retry-scheduled,
+generated, supervisor-corrected, terminal-failure, or unavailable and returns
+only state-change, read, and applicable retry timing. Regeneration eligibility is
+separate and true only to an assigned supervisor while all domain preconditions
+hold. Job IDs, attempts, leases, failure diagnostics, usage, and provider data do
+not appear in that projection.
+
+A delayed transient failure is automatic-retry-scheduled and exposes its future
+retry instant. Startup recovery requeues interrupted work for immediate
+availability, so its summary lifecycle is queued and has no scheduled-retry
+instant.
+For a delayed retry migrated from a schema that did not retain transition time,
+the prior attempt count and future `available_at` still prove delayed-retry
+provenance. Its lifecycle remains automatic-retry-scheduled while the unknown
+historical state-change instant remains null rather than being invented.

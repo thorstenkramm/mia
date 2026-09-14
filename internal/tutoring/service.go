@@ -129,19 +129,19 @@ func (service *Service) Start(ctx context.Context, input StartInput) (Session, b
 		}
 		return nil
 	})
+	if err == nil {
+		created.SummaryLifecycle = unavailableSummaryLifecycle()
+	}
 	return created, replay, err
 }
 
 func (service *Service) Get(ctx context.Context, sessionID, actorID string) (Session, error) {
-	session, role, err := loadScopedSession(ctx, service.database, sessionID, actorID)
-	if err != nil {
-		return Session{}, err
-	}
-	if role == "supervisor" && session.State == "active" {
-		session.Summary, session.FollowUp, session.SummarySource, session.SummaryActor = "", "", "", ""
-		return session, nil
-	}
-	err = loadSelected(ctx, service.database, &session)
+	var session Session
+	err := miSQLite.WithTx(ctx, service.database, func(tx *sql.Tx) error {
+		var err error
+		session, err = service.loadSessionView(ctx, tx, sessionID, actorID)
+		return err
+	})
 	return session, err
 }
 
@@ -211,6 +211,15 @@ func (service *Service) List(ctx context.Context, courseID, actorID string, inpu
 	}
 	if err := rows.Close(); err != nil {
 		return ListResult{}, err
+	}
+	role := "owner"
+	if supervisor {
+		role = "supervisor"
+	}
+	for index := range sessions {
+		if err := service.setSummaryLifecycle(ctx, service.database, &sessions[index], role); err != nil {
+			return ListResult{}, err
+		}
 	}
 	hasMore := len(sessions) > input.Limit
 	if hasMore {
@@ -576,6 +585,7 @@ func (service *Service) InterruptAndCurrentWork(ctx context.Context, responseID,
 }
 
 func (service *Service) Complete(ctx context.Context, sessionID, actorID string) (Session, error) {
+	var completed Session
 	err := miSQLite.WithTx(ctx, service.database, func(tx *sql.Tx) error {
 		var courseID, state string
 		if err := tx.QueryRowContext(ctx, `SELECT course_id, state FROM tutoring_sessions
@@ -598,13 +608,18 @@ func (service *Service) Complete(ctx context.Context, sessionID, actorID string)
 			completed_by = ?, last_activity_at = ? WHERE id = ? AND state = 'active'`, now, actorID, now, sessionID); err != nil {
 			return err
 		}
-		_, err := jobs.Enqueue(ctx, tx, "tutoring-session-summary", "tutoring-session", sessionID, courseID, actorID)
+		if _, err := jobs.Enqueue(ctx, tx, "tutoring-session-summary", "tutoring-session", sessionID, courseID,
+			actorID); err != nil {
+			return err
+		}
+		var err error
+		completed, err = service.loadSessionView(ctx, tx, sessionID, actorID)
 		return err
 	})
 	if err != nil {
 		return Session{}, err
 	}
-	return service.Get(ctx, sessionID, actorID)
+	return completed, nil
 }
 
 func (service *Service) CorrectSummary(ctx context.Context, sessionID, actorID, summary, followUp string) (Session, error) {
@@ -625,6 +640,9 @@ func (service *Service) CorrectSummary(ctx context.Context, sessionID, actorID, 
 		if state != "completed" {
 			return ErrInvalidState
 		}
+		if err := jobs.CancelBySubject(ctx, tx, "tutoring-session", sessionID); err != nil {
+			return err
+		}
 		now := instant(time.Now())
 		if _, err := tx.ExecContext(ctx, `UPDATE tutoring_sessions SET summary = ?, follow_up = ?,
 			summary_source = 'supervisor', summary_updated_at = ?, summary_updated_by = ? WHERE id = ?`,
@@ -640,8 +658,12 @@ func (service *Service) CorrectSummary(ctx context.Context, sessionID, actorID, 
 	return service.Get(ctx, sessionID, actorID)
 }
 
-func (service *Service) RegenerateSummary(ctx context.Context, sessionID, actorID string) error {
-	return miSQLite.WithTx(ctx, service.database, func(tx *sql.Tx) error {
+func (service *Service) RegenerateSummary(ctx context.Context, sessionID, actorID string) (Session, error) {
+	var regenerated Session
+	err := miSQLite.WithTx(ctx, service.database, func(tx *sql.Tx) error {
+		if err := lockSummaryForRegeneration(ctx, tx, sessionID, actorID); err != nil {
+			return err
+		}
 		var courseID, ownerID, state string
 		var summary sql.NullString
 		err := tx.QueryRowContext(ctx, `SELECT s.course_id, s.student_user_id, s.state, s.summary
@@ -657,19 +679,108 @@ func (service *Service) RegenerateSummary(ctx context.Context, sessionID, actorI
 		if state != "completed" || summary.Valid {
 			return ErrInvalidState
 		}
-		var active, failed int
-		if err := tx.QueryRowContext(ctx, `SELECT
-			COUNT(*) FILTER (WHERE state IN ('queued', 'running')),
-			COUNT(*) FILTER (WHERE state = 'failed') FROM jobs
-			WHERE type = 'tutoring-session-summary' AND subject_id = ?`, sessionID).Scan(&active, &failed); err != nil {
+		jobState, found, err := jobs.InspectSubject(ctx, tx, "tutoring-session-summary", "tutoring-session", sessionID)
+		if err != nil {
 			return err
 		}
-		if active != 0 || failed == 0 {
+		if !found || jobState.Active != 0 || jobState.Failed == 0 {
 			return ErrInvalidState
 		}
-		_, err = jobs.Enqueue(ctx, tx, "tutoring-session-summary", "tutoring-session", sessionID, courseID, ownerID)
+		if _, err = jobs.Enqueue(ctx, tx, "tutoring-session-summary", "tutoring-session", sessionID, courseID,
+			ownerID); err != nil {
+			if strings.Contains(err.Error(), "jobs_active_tutoring_summary_idx") {
+				return ErrInvalidState
+			}
+			return err
+		}
+		regenerated, err = service.loadSessionView(ctx, tx, sessionID, actorID)
 		return err
 	})
+	return regenerated, err
+}
+
+func (service *Service) loadSessionView(ctx context.Context, query miSQLite.Querier, sessionID,
+	actorID string) (Session, error) {
+	value, role, err := loadScopedSession(ctx, query, sessionID, actorID)
+	if err != nil {
+		return Session{}, err
+	}
+	if role == "supervisor" && value.State == "active" {
+		value.Summary, value.FollowUp, value.SummarySource, value.SummaryActor = "", "", "", ""
+	} else if err := loadSelected(ctx, query, &value); err != nil {
+		return Session{}, err
+	}
+	if err := service.setSummaryLifecycle(ctx, query, &value, role); err != nil {
+		return Session{}, err
+	}
+	return value, nil
+}
+
+func (service *Service) setSummaryLifecycle(ctx context.Context, query miSQLite.Querier, session *Session,
+	role string) error {
+	lifecycle := unavailableSummaryLifecycle()
+	if session.State != "completed" {
+		session.SummaryLifecycle = lifecycle
+		return nil
+	}
+	if session.SummarySource == "supervisor" {
+		lifecycle.State, lifecycle.StateChangedAt = "supervisor-corrected", session.SummaryUpdatedAt
+		session.SummaryLifecycle = lifecycle
+		return nil
+	}
+	if session.SummarySource == "generated" {
+		lifecycle.State, lifecycle.StateChangedAt = "generated", session.SummaryUpdatedAt
+		session.SummaryLifecycle = lifecycle
+		return nil
+	}
+	job, found, err := jobs.InspectSubject(ctx, query, "tutoring-session-summary", "tutoring-session", session.ID)
+	if !found && err == nil {
+		session.SummaryLifecycle = lifecycle
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	lifecycle.StateChangedAt = job.StateChangedAt
+	switch job.State {
+	case "running":
+		lifecycle.State = "generating"
+	case "queued":
+		lifecycle.State = "queued"
+		delayedRetry := job.StateChangedAt != nil && job.AvailableAt.After(*job.StateChangedAt)
+		migratedDelayedRetry := job.StateChangedAt == nil && job.AvailableAt.After(lifecycle.LastCheckedAt)
+		if job.Attempt > 0 && (delayedRetry || migratedDelayedRetry) {
+			lifecycle.State = "automatic-retry-scheduled"
+			lifecycle.RetryScheduledFor = &job.AvailableAt
+		}
+	case "failed":
+		lifecycle.State = "terminal-failure"
+	}
+	lifecycle.RegenerationAvailable = role == "supervisor" && job.Active == 0 && job.Failed > 0
+	session.SummaryLifecycle = lifecycle
+	return nil
+}
+
+func unavailableSummaryLifecycle() SummaryLifecycle {
+	return SummaryLifecycle{State: "unavailable", LastCheckedAt: time.Now()}
+}
+
+// lockSummaryForRegeneration serializes the domain retry decision and preserves existence hiding.
+func lockSummaryForRegeneration(ctx context.Context, tx *sql.Tx, sessionID, actorID string) error {
+	result, err := tx.ExecContext(ctx, `UPDATE tutoring_sessions SET last_activity_at = last_activity_at WHERE id = ?
+		AND EXISTS(SELECT 1 FROM course_supervisors WHERE course_id = tutoring_sessions.course_id
+		AND supervisor_user_id = ?)`, sessionID, actorID)
+	if err != nil {
+		return err
+	}
+	count, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if count != 1 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 func (service *Service) Messages(ctx context.Context, sessionID, actorID string,

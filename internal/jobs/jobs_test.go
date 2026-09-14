@@ -51,15 +51,18 @@ func TestTransientFailureRetriesThreeAttemptsAndAccumulatesUsage(t *testing.T) {
 		}
 		worker.run(context.Background(), job)
 	}
-	var state string
+	var state, stateChanged string
 	var attempts, input, output int
-	if err := database.QueryRow(`SELECT state, attempt_count, provider_input_units, provider_output_units FROM jobs`).
-		Scan(&state, &attempts, &input, &output); err != nil {
+	if err := database.QueryRow(`SELECT state, attempt_count, provider_input_units, provider_output_units,
+		state_changed_at FROM jobs`).Scan(&state, &attempts, &input, &output, &stateChanged); err != nil {
 		t.Fatal(err)
 	}
 	if state != "succeeded" || attempts != 3 || input != 7 || output != 1 || handler.commits != 1 ||
 		handler.terminal != 0 {
 		t.Fatalf("job state=%s attempts=%d usage=%d/%d handler=%#v", state, attempts, input, output, handler)
+	}
+	if _, err := time.Parse("2006-01-02T15:04:05.000000Z", stateChanged); err != nil {
+		t.Fatalf("state transition instant = %q: %v", stateChanged, err)
 	}
 }
 
@@ -121,13 +124,43 @@ func TestStartupRecoveryRequeuesRunningJobBeforeLeaseExpiry(t *testing.T) {
 	if err := worker.Recover(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	var state, failureCode string
-	if err := database.QueryRow("SELECT state, failure_code FROM jobs WHERE id = ?", jobID).
-		Scan(&state, &failureCode); err != nil {
+	var state, failureCode, stateChanged string
+	if err := database.QueryRow("SELECT state, failure_code, state_changed_at FROM jobs WHERE id = ?", jobID).
+		Scan(&state, &failureCode, &stateChanged); err != nil {
 		t.Fatal(err)
 	}
 	if state != "queued" || failureCode != "worker_restarted" {
 		t.Fatalf("recovered state=%s failure_code=%s", state, failureCode)
+	}
+	if stateChanged == "" {
+		t.Fatal("recovery did not retain an authoritative state transition instant")
+	}
+}
+
+func TestInspectSubjectPrioritizesActiveWorkAndCountsTerminalFailures(t *testing.T) {
+	database, courseID := jobsDatabase(t)
+	ctx := context.Background()
+	failedID, err := Enqueue(ctx, database, "material-summary", "material", "mat_test", courseID, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	failedAt := instant(time.Now())
+	if _, err := database.ExecContext(ctx, `UPDATE jobs SET state = 'failed', finished_at = ?, state_changed_at = ?
+		WHERE id = ?`, failedAt, failedAt, failedID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Enqueue(ctx, database, "material-summary", "material", "mat_test", courseID, ""); err != nil {
+		t.Fatal(err)
+	}
+	state, found, err := InspectSubject(ctx, database, "material-summary", "material", "mat_test")
+	if err != nil || !found {
+		t.Fatalf("inspect subject = %#v, %v, %v", state, found, err)
+	}
+	if state.State != "queued" || state.Active != 1 || state.Failed != 1 || state.Attempt != 0 {
+		t.Fatalf("subject state = %#v", state)
+	}
+	if state.StateChangedAt == nil || state.StateChangedAt.IsZero() || state.AvailableAt.IsZero() {
+		t.Fatalf("subject timing = %#v", state)
 	}
 }
 

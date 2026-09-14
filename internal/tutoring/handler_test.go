@@ -35,7 +35,7 @@ func TestTutoringRoutesUseSharedProtocolAndScopeActiveReview(t *testing.T) {
 	manager := NewManager(fixture.database, fixture.service, nil, fixture.directory, nil)
 	Register(server, fixture.service, manager)
 	studentSession, studentCSRF := tutoringSession(t, server, fixture.student)
-	supervisorSession, _ := tutoringSession(t, server, fixture.supervisor)
+	supervisorSession, supervisorCSRF := tutoringSession(t, server, fixture.supervisor)
 	administrator, err := user.Create(context.Background(), fixture.database, user.CreateInput{Username: "admin.only",
 		Email: "admin@example.org", EmailVerified: true, PasswordHash: "hash", Language: "en", Country: "US",
 		TimeZone: "UTC", Roles: []user.Role{user.Administrator}})
@@ -69,6 +69,7 @@ func TestTutoringRoutesUseSharedProtocolAndScopeActiveReview(t *testing.T) {
 	assert.Equal(t, http.StatusCreated, created.Code)
 	assert.Equal(t, "application/vnd.api+json", created.Header().Get("Content-Type"))
 	assert.Contains(t, created.Body.String(), `"type":"tutoring-sessions"`)
+	assertUnavailableSummaryLifecycle(t, created)
 	discovered := tutoringHTTP(server, http.MethodGet, "/api/v1/users/me/active-tutoring-session",
 		studentSession, "", "", nil)
 	assert.Equal(t, http.StatusOK, discovered.Code)
@@ -78,6 +79,7 @@ func TestTutoringRoutesUseSharedProtocolAndScopeActiveReview(t *testing.T) {
 	replayed := tutoringHTTP(server, http.MethodPost, "/api/v1/courses/"+fixture.course+"/tutoring-sessions",
 		studentSession, studentCSRF, "application/vnd.api+json", body)
 	assert.Equal(t, http.StatusOK, replayed.Code)
+	assertUnavailableSummaryLifecycle(t, replayed)
 
 	session, _, err := fixture.service.Start(context.Background(), StartInput{CourseID: fixture.course,
 		StudentID: fixture.student, RequestID: requestID, SelectedMaterialIDs: []string{fixture.materialID}})
@@ -201,6 +203,40 @@ func TestTutoringRoutesUseSharedProtocolAndScopeActiveReview(t *testing.T) {
 	assert.Equal(t, http.StatusOK, completed.Code)
 	assert.Contains(t, completed.Body.String(), `"current_work":"/api/v1/tutoring-sessions/`+session.ID+
 		`/current-work"`)
+	assert.Contains(t, completed.Body.String(), `"state":"queued"`)
+	assert.Contains(t, completed.Body.String(), `"regeneration_available":false`)
+	assert.NotContains(t, completed.Body.String(), `"attempt_count"`)
+	assert.NotContains(t, completed.Body.String(), `"job_`)
+
+	failedAt := instant(time.Now())
+	_, err = fixture.database.Exec(`UPDATE jobs SET state = 'failed', failure_code = 'provider_failure',
+		finished_at = ?, state_changed_at = ? WHERE subject_id = ?`, failedAt, failedAt, session.ID)
+	require.NoError(t, err)
+	ownerSummary := tutoringHTTP(server, http.MethodGet, "/api/v1/tutoring-sessions/"+session.ID,
+		studentSession, "", "", nil)
+	assert.Equal(t, http.StatusOK, ownerSummary.Code)
+	assert.Contains(t, ownerSummary.Body.String(), `"state":"terminal-failure"`)
+	assert.Contains(t, ownerSummary.Body.String(), `"regeneration_available":false`)
+	assert.NotContains(t, ownerSummary.Body.String(), "provider_failure")
+	supervisorSummary := tutoringHTTP(server, http.MethodGet, "/api/v1/tutoring-sessions/"+session.ID,
+		supervisorSession, "", "", nil)
+	assert.Equal(t, http.StatusOK, supervisorSummary.Code)
+	assert.Contains(t, supervisorSummary.Body.String(), `"regeneration_available":true`)
+	assert.Equal(t, "no-store", supervisorSummary.Header().Get("Cache-Control"))
+	studentRegeneration := tutoringHTTP(server, http.MethodPost,
+		"/api/v1/tutoring-sessions/"+session.ID+"/summary-generations", studentSession, studentCSRF, "", nil)
+	assert.Equal(t, http.StatusNotFound, studentRegeneration.Code)
+	assert.NotContains(t, studentRegeneration.Body.String(), "terminal-failure")
+	regenerated := tutoringHTTP(server, http.MethodPost,
+		"/api/v1/tutoring-sessions/"+session.ID+"/summary-generations", supervisorSession, supervisorCSRF, "", nil)
+	assert.Equal(t, http.StatusAccepted, regenerated.Code)
+	assert.Contains(t, regenerated.Body.String(), `"state":"queued"`)
+	assert.Contains(t, regenerated.Body.String(), `"regeneration_available":false`)
+	assert.Equal(t, "no-store", regenerated.Header().Get("Cache-Control"))
+	duplicateRegeneration := tutoringHTTP(server, http.MethodPost,
+		"/api/v1/tutoring-sessions/"+session.ID+"/summary-generations", supervisorSession, supervisorCSRF, "", nil)
+	assert.Equal(t, http.StatusConflict, duplicateRegeneration.Code)
+	assert.Contains(t, duplicateRegeneration.Body.String(), `"code":"tutoring_invalid_state"`)
 
 	malformed := tutoringHTTP(server, http.MethodPost, "/api/v1/courses/"+fixture.course+"/tutoring-sessions",
 		studentSession, studentCSRF, "application/vnd.api+json",
@@ -212,6 +248,30 @@ func TestTutoringRoutesUseSharedProtocolAndScopeActiveReview(t *testing.T) {
 	trailing := tutoringHTTP(server, http.MethodGet, "/api/v1/tutoring-sessions/"+session.ID+"/", studentSession,
 		"", "", nil)
 	assert.Equal(t, http.StatusNotFound, trailing.Code)
+}
+
+func assertUnavailableSummaryLifecycle(t *testing.T, response *httptest.ResponseRecorder) {
+	t.Helper()
+	var document struct {
+		Data struct {
+			Attributes struct {
+				SummaryLifecycle struct {
+					State             string  `json:"state"`
+					StateChangedAt    *string `json:"state_changed_at"`
+					LastCheckedAt     string  `json:"last_checked_at"`
+					RetryScheduledFor *string `json:"retry_scheduled_for"`
+				} `json:"summary_lifecycle"`
+			} `json:"attributes"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(response.Body.Bytes(), &document))
+	lifecycle := document.Data.Attributes.SummaryLifecycle
+	assert.Equal(t, "unavailable", lifecycle.State)
+	assert.Nil(t, lifecycle.StateChangedAt)
+	assert.Nil(t, lifecycle.RetryScheduledFor)
+	checkedAt, err := time.Parse(time.RFC3339Nano, lifecycle.LastCheckedAt)
+	require.NoError(t, err)
+	assert.False(t, checkedAt.IsZero())
 }
 
 func sessionMessageID(t *testing.T, fixture tutoringFixture, responseID string) string {

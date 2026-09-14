@@ -240,10 +240,11 @@ func regenerateSummaryHandler(service *Service) echo.HandlerFunc {
 		if err != nil {
 			return err
 		}
-		if err := service.RegenerateSummary(c.Request().Context(), c.Param("id"), actorID); err != nil {
+		value, err := service.RegenerateSummary(c.Request().Context(), c.Param("id"), actorID)
+		if err != nil {
 			return tutoringError(err)
 		}
-		return c.NoContent(http.StatusNoContent)
+		return sessionResponse(c, http.StatusAccepted, value)
 	}
 }
 
@@ -447,6 +448,7 @@ func sessionResource(value Session) map[string]any {
 		"course_id": value.CourseID, "student_id": value.StudentID, "state": value.State,
 		"summary": summary, "follow_up": followUp, "summary_source": summarySource,
 		"summary_updated_by": nullableString(value.SummaryActor),
+		"summary_lifecycle":  summaryLifecycleResource(value.SummaryLifecycle),
 		"started_at":         httpserver.FormatInstant(value.StartedAt),
 		"last_activity_at":   httpserver.FormatInstant(value.LastActivityAt),
 		"completed_at":       httpserver.FormatOptionalInstant(value.CompletedAt),
@@ -459,6 +461,16 @@ func sessionResource(value Session) map[string]any {
 		resource["relationships"] = map[string]any{"materials": map[string]any{"data": identifiers}}
 	}
 	return resource
+}
+
+func summaryLifecycleResource(value SummaryLifecycle) map[string]any {
+	return map[string]any{
+		"state":                  value.State,
+		"state_changed_at":       httpserver.FormatOptionalInstant(value.StateChangedAt),
+		"last_checked_at":        httpserver.FormatInstant(value.LastCheckedAt),
+		"retry_scheduled_for":    httpserver.FormatOptionalInstant(value.RetryScheduledFor),
+		"regeneration_available": value.RegenerationAvailable,
+	}
 }
 
 func activeSessionResource(value ActiveSession) map[string]any {

@@ -1307,15 +1307,25 @@ turns are omitted without a hidden rolling summary.
   instant and its last-activity instant.
 - Completing a session queues creation of a session summary and follow-up.
 - Queue creation and session completion occur atomically.
+- Authorized completed-session reads explicitly report summary lifecycle as
+  queued, generating, automatic-retry-scheduled, generated,
+  supervisor-corrected, terminal-failure, or unavailable. This lifecycle is
+  independent from nullable summary content and generic job-list visibility.
+- Summary lifecycle exposes only its authoritative state-change instant, current
+  read instant, and scheduled retry instant when applicable. It exposes no job
+  identity, attempt details, provider payload, or generic job-retry action.
 - The result outlines strengths, weaknesses, and suggested next steps.
 - The student can view their progress summary.
 - An assigned supervisor can correct only the summary and follow-up of a completed
   session. The update records supervisor attribution and one content-free audit
-  event in the same transaction.
+  event and marks queued or running summary work cancelled in the same
+  transaction. An in-flight provider call may continue, but its result cannot
+  commit over the correction.
 - If a completed session has no summary, no summary job is queued or running, and
   at least one earlier summary job failed terminally, an assigned supervisor can
-  request summary generation again. MIA never silently overwrites a supervisor
-  correction.
+  request summary generation again. Eligibility is server-authored separately
+  from lifecycle, is false for students and every other state, and is rechecked
+  atomically by the action. MIA never silently overwrites a supervisor correction.
 - Chat history is immutable. Correcting a summary does not rewrite the chat.
 - Supervisors assigned to the course can inspect completed sessions, including
   full chat histories and student-private material used in the session.

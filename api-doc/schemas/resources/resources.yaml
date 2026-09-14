@@ -1199,6 +1199,7 @@ TutoringSession:
         - follow_up
         - summary_source
         - summary_updated_by
+        - summary_lifecycle
         - started_at
         - last_activity_at
         - completed_at
@@ -1211,6 +1212,7 @@ TutoringSession:
         follow_up: { type: [string, 'null'], maxLength: 16000 }
         summary_source: { type: [string, 'null'], enum: [generated, supervisor, null] }
         summary_updated_by: { type: [string, 'null'] }
+        summary_lifecycle: { $ref: '#/TutoringSummaryLifecycle' }
         started_at: { type: string, format: date-time }
         last_activity_at: { type: string, format: date-time }
         completed_at: { type: [string, 'null'], format: date-time }
@@ -1230,6 +1232,36 @@ TutoringSession:
                   - $ref: '#/ResourceIdentifier'
                   - properties:
                       type: { const: materials }
+
+TutoringSummaryLifecycle:
+  description: Authorized domain state; it exposes no generic job identity, attempts, diagnostics, or usage.
+  type: object
+  additionalProperties: false
+  required: [state, state_changed_at, last_checked_at, retry_scheduled_for, regeneration_available]
+  properties:
+    state:
+      type: string
+      description: >-
+        Automatic-retry-scheduled is reserved for a delayed transient retry. Initial work and immediate startup
+        recovery are queued and have no retry_scheduled_for value. A migrated delayed retry may have null
+        state_changed_at when its historical transition instant cannot be recovered.
+      enum:
+        - queued
+        - generating
+        - automatic-retry-scheduled
+        - generated
+        - supervisor-corrected
+        - terminal-failure
+        - unavailable
+    state_changed_at: { type: [string, 'null'], format: date-time }
+    last_checked_at: { type: string, format: date-time }
+    retry_scheduled_for:
+      type: [string, 'null']
+      format: date-time
+      description: Present only while an automatic retry is scheduled.
+    regeneration_available:
+      type: boolean
+      description: True only for an assigned supervisor when the domain regeneration preconditions currently hold.
 
 ActiveTutoringSession:
   description: Minimal owned active-session projection for cross-course navigation and reconciliation.

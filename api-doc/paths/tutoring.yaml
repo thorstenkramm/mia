@@ -98,6 +98,10 @@ tutoringSession:
     tags: [Tutoring]
     operationId: getTutoringSession
     summary: Get an authorized tutoring session
+    description: >-
+      Completed-session reads include authoritative summary lifecycle and viewer-specific regeneration eligibility.
+      Lifecycle is independent from nullable summary content and exposes no generic job internals. Student owners and
+      currently assigned supervisors may read it under the ordinary session visibility rules.
     security: [{ sessionCookie: [] }]
     parameters: [{ $ref: ../openapi.yaml#/components/parameters/ResourceID }]
     responses:
@@ -209,12 +213,19 @@ tutoringSessionSummaryGenerations:
     tags: [Tutoring]
     operationId: regenerateTutoringSessionSummary
     summary: Queue summary generation after a terminal summary failure
+    description: >-
+      Assigned-supervisor domain action. Conditions are rechecked atomically and the response returns the equivalent
+      current summary lifecycle. Ambiguous outcomes are reconciled by reading the session; clients do not replay
+      automatically. This is not a generic job retry operation.
     security: [{ sessionCookie: [], csrfToken: [] }]
     parameters: [{ $ref: ../openapi.yaml#/components/parameters/ResourceID }]
     responses:
-      '204':
-        $ref: ../responses/success.yaml#/NoContent
-        description: Summary generation queued.
+      '202':
+        headers: { Cache-Control: { $ref: ../openapi.yaml#/components/headers/CacheControlNoStore } }
+        description: Summary generation queued with authoritative queued lifecycle.
+        content:
+          application/vnd.api+json:
+            schema: { $ref: ../schemas/resources/resources.yaml#/TutoringSessionDocument }
       '401': { $ref: ../responses/errors.yaml#/Unauthorized }
       '403': { $ref: ../responses/errors.yaml#/Forbidden }
       '404': { $ref: ../responses/errors.yaml#/NotFound }

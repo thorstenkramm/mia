@@ -142,6 +142,10 @@ func TestSessionLifecycleIdempotencyQueueAndReview(t *testing.T) {
 	corrected, err := fixture.service.CorrectSummary(ctx, session.ID, fixture.supervisor, "Good progress", "Review beta")
 	require.NoError(t, err)
 	assert.Equal(t, "supervisor", corrected.SummarySource)
+	var stoppedJobs int
+	require.NoError(t, fixture.database.QueryRowContext(ctx, `SELECT COUNT(*) FROM jobs WHERE subject_id = ?
+		AND state = 'cancelled'`, session.ID).Scan(&stoppedJobs))
+	assert.Equal(t, 1, stoppedJobs)
 	var audits int
 	require.NoError(t, fixture.database.QueryRow(`SELECT COUNT(*) FROM audit_events
 		WHERE action = 'tutoring.summary.corrected'`).Scan(&audits))
@@ -1058,4 +1062,124 @@ func TestSummaryUsesCompleteRetainedTranscriptAndCommitsGuardedly(t *testing.T) 
 	require.NoError(t, err)
 	assert.Equal(t, "Strength", completed.Summary)
 	assert.Equal(t, "generated", completed.SummarySource)
+}
+
+func TestSummaryLifecycleAndRegeneration(t *testing.T) {
+	fixture := newTutoringFixture(t)
+	ctx := context.Background()
+	session, _, err := fixture.service.Start(ctx, StartInput{CourseID: fixture.course, StudentID: fixture.student,
+		RequestID: uuid.NewString()})
+	require.NoError(t, err)
+	completed, err := fixture.service.Complete(ctx, session.ID, fixture.student)
+	require.NoError(t, err)
+	assert.Equal(t, "queued", completed.SummaryLifecycle.State)
+	assert.False(t, completed.SummaryLifecycle.RegenerationAvailable)
+	assert.NotNil(t, completed.SummaryLifecycle.StateChangedAt)
+	assert.Nil(t, completed.SummaryLifecycle.RetryScheduledFor)
+
+	stateChanged := instant(time.Now().Add(-time.Minute))
+	retryFor := instant(time.Now().Add(5 * time.Minute))
+	_, err = fixture.database.ExecContext(ctx, `UPDATE jobs SET state = 'running', attempt_count = 1,
+		lease_token = 'lease', lease_expires_at = ?, started_at = ?, state_changed_at = ? WHERE subject_id = ?`,
+		retryFor, stateChanged, stateChanged, session.ID)
+	require.NoError(t, err)
+	generating, err := fixture.service.Get(ctx, session.ID, fixture.supervisor)
+	require.NoError(t, err)
+	assert.Equal(t, "generating", generating.SummaryLifecycle.State)
+	assert.Equal(t, stateChanged, instant(*generating.SummaryLifecycle.StateChangedAt))
+
+	worker := jobs.New(fixture.database, nil)
+	require.NoError(t, worker.Recover(ctx))
+	recovered, err := fixture.service.Get(ctx, session.ID, fixture.supervisor)
+	require.NoError(t, err)
+	assert.Equal(t, "queued", recovered.SummaryLifecycle.State)
+	assert.Nil(t, recovered.SummaryLifecycle.RetryScheduledFor)
+
+	_, err = fixture.database.ExecContext(ctx, `UPDATE jobs SET available_at = ?, state_changed_at = NULL
+		WHERE subject_id = ?`, retryFor, session.ID)
+	require.NoError(t, err)
+	migratedRetry, err := fixture.service.Get(ctx, session.ID, fixture.supervisor)
+	require.NoError(t, err)
+	assert.Equal(t, "automatic-retry-scheduled", migratedRetry.SummaryLifecycle.State)
+	assert.Nil(t, migratedRetry.SummaryLifecycle.StateChangedAt)
+	require.NotNil(t, migratedRetry.SummaryLifecycle.RetryScheduledFor)
+	assert.Equal(t, retryFor, instant(*migratedRetry.SummaryLifecycle.RetryScheduledFor))
+
+	_, err = fixture.database.ExecContext(ctx, `UPDATE jobs SET state = 'queued', lease_token = NULL,
+		lease_expires_at = NULL, available_at = ?, state_changed_at = ? WHERE subject_id = ?`, retryFor,
+		stateChanged, session.ID)
+	require.NoError(t, err)
+	retryScheduled, err := fixture.service.Get(ctx, session.ID, fixture.supervisor)
+	require.NoError(t, err)
+	assert.Equal(t, "automatic-retry-scheduled", retryScheduled.SummaryLifecycle.State)
+	require.NotNil(t, retryScheduled.SummaryLifecycle.RetryScheduledFor)
+	assert.Equal(t, retryFor, instant(*retryScheduled.SummaryLifecycle.RetryScheduledFor))
+
+	_, err = fixture.database.ExecContext(ctx, `UPDATE jobs SET state = 'failed', lease_token = NULL,
+		lease_expires_at = NULL, finished_at = ?, state_changed_at = ? WHERE subject_id = ?`, stateChanged,
+		stateChanged, session.ID)
+	require.NoError(t, err)
+	ownerView, err := fixture.service.Get(ctx, session.ID, fixture.student)
+	require.NoError(t, err)
+	assert.Equal(t, "terminal-failure", ownerView.SummaryLifecycle.State)
+	assert.False(t, ownerView.SummaryLifecycle.RegenerationAvailable)
+	supervisorView, err := fixture.service.Get(ctx, session.ID, fixture.supervisor)
+	require.NoError(t, err)
+	assert.True(t, supervisorView.SummaryLifecycle.RegenerationAvailable)
+	_, _, err = fixture.service.Messages(ctx, session.ID, fixture.supervisor, ListInput{Limit: 25})
+	require.NoError(t, err, "summary failure must not block the retained transcript")
+	_, err = fixture.service.RegenerateSummary(ctx, session.ID, fixture.student)
+	assert.ErrorIs(t, err, ErrNotFound)
+
+	var successes atomic.Int32
+	var wait sync.WaitGroup
+	type regenerationResult struct {
+		state string
+		err   error
+	}
+	results := make(chan regenerationResult, 2)
+	for range 2 {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			value, regenerateErr := fixture.service.RegenerateSummary(ctx, session.ID, fixture.supervisor)
+			if regenerateErr == nil {
+				successes.Add(1)
+			}
+			results <- regenerationResult{state: value.SummaryLifecycle.State, err: regenerateErr}
+		}()
+	}
+	wait.Wait()
+	close(results)
+	assert.Equal(t, int32(1), successes.Load())
+	for result := range results {
+		if result.err != nil {
+			assert.ErrorIs(t, result.err, ErrInvalidState)
+		} else {
+			assert.Equal(t, "queued", result.state)
+		}
+	}
+	var activeJobs int
+	require.NoError(t, fixture.database.QueryRowContext(ctx, `SELECT COUNT(*) FROM jobs WHERE subject_id = ?
+		AND state IN ('queued', 'running')`, session.ID).Scan(&activeJobs))
+	assert.Equal(t, 1, activeJobs)
+
+	_, err = fixture.database.ExecContext(ctx, `UPDATE jobs SET state = 'succeeded', finished_at = ?,
+		state_changed_at = ? WHERE subject_id = ? AND state = 'queued'`, stateChanged, stateChanged, session.ID)
+	require.NoError(t, err)
+	_, err = fixture.database.ExecContext(ctx, `UPDATE tutoring_sessions SET summary = 'Generated', follow_up = 'Next',
+		summary_source = 'generated', summary_updated_at = ? WHERE id = ?`, stateChanged, session.ID)
+	require.NoError(t, err)
+	generated, err := fixture.service.Get(ctx, session.ID, fixture.student)
+	require.NoError(t, err)
+	assert.Equal(t, "generated", generated.SummaryLifecycle.State)
+
+	corrected, err := fixture.service.CorrectSummary(ctx, session.ID, fixture.supervisor, "Corrected", "Review")
+	require.NoError(t, err)
+	assert.Equal(t, "supervisor-corrected", corrected.SummaryLifecycle.State)
+	assert.Equal(t, fixture.supervisor, corrected.SummaryActor)
+	handler := NewSessionSummaryHandler(fixture.service, nil, fixture.directory)
+	_, err = handler.Commit(ctx, fixture.database, jobs.Job{SubjectID: session.ID},
+		jobs.Result{Value: sessionSummary{Summary: "Late", FollowUp: "Overwrite"}})
+	assert.ErrorIs(t, err, jobs.ErrStaleLease)
 }
