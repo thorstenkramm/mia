@@ -331,6 +331,66 @@ MFARecoveryCodes:
           description: >-
             Single-use recovery codes shown exactly once. Only non-reversible
             digests are stored.
+MFAState:
+  type: object
+  required: [type, id, attributes]
+  properties:
+    type: { const: mfa-states }
+    id: { type: string, description: Authenticated account ID. }
+    attributes:
+      type: object
+      required: [active_factor, pending_enrollment, actions]
+      properties:
+        active_factor:
+          oneOf:
+            - type: 'null'
+            - $ref: '#/MFAFactorSummary'
+        pending_enrollment:
+          oneOf:
+            - type: 'null'
+            - $ref: '#/MFAEnrollmentSummary'
+        actions: { $ref: '#/MFAActions' }
+MFAFactorSummary:
+  type: object
+  required: [id, method]
+  properties:
+    id: { type: string, description: Opaque active-factor ID with the `mff_` prefix. }
+    method: { type: string, enum: [totp, sms] }
+MFAEnrollmentSummary:
+  type: object
+  required: [id, method, expires_at, replaces_factor_id]
+  properties:
+    id: { type: string, description: Opaque pending-enrollment ID with the `mfe_` prefix. }
+    method: { type: string, enum: [totp, sms] }
+    expires_at: { type: string, format: date-time }
+    replaces_factor_id:
+      type: [string, 'null']
+      description: Active-factor ID replaced on verification, or null for first enrollment.
+MFAActions:
+  type: object
+  required: [enroll, continue, cancel, disable, replace, verify, sms_resend]
+  properties:
+    enroll: { type: boolean }
+    continue: { type: boolean }
+    cancel: { type: boolean }
+    disable: { type: boolean }
+    replace: { type: boolean }
+    verify: { type: boolean }
+    sms_resend: { type: boolean }
+MFAReset:
+  type: object
+  required: [type, id, attributes]
+  properties:
+    type: { const: mfa-resets }
+    id: { type: string, description: Unique non-secret command result ID with the `mfr_` prefix. }
+    attributes:
+      type: object
+      required: [account_class, password_change_required, session_effect, mfa_state]
+      properties:
+        account_class: { type: string, enum: [student_only, staff] }
+        password_change_required: { const: true }
+        session_effect: { const: invalidated }
+        mfa_state: { const: none }
 MobileChangeChallenge:
   type: object
   required: [type, id, attributes]
@@ -1333,6 +1393,16 @@ MFARecoveryCodesDocument:
   properties:
     data:
       $ref: '#/MFARecoveryCodes'
+MFAStateDocument:
+  type: object
+  required: [data]
+  properties:
+    data: { $ref: '#/MFAState' }
+MFAResetDocument:
+  type: object
+  required: [data]
+  properties:
+    data: { $ref: '#/MFAReset' }
 UserDocument:
   type: object
   required: [data]

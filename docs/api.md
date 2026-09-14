@@ -416,8 +416,27 @@ These user-administration operations do not create a generic administrator overr
 enforces its role, course, student, and protected-field rules. Student
 provisioning and course membership use the course routes below.
 
-`POST /api/v1/users/{id}/mfa-resets` is deferred until story 1-8 supplies the
-course-membership authorization required for student-only and staff reset paths.
+`GET /api/v1/users/me/mfa` is the authoritative reload-time MFA overview. It
+returns the active factor ID and method, a live pending enrollment ID, method,
+expiry and replacement relation, plus separate server-authored eligibility for
+enroll, continue, cancel, disable, replace, verify, and SMS resend. It never
+returns a destination, TOTP provisioning data, codes, recovery codes, proofs, or
+stored secret material. Expired pending enrollment is represented as absent.
+
+`POST /api/v1/users/{id}/mfa-resets` performs lost-factor recovery. A supervisor
+must share an assigned course with a student-only target; a different
+administrator is required for every staff target. Missing, out-of-scope,
+ineligible, and self-targeted accounts use one hidden-target response. An
+authorized target with no active factor returns the documented stale-state
+conflict. Success returns only the committed account class, password gate, MFA
+state, and invalidated-session effect. Every successful reset increments security
+generation, invalidates all existing target cookies, and requires a fresh login
+followed by password replacement. A layered source-IP and actor-account limiter
+rejects excess attempts without evaluating the target. The request is never
+replayed automatically after an ambiguous transport result; the target account's
+MFA overview after sign-in is the authoritative reconciliation read.
+Sole-administrator recovery remains available only through `reset-admin-mfa` and
+has no HTTP route.
 
 Every user can retrieve self. Assigned supervisors can list students and staff
 relationships in assigned courses. Mentors receive only minimal identity —

@@ -339,10 +339,10 @@ unavailable errors when it is not (NFR-17).
 - FR-32. Lost-factor recovery: for student-only accounts, any supervisor sharing an assigned course resets MFA
   (removes the factor, invalidates recovery codes and all student cookies, forces password replacement after a
   fresh login). For staff, a different administrator performs the reset: the factor is removed, recovery codes
-  are invalidated, password replacement is required at next login, and existing cookies are restricted to
-  password replacement and logout. When exactly one administrator exists, a local `reset-admin-mfa` command
-  (server stopped, interactive, exact-username confirmation) performs the same reset; this action is never
-  exposed as a web route.
+  are invalidated, `security_generation` is incremented to invalidate every existing cookie, and password
+  replacement is required after a fresh login. When exactly one administrator exists, a local
+  `reset-admin-mfa` command (server stopped, interactive, exact-username confirmation) performs the same reset,
+  including the generation increment; this action is never exposed as a web route.
 
 ### 6.7 Profiles, avatars, and mobile verification
 

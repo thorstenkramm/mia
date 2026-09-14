@@ -1178,6 +1178,23 @@ func requireSharedStudent(ctx context.Context, query miSQLite.Querier, studentID
 	return nil
 }
 
+// AuthorizeStudentMFAReset verifies shared-course supervisor scope. Account
+// classification remains owned by user and is checked without course SQL.
+func AuthorizeStudentMFAReset(ctx context.Context, query miSQLite.Querier, studentID, actorID string) (bool, error) {
+	studentOnly, _, err := user.StudentOnlyState(ctx, query, studentID)
+	if err != nil || !studentOnly {
+		return false, err
+	}
+	var allowed int
+	err = query.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM course_students student
+		JOIN course_supervisors supervisor ON supervisor.course_id = student.course_id
+		WHERE student.student_user_id = ? AND supervisor.supervisor_user_id = ?)`, studentID, actorID).Scan(&allowed)
+	if err != nil {
+		return false, fmt.Errorf("authorize student MFA reset: %w", err)
+	}
+	return allowed != 0, nil
+}
+
 func closeRows(rows *sql.Rows) error {
 	if err := rows.Close(); err != nil {
 		return fmt.Errorf("close course rows: %w", err)

@@ -41,6 +41,8 @@ const (
 	ActionAuthMFAEnrollmentFailed            Action = "auth.mfa.enrollment.failed"
 	ActionAuthMFAEnrollmentThrottled         Action = "auth.mfa.enrollment.throttled"
 	ActionAuthMFADeliveryFailed              Action = "auth.mfa.delivery_failed"
+	ActionAuthMFAReset                       Action = "auth.mfa.reset"
+	ActionAuthMFAResetThrottled              Action = "auth.mfa.reset.throttled"
 	ActionOperatorAdministratorMFAReset      Action = "operator.administrator.mfa_reset"
 
 	ActionInvitationInvitationCreated           Action = "invitation.invitation.created"
@@ -146,6 +148,8 @@ var actions = map[Action]struct{}{
 	ActionAuthMFAEnrollmentFailed:               {},
 	ActionAuthMFAEnrollmentThrottled:            {},
 	ActionAuthMFADeliveryFailed:                 {},
+	ActionAuthMFAReset:                          {},
+	ActionAuthMFAResetThrottled:                 {},
 	ActionOperatorAdministratorMFAReset:         {},
 	ActionInvitationInvitationCreated:           {},
 	ActionInvitationInvitationCreationDenied:    {},

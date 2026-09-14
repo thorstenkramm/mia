@@ -12,17 +12,11 @@ compressions in the tutoring-session contract that a PM/architect would need, an
 
 ## Findings
 
-### 1. HIGH — Staff and sole-admin MFA reset omit forced password replacement and cookie restriction
+### 1. RESOLVED — Staff and sole-admin MFA reset require cookie invalidation and password replacement
 
-- Source: api.md:163-178 (`reset-admin-mfa` "requires password replacement", "Current browser cookies become
-  restricted to password replacement and logout"); confirmed by product-requirements.md:668-676 (staff reset
-  "requires password replacement at next login. Existing browser cookies are restricted to password replacement
-  and logout"; local recovery likewise).
-- PRD: FR-32 states forced password replacement and cookie invalidation only for the student-only reset path.
-  For staff resets (different administrator) and the local `reset-admin-mfa` command it describes the actor and
-  mechanics but not the mandatory password-replacement gate or the restriction of existing cookies.
-- Impact: an implementer following FR-32 alone would leave a staff account fully usable after an MFA reset with
-  its old password and live cookies — a security behavior difference, not just compression.
+- Resolution: The product owner confirmed AD-8 as authoritative. Staff and local `reset-admin-mfa` reset now
+  increment `security_generation`, invalidate every existing cookie, and require fresh login followed by password
+  replacement. FR-32 and the human-readable product contract carry the same behavior.
 - Affected: PRD 6.6 FR-32 (also touches FR-24 stage description).
 
 ### 2. MEDIUM — Session-creation request-ID: post-completion replay is always a conflict

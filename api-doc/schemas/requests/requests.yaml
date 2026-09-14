@@ -165,6 +165,23 @@ MFAEnrollmentVerificationRequestDocument:
           properties:
             code: { $ref: '#/SixDigitCode' }
 
+MFAResetRequestDocument:
+  type: object
+  required: [data]
+  additionalProperties: false
+  properties:
+    data:
+      type: object
+      required: [type, attributes]
+      additionalProperties: false
+      properties:
+        type: { const: mfa-resets }
+        id: false
+        attributes:
+          type: object
+          maxProperties: 0
+          additionalProperties: false
+
 InvitationCreateRequestDocument:
   type: object
   required: [data]

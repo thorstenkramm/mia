@@ -47,6 +47,12 @@ func Register(server *httpserver.Server, routes httpserver.AuthRouteRegistrar, d
 	routes.POST("/api/v1/users/me/mfa-enrollments/:id/resends", "authenticated", resendEnrollment(server, database, smsSender))
 	routes.DELETE("/api/v1/users/me/mfa-enrollments/:id", "authenticated", cancelOrDisableMFA(server, database))
 	routes.POST("/api/v1/auth/mfa-management-proofs", "authenticated", createManagementProof(server, database))
+	server.AuthenticatedGET("/api/v1/users/me/mfa", mfaState(database, smsSender))
+}
+
+// RegisterMFARecovery attaches reset only after course-scoped authorization is wired.
+func RegisterMFARecovery(server *httpserver.Server, database *sql.DB, authorizeStudent StudentResetAuthorizer) {
+	server.AuthenticatedPOST("/api/v1/users/:id/mfa-resets", resetMFA(server, database, authorizeStudent))
 }
 
 type credentials struct {
@@ -983,7 +989,7 @@ func verifyEnrollment(server *httpserver.Server, database *sql.DB) echo.HandlerF
 			if err != nil {
 				return err
 			}
-			_, err = tx.ExecContext(c.Request().Context(), "INSERT INTO mfa_factors (user_id, method, totp_secret, sms_destination, last_totp_step, created_at) VALUES (?, ?, ?, ?, ?, ?)", accountID, method, nullableBytes(secret), nullable(destination), nullableStep(method, step), instant(time.Now()))
+			_, err = tx.ExecContext(c.Request().Context(), "INSERT INTO mfa_factors (id, user_id, method, totp_secret, sms_destination, last_totp_step, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)", "mff_"+uuid.NewString(), accountID, method, nullableBytes(secret), nullable(destination), nullableStep(method, step), instant(time.Now()))
 			if err != nil {
 				return err
 			}
@@ -1204,11 +1210,22 @@ func cancelOrDisableMFA(_ *httpserver.Server, database *sql.DB) echo.HandlerFunc
 			if rows == 1 {
 				return nil
 			}
+			var activeID string
+			if err := tx.QueryRowContext(c.Request().Context(), "SELECT id FROM mfa_factors WHERE user_id = ?", accountID).
+				Scan(&activeID); err != nil || activeID != c.Param("id") {
+				if errors.Is(err, sql.ErrNoRows) || err == nil {
+					return errProofRequired
+				}
+				return err
+			}
 			if !consumeProof(c.Request().Context(), tx, accountID, proof) {
 				return errProofRequired
 			}
 			_, err = tx.ExecContext(c.Request().Context(), "DELETE FROM mfa_factors WHERE user_id = ?", accountID)
 			if err != nil {
+				return err
+			}
+			if _, err = tx.ExecContext(c.Request().Context(), "DELETE FROM mfa_enrollments WHERE user_id = ?", accountID); err != nil {
 				return err
 			}
 			_, err = tx.ExecContext(c.Request().Context(), "DELETE FROM mfa_recovery_codes WHERE user_id = ?", accountID)
@@ -1231,6 +1248,80 @@ func cancelOrDisableMFA(_ *httpserver.Server, database *sql.DB) echo.HandlerFunc
 			return err
 		}
 		return c.NoContent(http.StatusNoContent)
+	}
+}
+
+func mfaState(database *sql.DB, sender sms.Sender) echo.HandlerFunc {
+	return func(c *echo.Context) error {
+		accountID, err := authenticatedUser(c)
+		if err != nil {
+			return err
+		}
+		state, err := StateForAccount(c.Request().Context(), database, accountID, time.Now(), sms.Available(sender))
+		if err != nil {
+			return err
+		}
+		return resource(c, http.StatusOK, "mfa-states", accountID, mfaStateAttributes(state))
+	}
+}
+
+func mfaStateAttributes(state State) map[string]any {
+	attributes := map[string]any{
+		"active_factor":      nil,
+		"pending_enrollment": nil,
+		"actions": map[string]bool{
+			"enroll": state.Actions.Enroll, "continue": state.Actions.Continue,
+			"cancel": state.Actions.Cancel, "disable": state.Actions.Disable,
+			"replace": state.Actions.Replace, "verify": state.Actions.Verify,
+			"sms_resend": state.Actions.SMSResend,
+		},
+	}
+	if state.Active != nil {
+		attributes["active_factor"] = map[string]string{"id": state.Active.ID, "method": state.Active.Method}
+	}
+	if state.Pending != nil {
+		attributes["pending_enrollment"] = map[string]any{"id": state.Pending.ID, "method": state.Pending.Method,
+			"expires_at":         httpserver.FormatInstant(state.Pending.ExpiresAt),
+			"replaces_factor_id": nullable(state.Pending.ReplacesFactorID)}
+	}
+	return attributes
+}
+
+func resetMFA(server *httpserver.Server, database *sql.DB, authorizeStudent StudentResetAuthorizer) echo.HandlerFunc {
+	return func(c *echo.Context) error {
+		actorID, err := authenticatedUser(c)
+		if err != nil {
+			return err
+		}
+		if limit := server.CheckMFA(c, actorID); !limit.Allowed {
+			return mfaThrottled(c, database, actorID, audit.ActionAuthMFAResetThrottled, limit)
+		}
+		var request struct {
+			Data struct {
+				Type       string         `json:"type"`
+				ID         string         `json:"id"`
+				Attributes map[string]any `json:"attributes"`
+			} `json:"data"`
+		}
+		if err := httpserver.DecodeJSONAPI(c, &request); err != nil {
+			return err
+		}
+		if request.Data.Type != "mfa-resets" || request.Data.ID != "" || len(request.Data.Attributes) != 0 {
+			return httpserver.NewError(httpserver.CodeInvalidRequest)
+		}
+		result, err := ResetLostFactor(c.Request().Context(), database, actorID, c.Param("id"), authorizeStudent)
+		switch {
+		case errors.Is(err, ErrMFAResetNotFound):
+			return httpserver.NewError(httpserver.CodeMFAResetNotFound)
+		case errors.Is(err, ErrMFAResetUnavailable):
+			return httpserver.NewError(httpserver.CodeMFAResetUnavailable)
+		case err != nil:
+			return err
+		}
+		return resource(c, http.StatusOK, "mfa-resets", result.ID, map[string]any{
+			"account_class": result.AccountClass, "password_change_required": true,
+			"session_effect": result.SessionEffect, "mfa_state": "none",
+		})
 	}
 }
 

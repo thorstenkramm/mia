@@ -535,7 +535,8 @@ func newServeCommand() *cobra.Command {
 			if errors.Is(err, sql.ErrNoRows) {
 				return httpserver.IdentityState{}, httpserver.ErrIdentityNotFound
 			}
-			return httpserver.IdentityState{SecurityGeneration: account.SecurityGeneration, MustChangePassword: account.MustChangePassword, Banned: account.Banned}, err
+			return httpserver.IdentityState{SecurityGeneration: account.SecurityGeneration,
+				MustChangePassword: account.MustChangePassword, Banned: account.Banned}, err
 		})
 		recoveryDeliveries := auth.NewDeliveryManager(database, smtp.New(configuration, logger.Slog()), logger.Slog())
 		defer recoveryDeliveries.Close()
@@ -616,6 +617,7 @@ func newServeCommand() *cobra.Command {
 			material.MaterialReady, tutoringService.ActiveInCourse,
 			tutoringService.StudentActiveInCourse, auth.InvalidateSecurityArtifacts, logger.Slog())
 		lifecycleRegistry.RegisterAccount(courseService)
+		auth.RegisterMFARecovery(server, database, course.AuthorizeStudentMFAReset)
 		deletionService := user.NewDeletionService(database, configuration.Main.DataDir, lifecycleRegistry, logger.Slog())
 		deletionService.SetSoleSupervisorCheck(course.IsSoleSupervisor)
 		user.RegisterDeletionRoutes(server, deletionService)

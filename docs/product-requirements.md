@@ -699,13 +699,14 @@ profile operations.
 - An account with any administrator, supervisor, or mentor role always uses the
   staff reset path.
 - The reset removes the active MFA method, invalidates all recovery codes,
-  and requires password replacement at next login. Existing browser cookies are
-  restricted to password replacement and logout.
+  increments the account's security generation to invalidate every existing
+  browser cookie, and requires a fresh login followed by password replacement.
 - Every action is audited without recording secrets.
 - If exactly one administrator account exists and it has lost both MFA and all
   recovery codes, the operator can perform a local server-only recovery action.
-- Local recovery resets MFA, invalidates recovery codes, restricts existing
-  browser cookies, and requires password replacement at next login.
+- Local recovery resets MFA, invalidates recovery codes, increments the account's
+  security generation to invalidate every existing browser cookie, and requires
+  a fresh login followed by password replacement.
 - Local recovery is not exposed through a public web route.
 
 ### First administrator

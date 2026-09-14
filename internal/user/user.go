@@ -221,6 +221,22 @@ func RequirePasswordChangeAfterMFAReset(ctx context.Context, query miSQLite.Quer
 	return nil
 }
 
+// AuthorizeStaffMFAReset applies the different-administrator rule while making
+// missing, non-staff, and self-targeted accounts indistinguishable.
+func AuthorizeStaffMFAReset(ctx context.Context, query miSQLite.Querier, actorID, targetID string) (bool, error) {
+	var allowed int
+	err := query.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM users target
+		WHERE target.id = ? AND target.id <> ?
+		AND EXISTS(SELECT 1 FROM user_roles target_role WHERE target_role.user_id = target.id
+			AND target_role.role IN ('administrator','supervisor','mentor'))
+		AND EXISTS(SELECT 1 FROM user_roles actor_role WHERE actor_role.user_id = ?
+			AND actor_role.role = 'administrator'))`, targetID, actorID, actorID).Scan(&allowed)
+	if err != nil {
+		return false, fmt.Errorf("authorize staff MFA reset: %w", err)
+	}
+	return allowed != 0, nil
+}
+
 // FindStaffForRecovery returns an eligible staff account for a complete username.
 func FindStaffForRecovery(ctx context.Context, query miSQLite.Querier, username string) (Account, error) {
 	key, err := identity.Username(username)

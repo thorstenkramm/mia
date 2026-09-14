@@ -56,7 +56,7 @@ development_status:
   2-2-discover-and-extend-browser-sessions-safely: done
   2-3-manage-invitations-through-delivery-ambiguity: done
   2-4-discover-account-capabilities-and-administration-targets: done
-  2-5-inspect-mfa-state-and-recover-lost-factors: backlog
+  2-5-inspect-mfa-state-and-recover-lost-factors: done
   2-6-observe-and-continue-mobile-verification: backlog
   2-7-understand-course-readiness-and-confirm-destructive-course-a: backlog
   2-8-discover-and-resume-the-active-tutoring-session: backlog

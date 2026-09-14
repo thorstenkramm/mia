@@ -72,7 +72,8 @@ that contract — they never override it.
     student MFA, a different administrator resets staff MFA, and a local `reset-admin-mfa` command covers the
     sole-administrator case.
   - **success:** Challenges expire and lock out per the documented limits; a TOTP step succeeds once per
-    factor; factor mutations require a single-use `mfa-management` proof consumed atomically.
+    factor; factor mutations require a single-use `mfa-management` proof consumed atomically; every lost-factor
+    reset increments security generation and requires a fresh login before password replacement.
 
 - **CAP-7** Profiles, avatars, and mobile verification (FR-33..36)
   - **intent:** Staff edit their own non-security profile fields; assigned supervisors edit student profiles,

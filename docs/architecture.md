@@ -143,6 +143,11 @@ These settings are fixed for the MVP and are not operator-configurable.
   revocation record and no remote revocation. Ordinary requests and SSE do not
   extend idle expiry; only the explicit Continue working operation does, and it
   does not reissue the marker.
+- Student-only, staff, and local sole-administrator MFA resets increment security
+  generation so every prior cookie is rejected. Each reset also sets the
+  password gate, requiring a fresh login and password replacement before normal
+  access. Ordinary staged login continues to enforce MFA before password
+  replacement whenever an active factor exists.
 
 ## Tutor Context And Retrieval
 

@@ -94,6 +94,40 @@ func TestActivationRequiresMaterialAndAssignedSupervisor(t *testing.T) {
 	}
 }
 
+func TestAuthorizeStudentMFAResetRequiresSharedAssignedCourse(t *testing.T) {
+	database := courseDatabase(t)
+	admin := createAccount(t, database, "mfa-auth-admin", user.Administrator)
+	supervisor := createAccount(t, database, "mfa-auth-supervisor", user.Supervisor)
+	unrelated := createAccount(t, database, "mfa-auth-unrelated", user.Supervisor)
+	student := createAccount(t, database, "mfa-auth-student", user.Student)
+	staffStudent := createAccount(t, database, "mfa-auth-staff", user.Supervisor)
+	service := NewService(database, t.TempDir(), nil, nil, nil, nil, nil, nil)
+	created, err := service.Create(context.Background(), CreateInput{ActorID: admin, SupervisorIDs: []string{supervisor},
+		Fields: preparedFields("MFA reset scope")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{student, staffStudent} {
+		if _, err := database.Exec(`INSERT INTO course_students
+			(id, course_id, student_user_id, joined_at, added_by) VALUES (?, ?, ?, ?, ?)`,
+			"cst_"+uuid.NewString(), created.ID, id, "2026-09-14T00:00:00.000000Z", supervisor); err != nil {
+			t.Fatal(err)
+		}
+	}
+	allowed, err := AuthorizeStudentMFAReset(context.Background(), database, student, supervisor)
+	if err != nil || !allowed {
+		t.Fatalf("shared student authorization allowed=%t err=%v", allowed, err)
+	}
+	for name, ids := range map[string][2]string{
+		"unrelated": {unrelated, student}, "staff target": {supervisor, staffStudent}, "missing": {supervisor, "u_missing"},
+	} {
+		allowed, err = AuthorizeStudentMFAReset(context.Background(), database, ids[1], ids[0])
+		if err != nil || allowed {
+			t.Fatalf("%s authorization allowed=%t err=%v", name, allowed, err)
+		}
+	}
+}
+
 func TestSupervisorInvariantAndLifecycleDeletionTransaction(t *testing.T) {
 	database := courseDatabase(t)
 	admin := createAccount(t, database, "admin", user.Administrator)

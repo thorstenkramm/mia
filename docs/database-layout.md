@@ -573,42 +573,33 @@ to ordinary source-IP limits and creates no key derived from a hidden resource.
 
 ### `mfa_factors`
 
-One account may have one active factor and one pending replacement. The pending
-factor never replaces the active factor before successful verification.
+One account may have one active factor. A pending first enrollment or replacement
+lives in `mfa_enrollments` and never replaces the active factor before successful
+verification.
 
 Columns:
 
-- `id`, prefix `mfa_`, primary key
-- `user_id`, user ID, not null, cascade on user deletion
-- `type`, enum `totp` or `sms`, not null
-- `status`, enum `pending`, `active`, `replaced`, `disabled`, or `reset`, not null
+- `user_id`, user ID, primary key, cascade on user deletion
+- `id`, unique opaque factor ID with prefix `mff_`
+- `method`, enum `totp` or `sms`, not null
 - `totp_secret`, nullable plaintext TOTP secret, present only for TOTP
-- `last_used_step`, nullable TOTP time-step number
-- `sms_mobile`, nullable E.164 destination snapshot, present only for SMS
-- `enrollment_sms_code`, nullable plaintext six-digit code, present only for a
-  pending SMS factor
-- `expires_at`, nullable, required only while pending
-- `failed_attempts`, integer, not null, default 0
+- `sms_destination`, nullable E.164 destination snapshot, present only for SMS
+- `last_totp_step`, nullable TOTP time-step number
 - `created_at`, not null
-- `verified_at`, nullable
-- `activated_at`, nullable
-- `ended_at`, nullable
-- `replaces_factor_id`, nullable factor ID
 
 Constraints:
 
-- A partial unique index permits at most one active factor per user.
-- A partial unique index permits at most one pending factor per user.
+- The primary key permits at most one active factor per user. A unique
+  `mfa_enrollments.user_id` index permits at most one pending enrollment.
 - TOTP requires a 20-byte secret and forbids SMS fields. SMS requires an immutable
-  `sms_mobile` snapshot and forbids a TOTP secret. Creating a pending SMS factor
+  `sms_destination` snapshot and forbids a TOTP secret. Creating a pending SMS enrollment
   requires that snapshot to equal the current verified profile mobile. Profile
-  mobile change or removal deletes pending SMS factors but not an active factor.
+  mobile change or removal deletes pending SMS enrollments but not an active factor.
 - TOTP verification atomically rejects reuse of `last_used_step` and stores the
   successfully accepted step.
-- A pending factor expires 30 minutes after creation. Activation clears the
-  enrollment SMS code and expiry. Expiry deletes the pending factor without
-  changing an active factor.
-- Five failed enrollment verifications delete the pending factor.
+- A pending enrollment expires 30 minutes after creation. Activation deletes the
+  enrollment row. Expiry makes it unavailable without changing an active factor.
+- Five failed enrollment verifications delete the pending enrollment.
 - Resending a pending SMS factor sends its existing enrollment code and preserves
   `expires_at` and `failed_attempts`. Every attempt is recorded in
   `sms_delivery_attempts`.
@@ -624,11 +615,10 @@ Constraints:
 Columns:
 
 - `id`, prefix `mrc_`, primary key
-- `factor_id`, factor ID, not null, cascade on factor deletion
-- `code_hash`, 32-byte SHA-256 digest, not null, unique within factor
+- `user_id`, user ID, not null, cascade on user deletion
+- `digest`, 32-byte SHA-256 digest, not null and globally unique
 - `created_at`, not null
 - `consumed_at`, nullable
-- `invalidated_at`, nullable
 
 Each activated factor receives ten independently generated 80-bit recovery codes.
 Input normalization removes display hyphens and folds ASCII letters to uppercase
@@ -687,10 +677,9 @@ Invariants:
 - A recovery code can consume a challenge and itself in one transaction.
 
 MFA reset ends active and pending factors, invalidates recovery codes and
-challenges, sets `must_change_password`, and writes a safe audit event in one
-transaction. A student-only MFA reset also increments `security_generation` in
-that transaction. The next student login uses the current generation and enters
-the password-change stage.
+challenges, sets `must_change_password`, increments `security_generation`, and
+writes a safe audit event in one transaction. Every existing cookie is rejected;
+the next login uses the current generation and enters the password-change stage.
 
 Authorization invariants:
 

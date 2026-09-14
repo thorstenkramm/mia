@@ -77,7 +77,8 @@ Avatars/logos are filesystem-only; presence at the fixed path determines availab
   with 6 fractional digits; enums via CHECK constraints; validated JSON columns.
 - Normalized-key uniqueness: ASCII lowercase for username/email; NFC + Unicode case fold for course/material
   names (no SQLite `NOCASE`).
-- `users.security_generation` implements mass cookie invalidation (temporary password, student MFA reset).
+- `users.security_generation` implements mass cookie invalidation (temporary password, student MFA reset, staff MFA
+  reset, and local `reset-admin-mfa`).
 - One-active-tutoring-session-per-student enforced by a partial unique index on `tutoring_sessions`.
 - Attribution foreign keys `SET NULL` on actor deletion; ownership foreign keys cascade; audit de-identification
   via random one-way fingerprints.

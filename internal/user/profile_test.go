@@ -67,7 +67,7 @@ func TestMobileVerificationChangesProfileOnceAndPreservesActiveFactorDestination
 		t.Fatal(err)
 	}
 	if _, err := database.Exec(`INSERT INTO mfa_factors
-		(user_id, method, sms_destination, created_at) VALUES (?, 'sms', ?, ?)`, staff.ID, oldDestination,
+		(id, user_id, method, sms_destination, created_at) VALUES (?, ?, 'sms', ?, ?)`, "mff_"+uuid.NewString(), staff.ID, oldDestination,
 		"2026-08-31T12:00:00.000000Z"); err != nil {
 		t.Fatal(err)
 	}
@@ -211,8 +211,9 @@ func TestMobileRemovalClearsPendingStateButNotActiveFactor(t *testing.T) {
 		"2026-08-31T12:00:00.000000Z", staff.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := database.Exec(`INSERT INTO mfa_factors (user_id, method, sms_destination, created_at)
-		VALUES (?, 'sms', '+49111111111', ?)`, staff.ID, "2026-08-31T12:00:00.000000Z"); err != nil {
+	if _, err := database.Exec(`INSERT INTO mfa_factors (id, user_id, method, sms_destination, created_at)
+		VALUES (?, ?, 'sms', '+49111111111', ?)`, "mff_"+uuid.NewString(), staff.ID,
+		"2026-08-31T12:00:00.000000Z"); err != nil {
 		t.Fatal(err)
 	}
 	if err := service.RemoveMobile(context.Background(), staff.ID); err != nil {

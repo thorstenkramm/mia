@@ -25,17 +25,12 @@ Verdict: **0 hard contradictions, 1 materially weakened rule, 14 requirement-lev
 
 ## Gaps — Medium
 
-### G-1 — Staff/administrator MFA-reset effects are unstated
+### G-1 — RESOLVED: Staff/administrator MFA-reset effects
 
-- Source: `docs/product-requirements.md:661-676` — the staff reset (by a different administrator)
-  removes the factor, invalidates all recovery codes, **requires password replacement at next
-  login**, and **restricts existing browser cookies to password replacement and logout**. The local
-  sole-administrator recovery has the same effects.
-- PRD: FR-32 fully describes the student path (cookie invalidation, forced replacement) but for
-  staff says only "a different administrator performs the reset" and describes the local command
-  mechanics. The staff-path consequences (forced password replacement, cookie restriction rather
-  than invalidation) are absent from PRD and addendum. A reader would infer either no consequence
-  or the student consequence — both wrong.
+- Resolution: The product owner made AD-8 authoritative. Staff and local sole-administrator resets
+  increment `security_generation`, invalidate every existing browser cookie, and require a fresh
+  login followed by password replacement. FR-32, the addendum, and the human-readable contract now
+  state the same effects.
 - Affected PRD section: 6.6 FR-32.
 
 ### G-2 — Invitation acceptance under an email-uniqueness conflict does not consume the invitation

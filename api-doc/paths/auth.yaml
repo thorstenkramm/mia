@@ -400,6 +400,76 @@ mfaEnrollment:
         $ref: ../responses/errors.yaml#/Unprocessable
         description: Active-factor disable requires a valid proof (`auth_mfa_proof_required`).
 
+mfaState:
+  get:
+    tags: [Authentication]
+    operationId: getCurrentMFAState
+    summary: Read current MFA state
+    description: >-
+      Returns live active and pending factor metadata and action eligibility. The
+      response never includes destinations, setup data, codes, proofs, or secret
+      material and does not refresh browser-session deadlines.
+    security: [{ sessionCookie: [] }]
+    responses:
+      '200':
+        headers: { Cache-Control: { $ref: ../openapi.yaml#/components/headers/CacheControlNoStore } }
+        description: Authoritative current-account MFA state.
+        content:
+          application/vnd.api+json:
+            schema: { $ref: ../schemas/resources/resources.yaml#/MFAStateDocument }
+      '401': { $ref: ../responses/errors.yaml#/Unauthorized }
+      '403':
+        $ref: ../responses/errors.yaml#/Forbidden
+        description: Restricted session (`auth_password_change_required`).
+      '406': { $ref: ../responses/errors.yaml#/NotAcceptable }
+
+mfaResets:
+  post:
+    tags: [Authentication]
+    operationId: resetLostMFAFactor
+    summary: Reset a lost MFA factor
+    description: >-
+      A shared-course supervisor may reset a student-only target. A different
+      administrator may reset any staff target. Missing, out-of-scope,
+      ineligible, and self-targeted accounts are indistinguishable. The command
+      applies layered source-IP and authenticated-actor limits before evaluating
+      the target. Success invalidates every existing target cookie and requires
+      fresh login followed by password replacement. The command
+      is not automatically retried after an ambiguous transport result; the
+      target's current MFA read is the final reconciliation authority.
+    security: [{ sessionCookie: [], csrfToken: [] }]
+    parameters: [{ $ref: ../openapi.yaml#/components/parameters/ResourceID }]
+    requestBody:
+      required: true
+      content:
+        application/vnd.api+json:
+          schema: { $ref: ../schemas/requests/requests.yaml#/MFAResetRequestDocument }
+    responses:
+      '200':
+        headers: { Cache-Control: { $ref: ../openapi.yaml#/components/headers/CacheControlNoStore } }
+        description: Definitive atomic reset result containing only committed effects.
+        content:
+          application/vnd.api+json:
+            schema: { $ref: ../schemas/resources/resources.yaml#/MFAResetDocument }
+      '400': { $ref: ../responses/errors.yaml#/BadRequest }
+      '401': { $ref: ../responses/errors.yaml#/Unauthorized }
+      '403':
+        $ref: ../responses/errors.yaml#/Forbidden
+        description: CSRF or restricted session (`csrf_invalid` or `auth_password_change_required`).
+      '404':
+        $ref: ../responses/errors.yaml#/NotFound
+        description: Hidden reset target (`auth_mfa_reset_not_found`).
+      '406': { $ref: ../responses/errors.yaml#/NotAcceptable }
+      '409':
+        $ref: ../responses/errors.yaml#/Conflict
+        description: Authorized target has no current active factor (`auth_mfa_reset_unavailable`).
+      '413': { $ref: ../responses/errors.yaml#/RequestTooLarge }
+      '415': { $ref: ../responses/errors.yaml#/UnsupportedMediaType }
+      '422':
+        $ref: ../responses/errors.yaml#/Unprocessable
+        description: Invalid reset resource (`auth_invalid_request`).
+      '429': { $ref: ../responses/errors.yaml#/RateLimited }
+
 Session:
   description: Current singleton auth-sessions resource.
   headers:

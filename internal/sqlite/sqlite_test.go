@@ -38,6 +38,57 @@ func TestOpenAppliesEmbeddedMigrations(t *testing.T) {
 	}
 }
 
+func TestMFAFactorMigrationBackfillsOpaqueRequiredID(t *testing.T) {
+	directory := t.TempDir()
+	if err := os.Chmod(directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	database, err := Open(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = database.ExecContext(context.Background(), `
+		INSERT INTO users (id, username, username_key, password_hash, preferred_language, country, time_zone, created_at)
+		VALUES ('u_legacy', 'legacy', 'legacy', 'hash', 'en', 'DE', 'UTC', '2026-09-14T00:00:00.000000Z');
+		DROP TABLE mfa_factors;
+		CREATE TABLE mfa_factors (
+			user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+			method TEXT NOT NULL CHECK (method IN ('totp', 'sms')),
+			totp_secret BLOB, sms_destination TEXT, last_totp_step INTEGER, created_at TEXT NOT NULL,
+			CHECK ((method = 'totp' AND totp_secret IS NOT NULL AND sms_destination IS NULL)
+				OR (method = 'sms' AND totp_secret IS NULL AND sms_destination IS NOT NULL)));
+		INSERT INTO mfa_factors (user_id, method, totp_secret, created_at)
+		VALUES ('u_legacy', 'totp', zeroblob(20), '2026-09-14T00:00:00.000000Z');
+		UPDATE schema_migrations SET version = 17, dirty = 0;`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+	database, err = Open(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := database.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
+	var id string
+	if err := database.QueryRowContext(context.Background(),
+		"SELECT id FROM mfa_factors WHERE user_id = 'u_legacy'").Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+	if len(id) != 40 || id[:4] != "mff_" {
+		t.Fatalf("backfilled factor ID = %q", id)
+	}
+	if _, err := database.ExecContext(context.Background(),
+		"UPDATE mfa_factors SET id = NULL WHERE user_id = 'u_legacy'"); err == nil {
+		t.Fatal("migrated factor ID accepted null")
+	}
+}
+
 func TestOpenRejectsInsecureRestoredDatabase(t *testing.T) {
 	directory := t.TempDir()
 	if err := os.Chmod(directory, 0o700); err != nil {
@@ -60,7 +111,7 @@ func TestOpenRejectsInsecureRestoredDatabase(t *testing.T) {
 }
 
 func TestOpenRejectsDirtyAndNewerSchema(t *testing.T) {
-	for name, statement := range map[string]string{"dirty": "UPDATE schema_migrations SET dirty = 1", "newer": "UPDATE schema_migrations SET version = 18"} {
+	for name, statement := range map[string]string{"dirty": "UPDATE schema_migrations SET dirty = 1", "newer": "UPDATE schema_migrations SET version = 19"} {
 		t.Run(name, func(t *testing.T) {
 			directory := t.TempDir()
 			if err := os.Chmod(directory, 0o700); err != nil {

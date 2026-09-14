@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	miSQLite "github.com/thorstenkramm/mia/internal/sqlite"
 )
 
 // ErrUnavailable identifies an SMS operation when no provider is configured.
@@ -137,9 +138,31 @@ func (Unavailable) Send(context.Context, string, string) error { return ErrUnava
 // Reserve records an SMS delivery attempt before the provider is contacted.
 // Failed and ambiguous sends deliberately consume the same durable quota.
 func Reserve(ctx context.Context, tx *sql.Tx, accountID, destination string, now time.Time) (time.Duration, error) {
+	retry, err := reserveAllowed(ctx, tx, accountID, destination, now)
+	if err != nil {
+		return retry, err
+	}
+	if _, err := tx.ExecContext(ctx, "INSERT INTO sms_delivery_attempts (id, user_id, destination, created_at) VALUES (?, ?, ?, ?)", "sms_"+uuid.NewString(), accountID, destination, format(now)); err != nil {
+		return 0, fmt.Errorf("reserve SMS delivery: %w", err)
+	}
+	return 0, nil
+}
+
+// CanSend reports current durable SMS eligibility without reserving capacity.
+func CanSend(ctx context.Context, query miSQLite.Querier, accountID, destination string, now time.Time) (bool, error) {
+	_, err := reserveAllowed(ctx, query, accountID, destination, now)
+	if errors.Is(err, ErrRateLimited) {
+		return false, nil
+	}
+	return err == nil, err
+}
+
+func reserveAllowed(ctx context.Context, query miSQLite.Querier, accountID, destination string,
+	now time.Time,
+) (time.Duration, error) {
 	now = now.UTC()
 	var newest string
-	err := tx.QueryRowContext(ctx, `SELECT created_at FROM sms_delivery_attempts
+	err := query.QueryRowContext(ctx, `SELECT created_at FROM sms_delivery_attempts
 		WHERE user_id = ? OR destination = ? ORDER BY created_at DESC LIMIT 1`, accountID, destination).Scan(&newest)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return 0, fmt.Errorf("load SMS cooldown: %w", err)
@@ -158,12 +181,12 @@ func Reserve(ctx context.Context, tx *sql.Tx, accountID, destination string, now
 		maximum  int
 	}{{time.Hour, 5}, {24 * time.Hour, 10}} {
 		var accountCount, destinationCount int
-		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM sms_delivery_attempts
+		if err := query.QueryRowContext(ctx, `SELECT COUNT(*) FROM sms_delivery_attempts
 			WHERE user_id = ? AND created_at > ?`, accountID,
 			format(now.Add(-window.duration))).Scan(&accountCount); err != nil {
 			return 0, fmt.Errorf("count SMS deliveries: %w", err)
 		}
-		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM sms_delivery_attempts
+		if err := query.QueryRowContext(ctx, `SELECT COUNT(*) FROM sms_delivery_attempts
 			WHERE destination = ? AND created_at > ?`, destination,
 			format(now.Add(-window.duration))).Scan(&destinationCount); err != nil {
 			return 0, fmt.Errorf("count destination SMS deliveries: %w", err)
@@ -171,9 +194,6 @@ func Reserve(ctx context.Context, tx *sql.Tx, accountID, destination string, now
 		if accountCount >= window.maximum || destinationCount >= window.maximum {
 			return window.duration, ErrRateLimited
 		}
-	}
-	if _, err := tx.ExecContext(ctx, "INSERT INTO sms_delivery_attempts (id, user_id, destination, created_at) VALUES (?, ?, ?, ?)", "sms_"+uuid.NewString(), accountID, destination, format(now)); err != nil {
-		return 0, fmt.Errorf("reserve SMS delivery: %w", err)
 	}
 	return 0, nil
 }

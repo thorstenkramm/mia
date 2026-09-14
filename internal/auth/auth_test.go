@@ -6,6 +6,8 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -796,7 +798,8 @@ func TestMFAChallengeFailuresPersistAndInvalidateAtFive(t *testing.T) {
 	secret := []byte("12345678901234567890")
 	challengeID := "mfc_" + uuid.NewString()
 	now := instant(time.Now())
-	if _, err := database.Exec(`INSERT INTO mfa_factors (user_id, method, totp_secret, created_at) VALUES (?, 'totp', ?, ?)`, account.ID, secret, now); err != nil {
+	if _, err := database.Exec(`INSERT INTO mfa_factors (id, user_id, method, totp_secret, created_at)
+		VALUES (?, ?, 'totp', ?, ?)`, "mff_"+uuid.NewString(), account.ID, secret, now); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := database.Exec(`INSERT INTO mfa_challenges (id, user_id, method, expires_at, created_at) VALUES (?, ?, 'totp', ?, ?)`, challengeID, account.ID, instant(time.Now().Add(time.Minute)), now); err != nil {
@@ -822,7 +825,9 @@ func TestInvalidRecoveryCodeCountsAsChallengeFailure(t *testing.T) {
 	server, database := testServer(t)
 	account := createAccount(t, database, false)
 	challengeID := "mfc_" + uuid.NewString()
-	if _, err := database.Exec(`INSERT INTO mfa_factors (user_id, method, totp_secret, created_at) VALUES (?, 'totp', ?, ?)`, account.ID, []byte("12345678901234567890"), instant(time.Now())); err != nil {
+	if _, err := database.Exec(`INSERT INTO mfa_factors (id, user_id, method, totp_secret, created_at)
+		VALUES (?, ?, 'totp', ?, ?)`, "mff_"+uuid.NewString(), account.ID,
+		[]byte("12345678901234567890"), instant(time.Now())); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := database.Exec(`INSERT INTO mfa_challenges (id, user_id, method, expires_at, created_at) VALUES (?, ?, 'totp', ?, ?)`, challengeID, account.ID, instant(time.Now().Add(time.Minute)), instant(time.Now())); err != nil {
@@ -850,7 +855,8 @@ func TestMFAVerificationPrecedesPasswordChange(t *testing.T) {
 	account := createAccount(t, database, true)
 	secret := []byte("12345678901234567890")
 	challengeID := "mfc_" + uuid.NewString()
-	if _, err := database.Exec(`INSERT INTO mfa_factors (user_id, method, totp_secret, created_at) VALUES (?, 'totp', ?, ?)`, account.ID, secret, instant(time.Now())); err != nil {
+	if _, err := database.Exec(`INSERT INTO mfa_factors (id, user_id, method, totp_secret, created_at)
+		VALUES (?, ?, 'totp', ?, ?)`, "mff_"+uuid.NewString(), account.ID, secret, instant(time.Now())); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := database.Exec(`INSERT INTO mfa_challenges (id, user_id, method, expires_at, created_at) VALUES (?, ?, 'totp', ?, ?)`, challengeID, account.ID, instant(time.Now().Add(time.Minute)), instant(time.Now())); err != nil {
@@ -991,6 +997,300 @@ func assertAuditCount(t *testing.T, database *sql.DB, action string, expected in
 	}
 }
 
+func TestMFAStateIsAuthoritativeAndSecretFree(t *testing.T) {
+	server, database := testServerWithSMS(t, &smsRecorder{})
+	account := createAccount(t, database, false)
+	csrf := csrfToken(t, server)
+	login := serve(t, server, http.MethodPost, "/api/v1/auth/login", csrf, nil,
+		loginBody("student", "correct horse battery"))
+	cookies, _ := authCookies(t, server, login)
+
+	none := serve(t, server, http.MethodGet, "/api/v1/users/me/mfa", "", cookies, "")
+	if none.Code != http.StatusOK || !strings.Contains(none.Body.String(), `"enroll":true`) {
+		t.Fatalf("empty MFA state status=%d body=%s", none.Code, none.Body.String())
+	}
+	factorID := "mff_" + uuid.NewString()
+	enrollmentID := "mfe_" + uuid.NewString()
+	secret := "overview-must-not-return-this-secret"
+	destination := "+4915112345678"
+	if _, err := database.Exec(`INSERT INTO mfa_factors
+		(id, user_id, method, sms_destination, created_at) VALUES (?, ?, 'sms', ?, ?)`, factorID, account.ID,
+		destination, instant(time.Now())); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`INSERT INTO mfa_enrollments
+		(id, user_id, method, sms_destination, sms_code, proof_digest, expires_at, created_at)
+		VALUES (?, ?, 'sms', ?, ?, ?, ?, ?)`, enrollmentID, account.ID, destination, secret, []byte(secret),
+		instant(time.Now().Add(30*time.Minute)), instant(time.Now())); err != nil {
+		t.Fatal(err)
+	}
+
+	response := serve(t, server, http.MethodGet, "/api/v1/users/me/mfa", "", cookies, "")
+	body := response.Body.String()
+	if response.Code != http.StatusOK || !strings.Contains(body, factorID) || !strings.Contains(body, enrollmentID) ||
+		!strings.Contains(body, `"replaces_factor_id":"`+factorID+`"`) || !strings.Contains(body, `"sms_resend":true`) {
+		t.Fatalf("MFA state status=%d body=%s", response.Code, body)
+	}
+	for _, forbidden := range []string{secret, destination, "sms_destination", "proof_digest", "sms_code"} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("MFA state exposed %q: %s", forbidden, body)
+		}
+	}
+	if _, err := database.Exec(`INSERT INTO sms_delivery_attempts
+		(id, user_id, destination, created_at) VALUES (?, ?, ?, ?)`, "sms_"+uuid.NewString(), account.ID,
+		destination, instant(time.Now())); err != nil {
+		t.Fatal(err)
+	}
+	coolingDown := serve(t, server, http.MethodGet, "/api/v1/users/me/mfa", "", cookies, "")
+	if !strings.Contains(coolingDown.Body.String(), `"sms_resend":false`) {
+		t.Fatalf("SMS cooldown was not reflected in action eligibility: %s", coolingDown.Body.String())
+	}
+	if _, err := database.Exec("UPDATE mfa_enrollments SET expires_at = ? WHERE id = ?",
+		instant(time.Now().Add(-time.Second)), enrollmentID); err != nil {
+		t.Fatal(err)
+	}
+	expired := serve(t, server, http.MethodGet, "/api/v1/users/me/mfa", "", cookies, "")
+	if strings.Contains(expired.Body.String(), enrollmentID) || !strings.Contains(expired.Body.String(), `"replace":true`) {
+		t.Fatalf("expired enrollment remained authoritative: %s", expired.Body.String())
+	}
+}
+
+func TestLostFactorResetAppliesClassSpecificSessionEffects(t *testing.T) {
+	server, database := testServer(t)
+	student := createAccount(t, database, false)
+	studentSupervisor := createNamedStaffAccount(t, database, "student-reset-supervisor", user.Supervisor)
+	studentCSRF := csrfToken(t, server)
+	studentLogin := serve(t, server, http.MethodPost, "/api/v1/auth/login", studentCSRF, nil,
+		loginBody("student", "correct horse battery"))
+	studentCookies, _ := authCookies(t, server, studentLogin)
+	insertMFAArtifacts(t, database, student.ID)
+	before := student.SecurityGeneration
+	result, err := ResetLostFactor(context.Background(), database, studentSupervisor.ID, student.ID,
+		func(context.Context, miSQLite.Querier, string, string) (bool, error) { return true, nil })
+	if err != nil || result.SessionEffect != "invalidated" {
+		t.Fatalf("student reset result=%+v err=%v", result, err)
+	}
+	assertResetState(t, database, student.ID, before+1)
+	invalidated := serve(t, server, http.MethodGet, "/api/v1/users/me/mfa", "", studentCookies, "")
+	assertCode(t, invalidated, http.StatusUnauthorized, "auth_unauthenticated")
+
+	actor := createNamedStaffAccount(t, database, "reset-admin", user.Administrator)
+	target := createNamedStaffAccount(t, database, "reset-target", user.Mentor)
+	csrf := csrfToken(t, server)
+	login := serve(t, server, http.MethodPost, "/api/v1/auth/login", csrf, nil,
+		loginBody("reset-target", "correct horse battery"))
+	oldCookies, _ := authCookies(t, server, login)
+	insertMFAArtifacts(t, database, target.ID)
+	result, err = ResetLostFactor(context.Background(), database, actor.ID, target.ID, nil)
+	if err != nil || result.SessionEffect != "invalidated" {
+		t.Fatalf("staff reset result=%+v err=%v", result, err)
+	}
+	assertResetState(t, database, target.ID, target.SecurityGeneration+1)
+	invalidated = serve(t, server, http.MethodGet, "/api/v1/users/me/mfa", "", oldCookies, "")
+	assertCode(t, invalidated, http.StatusUnauthorized, "auth_unauthenticated")
+	if _, err := ResetLostFactor(context.Background(), database, actor.ID, target.ID, nil); !errors.Is(err, ErrMFAResetUnavailable) {
+		t.Fatalf("stale reset error=%v", err)
+	}
+	if _, err := ResetLostFactor(context.Background(), database, actor.ID, actor.ID, nil); !errors.Is(err, ErrMFAResetNotFound) {
+		t.Fatalf("self reset error=%v", err)
+	}
+	mfaStageTarget := createNamedStaffAccount(t, database, "mfa-stage-reset-target", user.Supervisor)
+	insertMFAArtifacts(t, database, mfaStageTarget.ID)
+	mfaLoginCSRF := csrfToken(t, server)
+	mfaLogin := serve(t, server, http.MethodPost, "/api/v1/auth/login", mfaLoginCSRF, nil,
+		loginBody("mfa-stage-reset-target", "correct horse battery"))
+	mfaCookies, mfaCSRF := authCookies(t, server, mfaLogin)
+	if _, err := ResetLostFactor(context.Background(), database, actor.ID, mfaStageTarget.ID, nil); err != nil {
+		t.Fatal(err)
+	}
+	mfaChanged := serve(t, server, http.MethodPost, "/api/v1/auth/password-changes", mfaCSRF, mfaCookies,
+		`{"data":{"type":"password-changes","attributes":{"password":"third strong password","password_confirmation":"third strong password"}}}`)
+	assertCode(t, mfaChanged, http.StatusForbidden, "auth_password_change_required")
+	assertSessionCleared(t, server, mfaChanged)
+	assertResetState(t, database, mfaStageTarget.ID, mfaStageTarget.SecurityGeneration+1)
+
+	localTarget := createNamedStaffAccount(t, database, "local-reset-target", user.Administrator)
+	insertMFAArtifacts(t, database, localTarget.ID)
+	if err := miSQLite.WithTx(context.Background(), database, func(tx *sql.Tx) error {
+		return ResetMFA(context.Background(), tx, localTarget.ID)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	assertResetState(t, database, localTarget.ID, localTarget.SecurityGeneration+1)
+
+	concurrent := createNamedStudentAccount(t, database, "concurrent-reset-student")
+	insertMFAArtifacts(t, database, concurrent.ID)
+	errorsByCall := make(chan error, 2)
+	var resetters sync.WaitGroup
+	for range 2 {
+		resetters.Add(1)
+		go func() {
+			defer resetters.Done()
+			_, resetErr := ResetLostFactor(context.Background(), database, studentSupervisor.ID, concurrent.ID,
+				func(context.Context, miSQLite.Querier, string, string) (bool, error) { return true, nil })
+			errorsByCall <- resetErr
+		}()
+	}
+	resetters.Wait()
+	close(errorsByCall)
+	succeeded, stale := 0, 0
+	for resetErr := range errorsByCall {
+		if resetErr == nil {
+			succeeded++
+		} else if errors.Is(resetErr, ErrMFAResetUnavailable) {
+			stale++
+		} else {
+			t.Fatalf("concurrent reset error=%v", resetErr)
+		}
+	}
+	if succeeded != 1 || stale != 1 {
+		t.Fatalf("concurrent resets succeeded=%d stale=%d", succeeded, stale)
+	}
+	assertAuditCount(t, database, "auth.mfa.reset", 4)
+}
+
+func TestMFAResetRouteIsCSRFSafeAndExistenceHiding(t *testing.T) {
+	server, database := testServer(t)
+	createAccount(t, database, false)
+	target := createNamedStudentAccount(t, database, "reset-student")
+	insertMFAArtifacts(t, database, target.ID)
+	RegisterMFARecovery(server, database,
+		func(_ context.Context, _ miSQLite.Querier, targetID, actorID string) (bool, error) {
+			return targetID == target.ID && actorID != targetID, nil
+		})
+	csrf := csrfToken(t, server)
+	login := serve(t, server, http.MethodPost, "/api/v1/auth/login", csrf, nil,
+		loginBody("student", "correct horse battery"))
+	cookies, csrf := authCookies(t, server, login)
+	body := `{"data":{"type":"mfa-resets","attributes":{}}}`
+	missingCSRF := serve(t, server, http.MethodPost, "/api/v1/users/"+target.ID+"/mfa-resets", "", cookies, body)
+	assertCode(t, missingCSRF, http.StatusForbidden, "csrf_invalid")
+	hidden := serve(t, server, http.MethodPost, "/api/v1/users/u_missing/mfa-resets", csrf, cookies, body)
+	assertCode(t, hidden, http.StatusNotFound, "auth_mfa_reset_not_found")
+	success := serve(t, server, http.MethodPost, "/api/v1/users/"+target.ID+"/mfa-resets", csrf, cookies, body)
+	if success.Code != http.StatusOK || strings.Contains(success.Body.String(), target.ID) ||
+		!strings.Contains(success.Body.String(), `"session_effect":"invalidated"`) {
+		t.Fatalf("reset response status=%d body=%s", success.Code, success.Body.String())
+	}
+}
+
+func TestMFAResetRouteAppliesLayeredRateLimitBeforeMutation(t *testing.T) {
+	server, database := testServer(t)
+	createAccount(t, database, false)
+	target := createNamedStudentAccount(t, database, "rate-limited-reset-student")
+	insertMFAArtifacts(t, database, target.ID)
+	RegisterMFARecovery(server, database,
+		func(_ context.Context, _ miSQLite.Querier, targetID, actorID string) (bool, error) {
+			return targetID == target.ID && actorID != targetID, nil
+		})
+	csrf := csrfToken(t, server)
+	login := serve(t, server, http.MethodPost, "/api/v1/auth/login", csrf, nil,
+		loginBody("student", "correct horse battery"))
+	cookies, csrf := authCookies(t, server, login)
+	body := `{"data":{"type":"mfa-resets","attributes":{}}}`
+	for attempt := range 10 {
+		response := serve(t, server, http.MethodPost,
+			fmt.Sprintf("/api/v1/users/u_missing_%d/mfa-resets", attempt), csrf, cookies, body)
+		assertCode(t, response, http.StatusNotFound, "auth_mfa_reset_not_found")
+	}
+	denied := serve(t, server, http.MethodPost, "/api/v1/users/"+target.ID+"/mfa-resets", csrf, cookies, body)
+	assertCode(t, denied, http.StatusTooManyRequests, "rate_limited")
+	if denied.Header().Get("Retry-After") == "" {
+		t.Fatal("rate-limited MFA reset omitted Retry-After")
+	}
+	var factors int
+	if err := database.QueryRow("SELECT COUNT(*) FROM mfa_factors WHERE user_id = ?", target.ID).Scan(&factors); err != nil {
+		t.Fatal(err)
+	}
+	if factors != 1 {
+		t.Fatalf("rate-limited reset mutated factors: %d", factors)
+	}
+	assertAuditCount(t, database, "auth.mfa.reset.throttled", 1)
+}
+
+func insertMFAArtifacts(t *testing.T, database *sql.DB, accountID string) {
+	t.Helper()
+	now := instant(time.Now())
+	if _, err := database.Exec(`INSERT INTO mfa_factors
+		(id, user_id, method, totp_secret, created_at) VALUES (?, ?, 'totp', ?, ?)`,
+		"mff_"+uuid.NewString(), accountID, make([]byte, 20), now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`INSERT INTO mfa_enrollments
+		(id, user_id, method, totp_secret, expires_at, created_at) VALUES (?, ?, 'totp', ?, ?, ?)`,
+		"mfe_"+uuid.NewString(), accountID, make([]byte, 20), instant(time.Now().Add(time.Minute)), now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`INSERT INTO mfa_challenges
+		(id, user_id, method, expires_at, created_at) VALUES (?, ?, 'totp', ?, ?)`,
+		"mfc_"+uuid.NewString(), accountID, instant(time.Now().Add(time.Minute)), now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`INSERT INTO mfa_management_proofs
+		(id, user_id, token_digest, expires_at, created_at) VALUES (?, ?, ?, ?, ?)`,
+		"mfp_"+uuid.NewString(), accountID, uuid.NewString(), instant(time.Now().Add(time.Minute)), now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`INSERT INTO mfa_recovery_codes
+		(id, user_id, digest, created_at) VALUES (?, ?, ?, ?)`,
+		"mrc_"+uuid.NewString(), accountID, uuid.NewString(), now); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func assertResetState(t *testing.T, database *sql.DB, accountID string, generation int64) {
+	t.Helper()
+	for _, table := range []string{"mfa_factors", "mfa_enrollments", "mfa_challenges", "mfa_management_proofs", "mfa_recovery_codes"} {
+		var count int
+		if err := database.QueryRow("SELECT COUNT(*) FROM "+table+" WHERE user_id = ?", accountID).Scan(&count); err != nil || count != 0 {
+			t.Fatalf("%s rows=%d err=%v", table, count, err)
+		}
+	}
+	var current int64
+	var gate int
+	if err := database.QueryRow("SELECT security_generation, must_change_password FROM users WHERE id = ?", accountID).
+		Scan(&current, &gate); err != nil || current != generation || gate != 1 {
+		t.Fatalf("reset account generation=%d gate=%d err=%v", current, gate, err)
+	}
+}
+
+func createNamedStaffAccount(t *testing.T, database *sql.DB, username string, role user.Role) user.Account {
+	t.Helper()
+	hash, err := identity.Password("correct horse battery")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var account user.Account
+	if err := miSQLite.WithTx(context.Background(), database, func(tx *sql.Tx) error {
+		var createErr error
+		account, createErr = user.Create(context.Background(), tx, user.CreateInput{Username: username,
+			Email: username + "@example.test", PasswordHash: hash, Language: "en", Country: "DE", TimeZone: "UTC",
+			EmailVerified: true, Roles: []user.Role{role}})
+		return createErr
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return account
+}
+
+func createNamedStudentAccount(t *testing.T, database *sql.DB, username string) user.Account {
+	t.Helper()
+	hash, err := identity.Password("correct horse battery")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var account user.Account
+	if err := miSQLite.WithTx(context.Background(), database, func(tx *sql.Tx) error {
+		var createErr error
+		account, createErr = user.Create(context.Background(), tx, user.CreateInput{Username: username,
+			PasswordHash: hash, Language: "en", Country: "DE", TimeZone: "UTC", Roles: []user.Role{user.Student}})
+		return createErr
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return account
+}
+
 func testServer(t *testing.T) (*httpserver.Server, *sql.DB) {
 	return testServerWithMailerAndSMS(t, recoveryMailerFunc(func(context.Context, string, string) error { return nil }), sms.Unavailable{}, httpserver.CookiePolicy{})
 }
@@ -1035,7 +1335,8 @@ func testServerWithMailerAndSMS(t *testing.T, mailer recoveryMailer, sender sms.
 		if err != nil {
 			return httpserver.IdentityState{}, httpserver.ErrIdentityNotFound
 		}
-		return httpserver.IdentityState{SecurityGeneration: account.SecurityGeneration, MustChangePassword: account.MustChangePassword, Banned: account.Banned}, nil
+		return httpserver.IdentityState{SecurityGeneration: account.SecurityGeneration,
+			MustChangePassword: account.MustChangePassword, Banned: account.Banned}, nil
 	})
 	deliveries := NewDeliveryManager(database, mailer, nil)
 	t.Cleanup(deliveries.Close)
@@ -1162,6 +1463,16 @@ func authCookies(t *testing.T, server *httpserver.Server, response *httptest.Res
 		t.Fatalf("auth cookies count=%d csrf=%q", len(cookies), csrf)
 	}
 	return cookies, csrf
+}
+
+func assertSessionCleared(t *testing.T, server *httpserver.Server, response *httptest.ResponseRecorder) {
+	t.Helper()
+	for _, cookie := range response.Result().Cookies() {
+		if cookie.Name == server.SessionCookieName() && cookie.MaxAge < 0 {
+			return
+		}
+	}
+	t.Fatal("response did not clear the invalidated session cookie")
 }
 
 func assertLocalCSRFCookie(t *testing.T, response *httptest.ResponseRecorder) {

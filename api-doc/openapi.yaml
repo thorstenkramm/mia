@@ -68,6 +68,10 @@ paths:
     $ref: paths/auth.yaml#/mfaEnrollmentResends
   /api/v1/users/me/mfa-enrollments/{id}:
     $ref: paths/auth.yaml#/mfaEnrollment
+  /api/v1/users/me/mfa:
+    $ref: paths/auth.yaml#/mfaState
+  /api/v1/users/{id}/mfa-resets:
+    $ref: paths/auth.yaml#/mfaResets
   /api/v1/invitations:
     $ref: paths/invitations.yaml#/invitations
   /api/v1/invitations/{id}:

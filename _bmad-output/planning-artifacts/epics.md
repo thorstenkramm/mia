@@ -848,8 +848,8 @@ replacement after a fresh login.
 **Given** a different administrator targets an account with any staff role
 **When** the administrator submits the documented MFA-reset operation
 **Then** MIA atomically removes the factor and all related security artifacts
-**And** the same transaction writes a content-free audit event and restricts existing staff cookies to password
-replacement according to the confirmed staff recovery contract.
+**And** the same transaction writes a content-free audit event, increments security generation to invalidate every
+existing staff cookie, and requires password replacement after a fresh login.
 
 **Given** a supervisor targets an unrelated or staff account, an administrator targets themself, or HTTP would expose
 sole-administrator recovery
@@ -866,7 +866,7 @@ reconciliation read
 **Given** MFA state and reset tests
 **When** lifecycle, role-union, assignment, self-targeting, account-state, concurrency, cookie, and redaction cases run
 **Then** they prove exact authorization, atomic cleanup, password gates, audit redaction, and state reconciliation
-**And** every new read and mutation is documented in OpenAPI with CSRF, errors, rate limits, and `no-store`.
+**And** every new read and mutation is documented in OpenAPI with CSRF, errors, layered rate limits, and `no-store`.
 
 ### Story 2.6: Observe and Continue Mobile Verification
 
