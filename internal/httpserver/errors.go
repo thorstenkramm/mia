@@ -103,6 +103,7 @@ const (
 	CodeJobUnauthorized          Code = "job_unauthorized"
 	CodeJobInvalid               Code = "job_invalid"
 	CodeTutoringNotFound         Code = "tutoring_not_found"
+	CodeTutoringUnauthorized     Code = "tutoring_unauthorized"
 	CodeTutoringInvalid          Code = "tutoring_invalid"
 	CodeTutoringConflict         Code = "tutoring_request_conflict"
 	CodeTutoringActiveSession    Code = "tutoring_active_session"
@@ -220,6 +221,7 @@ var errorRegistry = map[Code]definition{
 	CodeJobUnauthorized:             {http.StatusForbidden, "Unauthorized", "The request could not be completed."},
 	CodeJobInvalid:                  {http.StatusUnprocessableEntity, "Invalid Job Query", "The request could not be completed."},
 	CodeTutoringNotFound:            {http.StatusNotFound, "Not Found", "The requested resource was not found."},
+	CodeTutoringUnauthorized:        {http.StatusForbidden, "Unauthorized", "The request could not be completed."},
 	CodeTutoringInvalid:             {http.StatusUnprocessableEntity, "Invalid Tutoring Request", "The request could not be completed."},
 	CodeTutoringConflict:            {http.StatusConflict, "Request ID Conflict", "The request could not be completed."},
 	CodeTutoringActiveSession:       {http.StatusConflict, "Active Session Exists", "Finish the active tutoring session first."},

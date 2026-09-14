@@ -64,6 +64,35 @@ courseTutoringSessions:
         $ref: ../responses/errors.yaml#/Unprocessable
         description: Invalid request ID or selection (`tutoring_invalid`).
 
+activeTutoringSession:
+  get:
+    tags: [Tutoring]
+    operationId: getCurrentActiveTutoringSession
+    summary: Discover the current student's active tutoring session across courses
+    description: >-
+      Authoritative non-refreshing reconciliation after sign-in, reload, device change, an ambiguous creation response,
+      or `tutoring_active_session`. This operation never enumerates courses or replays session creation. The MVP applies
+      no separate authenticated tutoring rate limit.
+    security: [{ sessionCookie: [] }]
+    responses:
+      '200':
+        headers: { Cache-Control: { $ref: ../openapi.yaml#/components/headers/CacheControlNoStore } }
+        description: >-
+          The owned active session and navigation context, or `data: null` when none exists.
+        content:
+          application/vnd.api+json:
+            schema: { $ref: ../schemas/resources/resources.yaml#/ActiveTutoringSessionDocument }
+      '401':
+        $ref: ../responses/errors.yaml#/Unauthorized
+        description: Sign-in expired or no authenticated browser session (`auth_unauthenticated`).
+      '403':
+        $ref: ../responses/errors.yaml#/Forbidden
+        description: The current account no longer has student authorization (`tutoring_unauthorized`).
+      '406': { $ref: ../responses/errors.yaml#/NotAcceptable }
+      '500':
+        $ref: ../responses/errors.yaml#/InternalError
+        description: Discovery could not be evaluated safely (`internal_error`).
+
 tutoringSession:
   get:
     tags: [Tutoring]

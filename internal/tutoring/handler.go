@@ -53,6 +53,7 @@ type messageRequest struct {
 }
 
 func Register(server *httpserver.Server, service *Service, manager *Manager) {
+	server.AuthenticatedGET("/api/v1/users/me/active-tutoring-session", discoverActiveSessionHandler(service))
 	server.AuthenticatedGET("/api/v1/courses/:course_id/tutoring-sessions", listSessionsHandler(service))
 	server.AuthenticatedPOST("/api/v1/courses/:course_id/tutoring-sessions", startSessionHandler(service))
 	server.AuthenticatedGET("/api/v1/tutoring-sessions/:id", getSessionHandler(service))
@@ -66,6 +67,24 @@ func Register(server *httpserver.Server, service *Service, manager *Manager) {
 	server.AuthenticatedPOST("/api/v1/tutor-responses/:id/interruptions", interruptResponseHandler(service))
 	server.AuthenticatedRoute(http.MethodGet, "/api/v1/tutor-responses/:id/events", httpserver.RepresentationSSE,
 		eventsHandler(manager))
+}
+
+func discoverActiveSessionHandler(service *Service) echo.HandlerFunc {
+	return func(c *echo.Context) error {
+		actorID, err := httpserver.AuthenticatedUser(c)
+		if err != nil {
+			return err
+		}
+		value, err := service.DiscoverActive(c.Request().Context(), actorID)
+		if err != nil {
+			return tutoringError(err)
+		}
+		var data any
+		if value != nil {
+			data = activeSessionResource(*value)
+		}
+		return httpserver.JSONAPI(c, http.StatusOK, map[string]any{"data": data})
+	}
 }
 
 func startSessionHandler(service *Service) echo.HandlerFunc {
@@ -381,6 +400,13 @@ func sessionResource(value Session) map[string]any {
 	return resource
 }
 
+func activeSessionResource(value ActiveSession) map[string]any {
+	return map[string]any{"type": "tutoring-sessions", "id": value.ID, "attributes": map[string]any{
+		"course_id": value.CourseID, "course_name": value.CourseName, "state": value.State,
+		"started_at":       httpserver.FormatInstant(value.StartedAt),
+		"last_activity_at": httpserver.FormatInstant(value.LastActivityAt)}}
+}
+
 func messageResponse(c *echo.Context, status int, value MessageResult) error {
 	return httpserver.JSONAPI(c, status, map[string]any{"data": messageResource(value)})
 }
@@ -422,6 +448,10 @@ func tutoringError(err error) error {
 	switch {
 	case errors.Is(err, ErrNotFound):
 		return httpserver.NewError(httpserver.CodeTutoringNotFound)
+	case errors.Is(err, ErrUnauthorized):
+		return httpserver.NewError(httpserver.CodeTutoringUnauthorized)
+	case errors.Is(err, ErrDiscoveryUnavailable):
+		return httpserver.NewError(httpserver.CodeInternalError)
 	case errors.Is(err, ErrInvalid):
 		return httpserver.NewError(httpserver.CodeTutoringInvalid)
 	case errors.Is(err, ErrConflict):

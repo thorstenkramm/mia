@@ -145,6 +145,34 @@ func (service *Service) Get(ctx context.Context, sessionID, actorID string) (Ses
 	return session, err
 }
 
+// DiscoverActive returns the caller's single active session across all courses from one database snapshot.
+func (service *Service) DiscoverActive(ctx context.Context, actorID string) (*ActiveSession, error) {
+	var discovered *ActiveSession
+	err := miSQLite.WithTx(ctx, service.database, func(tx *sql.Tx) error {
+		var student int
+		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM user_roles
+			WHERE user_id = ? AND role = 'student')`, actorID).Scan(&student); err != nil {
+			return fmt.Errorf("authorize active tutoring session discovery: %w", err)
+		}
+		if student == 0 {
+			return ErrUnauthorized
+		}
+		value, err := loadActiveSession(ctx, tx, actorID)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("discover active tutoring session: %w", err)
+		}
+		discovered = &value
+		return nil
+	})
+	if err != nil && !errors.Is(err, ErrUnauthorized) {
+		return nil, fmt.Errorf("%w: %w", ErrDiscoveryUnavailable, err)
+	}
+	return discovered, err
+}
+
 func (service *Service) List(ctx context.Context, courseID, actorID string, input ListInput) (ListResult, error) {
 	if input.Limit < 1 || input.Limit > 100 || input.Offset < 0 || input.Offset > 10_000 {
 		return ListResult{}, ErrInvalid

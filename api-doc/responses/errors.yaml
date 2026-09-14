@@ -16,6 +16,10 @@ UnsupportedMediaType:
   description: JSON request content type is not exactly application/vnd.api+json (`unsupported_media_type`).
   headers: { Cache-Control: { $ref: ../openapi.yaml#/components/headers/CacheControlNoStore } }
   content: { application/vnd.api+json: { schema: { $ref: ../schemas/json-api/documents.yaml#/ErrorDocument } } }
+InternalError:
+  description: Internal dependency or persistence failure (`internal_error`).
+  headers: { Cache-Control: { $ref: ../openapi.yaml#/components/headers/CacheControlNoStore } }
+  content: { application/vnd.api+json: { schema: { $ref: ../schemas/json-api/documents.yaml#/ErrorDocument } } }
 Unauthorized:
   description: Authentication failed (`auth_unauthenticated` or endpoint-specific credentials code).
   headers: { Cache-Control: { $ref: ../openapi.yaml#/components/headers/CacheControlNoStore } }

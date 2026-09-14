@@ -153,6 +153,8 @@ paths:
     $ref: paths/jobs.yaml#/job
   /api/v1/courses/{course_id}/tutoring-sessions:
     $ref: paths/tutoring.yaml#/courseTutoringSessions
+  /api/v1/users/me/active-tutoring-session:
+    $ref: paths/tutoring.yaml#/activeTutoringSession
   /api/v1/tutoring-sessions/{id}:
     $ref: paths/tutoring.yaml#/tutoringSession
   /api/v1/tutoring-sessions/{id}/completion:

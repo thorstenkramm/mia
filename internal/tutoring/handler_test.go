@@ -35,6 +35,26 @@ func TestTutoringRoutesUseSharedProtocolAndScopeActiveReview(t *testing.T) {
 	Register(server, fixture.service, manager)
 	studentSession, studentCSRF := tutoringSession(t, server, fixture.student)
 	supervisorSession, _ := tutoringSession(t, server, fixture.supervisor)
+	administrator, err := user.Create(context.Background(), fixture.database, user.CreateInput{Username: "admin.only",
+		Email: "admin@example.org", EmailVerified: true, PasswordHash: "hash", Language: "en", Country: "US",
+		TimeZone: "UTC", Roles: []user.Role{user.Administrator}})
+	require.NoError(t, err)
+	administratorSession, _ := tutoringSession(t, server, administrator.ID)
+
+	none := tutoringHTTP(server, http.MethodGet, "/api/v1/users/me/active-tutoring-session",
+		studentSession, "", "", nil)
+	assert.Equal(t, http.StatusOK, none.Code)
+	assert.JSONEq(t, `{"data":null}`, none.Body.String())
+	assert.Equal(t, "no-store", none.Header().Get("Cache-Control"))
+	assert.NotEmpty(t, none.Header().Get("Mia-Session-Idle-Expires-At"))
+	for _, cookie := range none.Result().Cookies() {
+		assert.NotEqual(t, server.SessionCookieName(), cookie.Name, "discovery must not refresh browser authentication")
+		assert.NotEqual(t, server.BrowserCookieName(), cookie.Name, "discovery must not rotate the browser marker")
+	}
+	forbidden := tutoringHTTP(server, http.MethodGet, "/api/v1/users/me/active-tutoring-session",
+		administratorSession, "", "", nil)
+	assert.Equal(t, http.StatusForbidden, forbidden.Code)
+	assert.Contains(t, forbidden.Body.String(), `"code":"tutoring_unauthorized"`)
 
 	requestID := uuid.NewString()
 	body := []byte(`{"data":{"type":"tutoring-sessions","attributes":{"client_request_id":"` + requestID +
@@ -44,6 +64,12 @@ func TestTutoringRoutesUseSharedProtocolAndScopeActiveReview(t *testing.T) {
 	assert.Equal(t, http.StatusCreated, created.Code)
 	assert.Equal(t, "application/vnd.api+json", created.Header().Get("Content-Type"))
 	assert.Contains(t, created.Body.String(), `"type":"tutoring-sessions"`)
+	discovered := tutoringHTTP(server, http.MethodGet, "/api/v1/users/me/active-tutoring-session",
+		studentSession, "", "", nil)
+	assert.Equal(t, http.StatusOK, discovered.Code)
+	assert.Contains(t, discovered.Body.String(), `"course_id":"`+fixture.course+`"`)
+	assert.Contains(t, discovered.Body.String(), `"course_name":"Course A"`)
+	assert.NotContains(t, discovered.Body.String(), fixture.materialID)
 	replayed := tutoringHTTP(server, http.MethodPost, "/api/v1/courses/"+fixture.course+"/tutoring-sessions",
 		studentSession, studentCSRF, "application/vnd.api+json", body)
 	assert.Equal(t, http.StatusOK, replayed.Code)
@@ -70,6 +96,29 @@ func TestTutoringRoutesUseSharedProtocolAndScopeActiveReview(t *testing.T) {
 	trailing := tutoringHTTP(server, http.MethodGet, "/api/v1/tutoring-sessions/"+session.ID+"/", studentSession,
 		"", "", nil)
 	assert.Equal(t, http.StatusNotFound, trailing.Code)
+}
+
+func TestActiveSessionDiscoveryDependencyFailureReturnsInternalError(t *testing.T) {
+	fixture := newTutoringFixture(t)
+	docRoot := filepath.Join(t.TempDir(), "frontend")
+	require.NoError(t, os.Mkdir(docRoot, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(docRoot, "index.html"), []byte("frontend"), 0o644))
+	server, _, err := httpserver.New(httpserver.Options{DataDir: fixture.directory, DocRoot: docRoot})
+	require.NoError(t, err)
+	server.SetIdentityLoader(func(context.Context, string) (httpserver.IdentityState, error) {
+		return httpserver.IdentityState{SecurityGeneration: 1}, nil
+	})
+	Register(server, fixture.service, NewManager(fixture.database, fixture.service, nil, fixture.directory, nil))
+	sessionCookie, _ := tutoringSession(t, server, fixture.student)
+	require.NoError(t, fixture.database.Close())
+
+	response := tutoringHTTP(server, http.MethodGet, "/api/v1/users/me/active-tutoring-session",
+		sessionCookie, "", "", nil)
+	assert.Equal(t, http.StatusInternalServerError, response.Code)
+	assert.Equal(t, "application/vnd.api+json", response.Header().Get("Content-Type"))
+	assert.Equal(t, "no-store", response.Header().Get("Cache-Control"))
+	assert.JSONEq(t, `{"errors":[{"status":"500","code":"internal_error","title":"Internal Server Error",`+
+		`"detail":"The request could not be completed."}]}`, response.Body.String())
 }
 
 func TestTutorResponseEventsReturnSanitizedTerminalSnapshot(t *testing.T) {

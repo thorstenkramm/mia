@@ -1153,6 +1153,13 @@ uploader must remove or replace the failed file before processing can succeed.
 - After authentication, the student can resume the same active session and
   conversation after logout, browser closure, network interruption, or device
   change.
+- One authenticated non-refreshing read discovers the student's active session
+  across all courses and returns its session identity plus authorized course ID
+  and name. It returns a successful explicit null when no active session exists.
+  The read remains authoritative after course deactivation, creation conflict,
+  or an ambiguous creation response; clients neither enumerate courses nor
+  automatically replay creation. A database lookup failure returns the shared
+  safe HTTP `500 internal_error`, not the successful no-session representation.
 
 ### Initial context
 

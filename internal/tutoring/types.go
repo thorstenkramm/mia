@@ -7,14 +7,16 @@ import (
 )
 
 var (
-	ErrNotFound        = errors.New("tutoring session not found")
-	ErrInvalid         = errors.New("invalid tutoring request")
-	ErrConflict        = errors.New("tutoring request conflicts with retained history")
-	ErrActiveSession   = errors.New("student already has an active tutoring session")
-	ErrWorkBusy        = errors.New("tutoring response slots are full")
-	ErrInvalidState    = errors.New("tutoring state does not allow action")
-	ErrSummaryMissing  = errors.New("session summary is not available")
-	ErrProviderFailure = errors.New("tutor provider failed")
+	ErrNotFound             = errors.New("tutoring session not found")
+	ErrUnauthorized         = errors.New("tutoring action unauthorized")
+	ErrDiscoveryUnavailable = errors.New("active tutoring session discovery unavailable")
+	ErrInvalid              = errors.New("invalid tutoring request")
+	ErrConflict             = errors.New("tutoring request conflicts with retained history")
+	ErrActiveSession        = errors.New("student already has an active tutoring session")
+	ErrWorkBusy             = errors.New("tutoring response slots are full")
+	ErrInvalidState         = errors.New("tutoring state does not allow action")
+	ErrSummaryMissing       = errors.New("session summary is not available")
+	ErrProviderFailure      = errors.New("tutor provider failed")
 )
 
 type Session struct {
@@ -23,6 +25,12 @@ type Session struct {
 	StartedAt, LastActivityAt                      time.Time
 	CompletedAt, SummaryUpdatedAt                  *time.Time
 	SelectedMaterialIDs                            []string
+}
+
+// ActiveSession is the minimal owned-session and course context used for cross-course discovery.
+type ActiveSession struct {
+	ID, CourseID, CourseName, State string
+	StartedAt, LastActivityAt       time.Time
 }
 
 type Message struct {

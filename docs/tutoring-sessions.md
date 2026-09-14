@@ -150,6 +150,20 @@ active generation 30 seconds to finish, then cancels and fails what remains.
 A student can conduct only one session at a time across all courses. Starting
 another session fails with an instruction to complete the active session first.
 
+The authenticated current-account active-session read is the authoritative way
+to find that session across courses. It returns the owned active session with its
+course ID and name, or a successful JSON:API `data: null` when none exists. It
+does not refresh browser-session idle expiry. Students use the same read after
+sign-in, reload, browser or network interruption, device change, an ambiguous
+creation response, or an active-session conflict. They do not enumerate courses
+or automatically replay creation.
+
+Course deactivation blocks replacement session creation but does not hide or end
+an existing active session. The discovery read continues to return it until the
+owning student finishes it. Authentication expiry, loss of student authorization,
+and a lookup dependency failure remain distinct from normal absence. A database
+lookup failure returns the shared safe HTTP `500 internal_error` response.
+
 ## Student-private material
 
 Material uploaded by a student is visible to that student, the AI tutor, and

@@ -643,6 +643,7 @@ results cannot recreate deleted state.
 ## Tutoring sessions and messages
 
 - `GET|POST /api/v1/courses/{course_id}/tutoring-sessions`
+- `GET /api/v1/users/me/active-tutoring-session`
 - `GET|PATCH /api/v1/tutoring-sessions/{id}`
 - `POST /api/v1/tutoring-sessions/{id}/completion`
 - `POST /api/v1/tutoring-sessions/{id}/summary-generations`
@@ -659,6 +660,15 @@ content is a conflict. After completion, every reuse of that request ID is a
 conflict while the session remains retained. Authorized deletion removes its
 request-ID history; MIA stores no tombstone. The owning student can complete an
 active session; no abandon or staff force-completion route exists.
+
+The current-account active-session route is the authoritative, non-refreshing
+cross-course discovery and reconciliation read. It returns a minimal owned
+`tutoring-sessions` resource with course ID and name, or `data: null` when no
+active session exists. It continues to return an active session after course
+deactivation. Clients use it after reload, device change, ambiguous creation, or
+`tutoring_active_session`; they do not enumerate courses or replay creation. A
+database lookup failure returns the shared safe `500 internal_error`, distinct
+from the successful no-session result.
 
 Selected source material must belong to the session's course and be ready and
 file-backed. Course-wide selections also require approval; private selections

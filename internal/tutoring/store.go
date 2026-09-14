@@ -27,6 +27,23 @@ func loadSessionByRequest(ctx context.Context, query miSQLite.Querier, studentID
 	return value.session, value.digest, err
 }
 
+func loadActiveSession(ctx context.Context, query miSQLite.Querier, studentID string) (ActiveSession, error) {
+	var value ActiveSession
+	var started, activity string
+	err := query.QueryRowContext(ctx, `SELECT s.id, s.course_id, c.name, s.state, s.started_at, s.last_activity_at
+		FROM tutoring_sessions s JOIN courses c ON c.id = s.course_id
+		WHERE s.student_user_id = ? AND s.state = 'active'`, studentID).
+		Scan(&value.ID, &value.CourseID, &value.CourseName, &value.State, &started, &activity)
+	if err != nil {
+		return ActiveSession{}, err
+	}
+	value.StartedAt, err = parseInstant(started)
+	if err == nil {
+		value.LastActivityAt, err = parseInstant(activity)
+	}
+	return value, err
+}
+
 type sessionDigest struct {
 	session Session
 	digest  []byte

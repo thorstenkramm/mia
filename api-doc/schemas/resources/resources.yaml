@@ -1231,6 +1231,23 @@ TutoringSession:
                   - properties:
                       type: { const: materials }
 
+ActiveTutoringSession:
+  description: Minimal owned active-session projection for cross-course navigation and reconciliation.
+  type: object
+  required: [type, id, attributes]
+  properties:
+    type: { const: tutoring-sessions }
+    id: { type: string }
+    attributes:
+      type: object
+      required: [course_id, course_name, state, started_at, last_activity_at]
+      properties:
+        course_id: { type: string }
+        course_name: { type: string, minLength: 1, maxLength: 200 }
+        state: { const: active }
+        started_at: { type: string, format: date-time }
+        last_activity_at: { type: string, format: date-time }
+
 TutorResponse:
   type: object
   required: [type, id, attributes]
@@ -1436,6 +1453,14 @@ TutoringSessionDocument:
   required: [data]
   properties:
     data: { $ref: '#/TutoringSession' }
+ActiveTutoringSessionDocument:
+  type: object
+  required: [data]
+  properties:
+    data:
+      oneOf:
+        - $ref: '#/ActiveTutoringSession'
+        - type: 'null'
 TutoringSessionCollectionDocument:
   type: object
   required: [data, meta]

@@ -158,6 +158,68 @@ func TestSessionLifecycleIdempotencyQueueAndReview(t *testing.T) {
 	assert.ErrorIs(t, err, ErrConflict)
 }
 
+func TestDiscoverActiveSessionLifecycleAndScope(t *testing.T) {
+	fixture := newTutoringFixture(t)
+	ctx := context.Background()
+
+	discovered, err := fixture.service.DiscoverActive(ctx, fixture.student)
+	require.NoError(t, err)
+	assert.Nil(t, discovered)
+
+	session, _, err := fixture.service.Start(ctx, StartInput{CourseID: fixture.course, StudentID: fixture.student,
+		RequestID: uuid.NewString()})
+	require.NoError(t, err)
+	discovered, err = fixture.service.DiscoverActive(ctx, fixture.student)
+	require.NoError(t, err)
+	require.NotNil(t, discovered)
+	assert.Equal(t, session.ID, discovered.ID)
+	assert.Equal(t, fixture.course, discovered.CourseID)
+	assert.Equal(t, "Course A", discovered.CourseName)
+	assert.Equal(t, "active", discovered.State)
+
+	_, _, err = fixture.service.Start(ctx, StartInput{CourseID: fixture.secondCourse, StudentID: fixture.student,
+		RequestID: uuid.NewString()})
+	assert.ErrorIs(t, err, ErrActiveSession)
+	reconciled, err := fixture.service.DiscoverActive(ctx, fixture.student)
+	require.NoError(t, err)
+	require.NotNil(t, reconciled)
+	assert.Equal(t, session.ID, reconciled.ID)
+
+	_, err = fixture.database.ExecContext(ctx, "UPDATE courses SET is_active = 0 WHERE id = ?", fixture.course)
+	require.NoError(t, err)
+	discovered, err = fixture.service.DiscoverActive(ctx, fixture.student)
+	require.NoError(t, err)
+	require.NotNil(t, discovered)
+	assert.Equal(t, session.ID, discovered.ID)
+
+	_, err = fixture.service.Complete(ctx, session.ID, fixture.student)
+	require.NoError(t, err)
+	discovered, err = fixture.service.DiscoverActive(ctx, fixture.student)
+	require.NoError(t, err)
+	assert.Nil(t, discovered)
+
+	administrator, err := user.Create(ctx, fixture.database, user.CreateInput{Username: "admin.only",
+		Email: "admin@example.org", EmailVerified: true, PasswordHash: "hash", Language: "en", Country: "US",
+		TimeZone: "UTC", Roles: []user.Role{user.Administrator}})
+	require.NoError(t, err)
+	_, err = fixture.service.DiscoverActive(ctx, administrator.ID)
+	assert.ErrorIs(t, err, ErrUnauthorized)
+	otherStudent, err := user.Create(ctx, fixture.database, user.CreateInput{Username: "student.two", PasswordHash: "hash",
+		Language: "en", Country: "US", TimeZone: "UTC", Roles: []user.Role{user.Student}})
+	require.NoError(t, err)
+	otherDiscovery, err := fixture.service.DiscoverActive(ctx, otherStudent.ID)
+	require.NoError(t, err)
+	assert.Nil(t, otherDiscovery)
+}
+
+func TestDiscoverActiveSessionDependencyFailureIsUnavailable(t *testing.T) {
+	fixture := newTutoringFixture(t)
+	require.NoError(t, fixture.database.Close())
+	value, err := fixture.service.DiscoverActive(context.Background(), fixture.student)
+	assert.Nil(t, value)
+	assert.ErrorIs(t, err, ErrDiscoveryUnavailable)
+}
+
 func TestConcurrentMessageSubmissionsKeepOneQueuedResponse(t *testing.T) {
 	fixture := newTutoringFixture(t)
 	ctx := context.Background()
@@ -382,6 +444,8 @@ func TestConcurrentStartsKeepOneActiveSession(t *testing.T) {
 	ctx := context.Background()
 	start := make(chan struct{})
 	errorsByRequest := make(chan error, 2)
+	discoveryResult := make(chan *ActiveSession, 1)
+	discoveryError := make(chan error, 1)
 	var wait sync.WaitGroup
 	for range 2 {
 		wait.Add(1)
@@ -393,6 +457,14 @@ func TestConcurrentStartsKeepOneActiveSession(t *testing.T) {
 			errorsByRequest <- err
 		}()
 	}
+	wait.Add(1)
+	go func() {
+		defer wait.Done()
+		<-start
+		value, discoverErr := fixture.service.DiscoverActive(ctx, fixture.student)
+		discoveryResult <- value
+		discoveryError <- discoverErr
+	}()
 	close(start)
 	wait.Wait()
 	close(errorsByRequest)
@@ -412,6 +484,91 @@ func TestConcurrentStartsKeepOneActiveSession(t *testing.T) {
 	require.NoError(t, fixture.database.QueryRow(`SELECT COUNT(*) FROM tutoring_sessions
 		WHERE student_user_id = ? AND state = 'active'`, fixture.student).Scan(&active))
 	assert.Equal(t, 1, active)
+	assert.NoError(t, <-discoveryError)
+	if discovered := <-discoveryResult; discovered != nil {
+		var activeID string
+		require.NoError(t, fixture.database.QueryRow(`SELECT id FROM tutoring_sessions
+			WHERE student_user_id = ? AND state = 'active'`, fixture.student).Scan(&activeID))
+		assert.Equal(t, activeID, discovered.ID)
+	}
+}
+
+func TestConcurrentCompletionAndDiscoveryReturnCommittedState(t *testing.T) {
+	fixture := newTutoringFixture(t)
+	ctx := context.Background()
+	session, _, err := fixture.service.Start(ctx, StartInput{CourseID: fixture.course, StudentID: fixture.student,
+		RequestID: uuid.NewString()})
+	require.NoError(t, err)
+	start := make(chan struct{})
+	discovery := make(chan *ActiveSession, 1)
+	errorsByOperation := make(chan error, 2)
+	var wait sync.WaitGroup
+	wait.Add(2)
+	go func() {
+		defer wait.Done()
+		<-start
+		value, discoverErr := fixture.service.DiscoverActive(ctx, fixture.student)
+		discovery <- value
+		errorsByOperation <- discoverErr
+	}()
+	go func() {
+		defer wait.Done()
+		<-start
+		_, completeErr := fixture.service.Complete(ctx, session.ID, fixture.student)
+		errorsByOperation <- completeErr
+	}()
+	close(start)
+	wait.Wait()
+	for range 2 {
+		assert.NoError(t, <-errorsByOperation)
+	}
+	if value := <-discovery; value != nil {
+		assert.Equal(t, session.ID, value.ID)
+	}
+	current, err := fixture.service.DiscoverActive(ctx, fixture.student)
+	require.NoError(t, err)
+	assert.Nil(t, current)
+}
+
+func TestConcurrentDeletionAndDiscoveryHideRemovedSession(t *testing.T) {
+	fixture := newTutoringFixture(t)
+	ctx := context.Background()
+	session, _, err := fixture.service.Start(ctx, StartInput{CourseID: fixture.course, StudentID: fixture.student,
+		RequestID: uuid.NewString()})
+	require.NoError(t, err)
+	start := make(chan struct{})
+	discovery := make(chan *ActiveSession, 1)
+	errorsByOperation := make(chan error, 2)
+	var wait sync.WaitGroup
+	wait.Add(2)
+	go func() {
+		defer wait.Done()
+		<-start
+		value, discoverErr := fixture.service.DiscoverActive(ctx, fixture.student)
+		discovery <- value
+		errorsByOperation <- discoverErr
+	}()
+	go func() {
+		defer wait.Done()
+		<-start
+		deleteErr := miSQLite.WithTx(ctx, fixture.database, func(tx *sql.Tx) error {
+			return fixture.service.DeleteAccountData(ctx, tx, fixture.student)
+		})
+		errorsByOperation <- deleteErr
+	}()
+	close(start)
+	wait.Wait()
+	for range 2 {
+		assert.NoError(t, <-errorsByOperation)
+	}
+	if value := <-discovery; value != nil {
+		assert.Equal(t, session.ID, value.ID)
+	}
+	current, err := fixture.service.DiscoverActive(ctx, fixture.student)
+	require.NoError(t, err)
+	assert.Nil(t, current)
+	_, err = fixture.service.Get(ctx, session.ID, fixture.student)
+	assert.ErrorIs(t, err, ErrNotFound)
 }
 
 func TestToolRetrievalRecordsOnlyDeliveredNonOverlappingMaterial(t *testing.T) {
