@@ -20,8 +20,9 @@ course content.
 MIA is a self-hosted learning platform that can run on almost any Linux server. Users interact via a browser with the
 system.
 
-While MIA is distributed under a free (MIT) license, running it is not free. You will need paid accounts for the
-following services:
+MIA is source-available under the [PolyForm Noncommercial License 1.0.0](LICENCE.txt). Noncommercial use is permitted;
+commercial use requires a separate agreement. Running MIA is not free: you will need paid accounts for the following
+services:
 
 - [OpenAI API](https://openai.com/api/), used for AI tutoring and background jobs
 - MistralAI, used as an [OCR document service](https://mistral.ai/solutions/document-ai/)

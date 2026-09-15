@@ -3,8 +3,9 @@ info:
   title: MIA API
   version: 1.0.0
   license:
-    name: Apache-2.0
-    identifier: Apache-2.0
+    name: PolyForm Noncommercial License 1.0.0
+    identifier: PolyForm-Noncommercial-1.0.0
+    url: https://polyformproject.org/licenses/noncommercial/1.0.0
   description: |
     Transport contract for the implemented MIA API. JSON documents use JSON:API 1.1.
     API routes have no trailing-slash variant. Unknown routes and unsupported methods reach ordinary JSON:API 404/405
