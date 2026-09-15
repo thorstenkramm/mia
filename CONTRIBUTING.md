@@ -6,7 +6,7 @@ Contributions are welcome through GitHub issues and pull requests.
 
 By submitting a contribution, you confirm that you have the right to submit it. You grant the MIA project a perpetual,
 worldwide, non-exclusive, royalty-free, irrevocable license to use, reproduce, modify, distribute, sublicense, and
-relicense that contribution as part of MIA under the terms of `LICENCE.txt`.
+relicense that contribution as part of MIA under the terms of `LICENCE`.
 
 ## Pull Requests
 

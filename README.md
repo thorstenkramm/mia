@@ -20,7 +20,7 @@ course content.
 MIA is a self-hosted learning platform that can run on almost any Linux server. Users interact via a browser with the
 system.
 
-MIA is source-available under the [PolyForm Noncommercial License 1.0.0](LICENCE.txt). Noncommercial use is permitted;
+MIA is source-available under the [PolyForm Noncommercial License 1.0.0](LICENCE). Noncommercial use is permitted;
 commercial use requires a separate agreement. Running MIA is not free: you will need paid accounts for the following
 services:
 
