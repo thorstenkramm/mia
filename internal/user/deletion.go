@@ -61,6 +61,17 @@ func (service *DeletionService) GetAccount(ctx context.Context, actorID, account
 	return account, err
 }
 
+// ResolveMentorTarget reads one coherent supervisor-safe target projection.
+func (service *DeletionService) ResolveMentorTarget(ctx context.Context, actorID, targetID string) (MentorTarget, error) {
+	var target MentorTarget
+	err := miSQLite.WithTx(ctx, service.database, func(tx *sql.Tx) error {
+		var loadErr error
+		target, loadErr = ResolveMentorTarget(ctx, tx, actorID, targetID)
+		return loadErr
+	})
+	return target, err
+}
+
 func NewDeletionService(database *sql.DB, dataDir string, registry *lifecycle.Registry,
 	logger *slog.Logger) *DeletionService {
 	if registry == nil {

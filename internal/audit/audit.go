@@ -72,6 +72,7 @@ const (
 	ActionUserAvatarRemoved                  Action = "user.avatar.removed"
 	ActionUserAccountDeleted                 Action = "user.account.deleted"
 	ActionUserAccountDeletionDenied          Action = "user.account.deletion_denied"
+	ActionUserMentorTargetThrottled          Action = "user.mentor_target.throttled"
 
 	ActionCourseCourseCreated        Action = "course.course.created"
 	ActionCourseCourseUpdated        Action = "course.course.updated"
@@ -177,6 +178,7 @@ var actions = map[Action]struct{}{
 	ActionUserAvatarRemoved:                     {},
 	ActionUserAccountDeleted:                    {},
 	ActionUserAccountDeletionDenied:             {},
+	ActionUserMentorTargetThrottled:             {},
 	ActionCourseCourseCreated:                   {},
 	ActionCourseCourseUpdated:                   {},
 	ActionCourseCourseActivated:                 {},

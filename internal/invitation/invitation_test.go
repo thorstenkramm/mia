@@ -641,6 +641,20 @@ func serveReviewedRoleGrant(t *testing.T, server *httpserver.Server, database *s
 	return serveRoleGrant(t, server, targetID, csrf, session, role, detail.ETag)
 }
 
+func serveReviewedMentorGrant(t *testing.T, server *httpserver.Server, database *sql.DB, actorUsername,
+	targetID, csrf string, session []*http.Cookie) *httptest.ResponseRecorder {
+	t.Helper()
+	actor, err := user.FindForLogin(context.Background(), database, actorUsername)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, err := user.ResolveMentorTarget(context.Background(), database, actor.ID, targetID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return serveRoleGrant(t, server, targetID, csrf, session, user.Mentor, target.ETag)
+}
+
 func serveRoleGrant(t *testing.T, server *httpserver.Server, targetID, csrf string, session []*http.Cookie,
 	role user.Role, etag string) *httptest.ResponseRecorder {
 	t.Helper()
@@ -1120,12 +1134,53 @@ func TestSupervisorCanGrantMentorRole(t *testing.T) {
 	csrf, session := loginSession(t, server, "supervisor", "correct horse battery")
 	// This should fail because mentor already has staff role but not
 	// administrator/supervisor, and we're granting mentor which is idempotent.
-	response := serve(t, server, http.MethodPost, "/api/v1/users/"+mentor.ID+"/roles", csrf, session,
-		`{"data":{"type":"user-roles","attributes":{"role":"mentor"}}}`)
+	response := serveReviewedMentorGrant(t, server, database, "supervisor", mentor.ID, csrf, session)
 	assertStatus(t, response, http.StatusNoContent)
 
 	_ = admin
 	_ = supervisor
+}
+
+func TestMentorGrantRequiresCurrentPreflightAndAuditsOnlyChange(t *testing.T) {
+	server, database := testServer(t)
+	_ = createAdminAccount(t, database, "admin")
+	const supervisorUsername = "reviewing-supervisor"
+	supervisor := createSupervisorAccount(t, database, supervisorUsername)
+	target := createSupervisorAccount(t, database, "reviewed-target")
+	csrf, session := loginSession(t, server, supervisorUsername, "correct horse battery")
+
+	missing := serveRoleGrant(t, server, target.ID, csrf, session, user.Mentor, "")
+	assertCode(t, missing, http.StatusPreconditionRequired, "user_account_precondition_required")
+	preflight, err := user.ResolveMentorTarget(context.Background(), database, supervisor.ID, target.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec("UPDATE users SET name = 'Changed after review' WHERE id = ?", target.ID); err != nil {
+		t.Fatal(err)
+	}
+	stale := serveRoleGrant(t, server, target.ID, csrf, session, user.Mentor, preflight.ETag)
+	assertCode(t, stale, http.StatusPreconditionFailed, "user_account_precondition_failed")
+	var roleCount int
+	if err := database.QueryRow("SELECT COUNT(*) FROM user_roles WHERE user_id = ? AND role = 'mentor'", target.ID).
+		Scan(&roleCount); err != nil {
+		t.Fatal(err)
+	}
+	if roleCount != 0 {
+		t.Fatalf("stale grant created %d mentor roles", roleCount)
+	}
+
+	fresh := serveReviewedMentorGrant(t, server, database, supervisorUsername, target.ID, csrf, session)
+	assertStatus(t, fresh, http.StatusNoContent)
+	replay := serveReviewedMentorGrant(t, server, database, supervisorUsername, target.ID, csrf, session)
+	assertStatus(t, replay, http.StatusNoContent)
+	var auditCount int
+	if err := database.QueryRow(`SELECT COUNT(*) FROM audit_events WHERE action = 'user.user.role_granted'
+		AND actor_user_id = ? AND subject_user_id = ?`, supervisor.ID, target.ID).Scan(&auditCount); err != nil {
+		t.Fatal(err)
+	}
+	if auditCount != 1 {
+		t.Fatalf("mentor grant audit count = %d, want 1", auditCount)
+	}
 }
 
 // Finding 6: Test role grant idempotency.
@@ -2809,8 +2864,7 @@ func TestDirectGrantAuthorizationMatrix(t *testing.T) {
 		_ = createSupervisorAccount(t, database, "supervisor")
 		mentor := createMentorAccount(t, database, "mentor")
 		csrf, session := loginSession(t, server, "supervisor", "correct horse battery")
-		response := serve(t, server, http.MethodPost, "/api/v1/users/"+mentor.ID+"/roles", csrf, session,
-			`{"data":{"type":"user-roles","attributes":{"role":"mentor"}}}`)
+		response := serveReviewedMentorGrant(t, server, database, "supervisor", mentor.ID, csrf, session)
 		assertStatus(t, response, http.StatusNoContent)
 	})
 }

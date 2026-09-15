@@ -35,21 +35,23 @@ type limitDefinition struct {
 type LimitName string
 
 const (
-	LimitUnauthenticatedAPI LimitName = "unauthenticated_api_ip"
-	LimitLoginIP            LimitName = "login_ip"
-	LimitLoginUsername      LimitName = "login_username"
-	LimitRecoveryIP         LimitName = "recovery_ip"
-	LimitRecoveryIdentifier LimitName = "recovery_identifier"
-	LimitInvitationIP       LimitName = "invitation_ip"
-	LimitInvitationToken    LimitName = "invitation_token"
-	LimitResetIP            LimitName = "reset_ip"
-	LimitResetToken         LimitName = "reset_token"
-	LimitMFAIP              LimitName = "mfa_ip"
-	LimitMFAAccount         LimitName = "mfa_account"
+	LimitUnauthenticatedAPI  LimitName = "unauthenticated_api_ip"
+	LimitLoginIP             LimitName = "login_ip"
+	LimitLoginUsername       LimitName = "login_username"
+	LimitRecoveryIP          LimitName = "recovery_ip"
+	LimitRecoveryIdentifier  LimitName = "recovery_identifier"
+	LimitInvitationIP        LimitName = "invitation_ip"
+	LimitInvitationToken     LimitName = "invitation_token"
+	LimitResetIP             LimitName = "reset_ip"
+	LimitResetToken          LimitName = "reset_token"
+	LimitMFAIP               LimitName = "mfa_ip"
+	LimitMFAAccount          LimitName = "mfa_account"
+	LimitMentorTargetIP      LimitName = "mentor_target_ip"
+	LimitMentorTargetAccount LimitName = "mentor_target_account"
 )
 
 var limitRegistry = map[LimitName]limitDefinition{
-	LimitUnauthenticatedAPI: {time.Minute, 60, 30, CountAttempts, false, false}, LimitLoginIP: {15 * time.Minute, 30, 0, CountFailures, false, true}, LimitLoginUsername: {15 * time.Minute, 5, 0, CountFailures, true, true}, LimitRecoveryIP: {time.Hour, 10, 0, CountAttempts, false, false}, LimitRecoveryIdentifier: {time.Hour, 3, 0, CountAttempts, false, false}, LimitInvitationIP: {time.Hour, 30, 0, CountAttempts, false, false}, LimitInvitationToken: {time.Hour, 10, 0, CountAttempts, false, false}, LimitResetIP: {time.Hour, 20, 0, CountAttempts, false, false}, LimitResetToken: {time.Hour, 5, 0, CountAttempts, false, false}, LimitMFAIP: {15 * time.Minute, 30, 0, CountAttempts, false, false}, LimitMFAAccount: {15 * time.Minute, 10, 0, CountAttempts, false, false},
+	LimitUnauthenticatedAPI: {time.Minute, 60, 30, CountAttempts, false, false}, LimitLoginIP: {15 * time.Minute, 30, 0, CountFailures, false, true}, LimitLoginUsername: {15 * time.Minute, 5, 0, CountFailures, true, true}, LimitRecoveryIP: {time.Hour, 10, 0, CountAttempts, false, false}, LimitRecoveryIdentifier: {time.Hour, 3, 0, CountAttempts, false, false}, LimitInvitationIP: {time.Hour, 30, 0, CountAttempts, false, false}, LimitInvitationToken: {time.Hour, 10, 0, CountAttempts, false, false}, LimitResetIP: {time.Hour, 20, 0, CountAttempts, false, false}, LimitResetToken: {time.Hour, 5, 0, CountAttempts, false, false}, LimitMFAIP: {15 * time.Minute, 30, 0, CountAttempts, false, false}, LimitMFAAccount: {15 * time.Minute, 10, 0, CountAttempts, false, false}, LimitMentorTargetIP: {time.Hour, 30, 0, CountAttempts, false, false}, LimitMentorTargetAccount: {time.Hour, 10, 0, CountAttempts, false, false},
 }
 
 // Limiter holds a bounded, expiring LRU set of named rolling-window limits. It

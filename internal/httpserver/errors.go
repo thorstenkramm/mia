@@ -77,6 +77,7 @@ const (
 	CodeUserAccountQueryInvalid         Code = "user_account_query_invalid"
 	CodeUserAccountPreconditionRequired Code = "user_account_precondition_required"
 	CodeUserAccountPreconditionFailed   Code = "user_account_precondition_failed"
+	CodeUserMentorTargetUnavailable     Code = "user_mentor_target_unavailable"
 
 	CodeInvitationListUnauthorized Code = "invitation_list_unauthorized"
 
@@ -203,6 +204,7 @@ var errorRegistry = map[Code]definition{
 	CodeUserAccountQueryInvalid:         {http.StatusUnprocessableEntity, "Invalid Account Query", "The request could not be completed."},
 	CodeUserAccountPreconditionRequired: {http.StatusPreconditionRequired, "Precondition Required", "Review the current account before trying again."},
 	CodeUserAccountPreconditionFailed:   {http.StatusPreconditionFailed, "Precondition Failed", "The account changed. Review it before trying again."},
+	CodeUserMentorTargetUnavailable:     {http.StatusNotFound, "Not Found", "The requested mentor target is unavailable."},
 
 	CodeInvitationListUnauthorized:  {http.StatusForbidden, "Unauthorized", "The request could not be completed."},
 	CodeCourseNotFound:              {http.StatusNotFound, "Not Found", "The requested resource was not found."},

@@ -104,6 +104,51 @@ accounts:
       '422':
         $ref: ../responses/errors.yaml#/Unprocessable
         description: Unsupported, duplicate, empty, malformed, or excessive query (`user_account_query_invalid`).
+mentorTargetPreflights:
+  post:
+    tags: [Users]
+    operationId: preflightMentorRoleTarget
+    summary: Resolve one exact eligible mentor-role target
+    description: >-
+      Supervisor-only, CSRF-protected non-mutating preflight. It performs no browse, partial, fuzzy, batch,
+      autocomplete, suggestion, pagination, or result-count operation and creates no durable resolution record.
+      Attempts are limited to 10 per supervisor account and 30 per trusted source IP in a rolling hour. Well-formed
+      unknown IDs, inaccessible or ineligible targets, and throttling share one fixed unavailable response without
+      `Retry-After`; clients reconcile only by submitting a new preflight and never replay a grant automatically.
+    security: [{ sessionCookie: [], csrfToken: [] }]
+    requestBody:
+      required: true
+      content:
+        application/vnd.api+json:
+          schema: { $ref: ../schemas/requests/requests.yaml#/MentorTargetPreflightRequestDocument }
+    responses:
+      '200':
+        description: Minimal wrong-person-prevention identity and current mentor grant state.
+        headers:
+          Cache-Control: { $ref: ../openapi.yaml#/components/headers/CacheControlNoStore }
+          ETag: { $ref: ../openapi.yaml#/components/headers/StrongETag }
+        content:
+          application/vnd.api+json:
+            schema: { $ref: ../schemas/resources/resources.yaml#/MentorRoleTargetDocument }
+      '400': { $ref: ../responses/errors.yaml#/BadRequest }
+      '401': { $ref: ../responses/errors.yaml#/Unauthorized }
+      '403':
+        $ref: ../responses/errors.yaml#/Forbidden
+        description: CSRF, restricted session, or non-supervisor (`user_role_unauthorized`).
+      '404':
+        $ref: ../responses/errors.yaml#/NotFound
+        description: >-
+          Fixed unavailable outcome for well-formed unknown IDs, hidden or ineligible targets, and either exhausted
+          limiter dimension (`user_mentor_target_unavailable`). No `Retry-After` is returned.
+      '406': { $ref: ../responses/errors.yaml#/NotAcceptable }
+      '413': { $ref: ../responses/errors.yaml#/RequestTooLarge }
+      '415': { $ref: ../responses/errors.yaml#/UnsupportedMediaType }
+      '422':
+        $ref: ../responses/errors.yaml#/Unprocessable
+        description: >-
+          Invalid resource type, client-generated resource ID, or a missing, null, non-string, or noncanonical
+          `data.attributes.user_id` (`auth_invalid_request`). This validation occurs before target lookup and dedicated
+          throttling.
 mobileChallenges:
   get:
     tags: [Users]
@@ -327,10 +372,10 @@ roles:
       - { $ref: ../openapi.yaml#/components/parameters/ResourceID }
       - name: If-Match
         in: header
-        required: false
+        required: true
         description: >-
-          Exact account-detail ETag; required for administrator and supervisor grants by an administrator. Mentor grants
-          retain their supervisor-scoped target contract until the focused mentor-target preflight is implemented.
+          Exact account-detail ETag for administrator or supervisor grants, or exact mentor-target preflight ETag for
+          a mentor grant. Missing and stale values perform no mutation and require a fresh applicable review.
         schema: { type: string, pattern: '^"[0-9a-f]{64}"$' }
     requestBody:
       required: true

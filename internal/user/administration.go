@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/google/uuid"
 	"github.com/thorstenkramm/mia/internal/identity"
 	miSQLite "github.com/thorstenkramm/mia/internal/sqlite"
 )
@@ -18,6 +19,7 @@ var (
 	ErrAccountQueryInvalid         = errors.New("invalid account query")
 	ErrAccountPreconditionRequired = errors.New("account precondition required")
 	ErrAccountPreconditionFailed   = errors.New("account precondition failed")
+	ErrMentorTargetUnavailable     = errors.New("mentor target unavailable")
 )
 
 type AccountClass string
@@ -63,6 +65,136 @@ type AdministrationActions struct {
 type AdministrationList struct {
 	Accounts []AdministrationAccount
 	HasMore  bool
+}
+
+type MentorGrantState string
+
+const (
+	MentorGrantAvailable      MentorGrantState = "available"
+	MentorGrantAlreadyGranted MentorGrantState = "already_granted"
+)
+
+// MentorTarget is the minimal wrong-person-prevention projection available to
+// supervisors. DisplayName is the sole optional identity field.
+type MentorTarget struct {
+	ID, Username string
+	DisplayName  *string
+	GrantState   MentorGrantState
+	ETag         string
+}
+
+type mentorTargetSnapshot struct {
+	MentorTarget
+	EmailVerified, Staff, Banned, Mentor bool
+}
+
+// ResolveMentorTarget resolves one exact eligible staff account for a current
+// supervisor without exposing the global account directory.
+func ResolveMentorTarget(ctx context.Context, query miSQLite.Querier, actorID, targetID string) (MentorTarget, error) {
+	if err := requireMentorGrantActor(ctx, query, actorID); err != nil {
+		return MentorTarget{}, err
+	}
+	if !validUserID(targetID) {
+		return MentorTarget{}, ErrMentorTargetUnavailable
+	}
+	snapshot, err := loadMentorTargetSnapshot(ctx, query, actorID, targetID)
+	if errors.Is(err, sql.ErrNoRows) || err == nil && !snapshot.eligible() {
+		return MentorTarget{}, ErrMentorTargetUnavailable
+	}
+	if err != nil {
+		return MentorTarget{}, err
+	}
+	return snapshot.MentorTarget, nil
+}
+
+// RequireReviewedMentorGrant validates a supervisor's focused mentor-target
+// preflight inside the role-grant transaction. Once a validator was supplied,
+// target disappearance or ineligibility is stale state rather than a new
+// disclosure outcome.
+func RequireReviewedMentorGrant(ctx context.Context, query miSQLite.Querier, actorID, targetID, expected string) error {
+	if err := requireMentorGrantActor(ctx, query, actorID); err != nil {
+		return err
+	}
+	if expected == "" {
+		return ErrAccountPreconditionRequired
+	}
+	if !validUserID(targetID) {
+		return ErrAccountPreconditionFailed
+	}
+	snapshot, err := loadMentorTargetSnapshot(ctx, query, actorID, targetID)
+	if errors.Is(err, sql.ErrNoRows) || err == nil && (!snapshot.eligible() || snapshot.ETag != expected) {
+		return ErrAccountPreconditionFailed
+	}
+	return err
+}
+
+// requireMentorGrantActor enforces supervisor authority before any prospective
+// target lookup, preventing the focused resolver from exposing staff identity.
+func requireMentorGrantActor(ctx context.Context, query miSQLite.Querier, actorID string) error {
+	allowed, err := HasRole(ctx, query, actorID, Supervisor)
+	if err != nil {
+		return err
+	}
+	if !allowed {
+		return ErrRoleActorUnauthorized
+	}
+	return nil
+}
+
+func loadMentorTargetSnapshot(ctx context.Context, query miSQLite.Querier, actorID,
+	targetID string) (mentorTargetSnapshot, error) {
+	var snapshot mentorTargetSnapshot
+	var displayName sql.NullString
+	var verified, staff, banned, mentor int
+	err := query.QueryRowContext(ctx, `SELECT u.id, u.username, u.name, u.email_verified_at IS NOT NULL, u.is_banned,
+		EXISTS(SELECT 1 FROM user_roles r WHERE r.user_id = u.id
+			AND r.role IN ('administrator','supervisor','mentor')),
+		EXISTS(SELECT 1 FROM user_roles r WHERE r.user_id = u.id AND r.role = 'mentor')
+		FROM users u WHERE u.id = ?`, targetID).
+		Scan(&snapshot.ID, &snapshot.Username, &displayName, &verified, &banned, &staff, &mentor)
+	if err != nil {
+		return mentorTargetSnapshot{}, err
+	}
+	if displayName.Valid {
+		snapshot.DisplayName = &displayName.String
+	}
+	snapshot.EmailVerified = verified != 0
+	snapshot.Staff = staff != 0
+	snapshot.Banned = banned != 0
+	snapshot.Mentor = mentor != 0
+	snapshot.GrantState = MentorGrantAvailable
+	if snapshot.Mentor {
+		snapshot.GrantState = MentorGrantAlreadyGranted
+	}
+	snapshot.ETag = mentorTargetETag(snapshot, actorID)
+	return snapshot, nil
+}
+
+func (snapshot mentorTargetSnapshot) eligible() bool {
+	return snapshot.EmailVerified && snapshot.Staff && !snapshot.Banned
+}
+
+// mentorTargetETag binds the reviewed identity and eligibility state to the
+// requesting supervisor so a validator cannot authorize another actor or stale target.
+func mentorTargetETag(snapshot mentorTargetSnapshot, actorID string) string {
+	displayName := ""
+	if snapshot.DisplayName != nil {
+		displayName = *snapshot.DisplayName
+	}
+	value := fmt.Sprintf("%s\x00%s\x00%s\x00%t\x00%t\x00%t\x00%t\x00%s", snapshot.ID,
+		snapshot.Username, displayName, snapshot.Staff, snapshot.EmailVerified, snapshot.Banned, snapshot.Mentor, actorID)
+	digest := sha256.Sum256([]byte(value))
+	return fmt.Sprintf("\"%x\"", digest)
+}
+
+// validUserID accepts only MIA's canonical lowercase UUID-v4 account IDs,
+// preventing alternate encodings from reaching target lookup or limiter state.
+func validUserID(value string) bool {
+	if len(value) != 38 || !strings.HasPrefix(value, "u_") {
+		return false
+	}
+	parsed, err := uuid.Parse(value[2:])
+	return err == nil && parsed.Version() == 4 && parsed.String() == value[2:]
 }
 
 type administrationSnapshot struct {

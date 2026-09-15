@@ -88,6 +88,8 @@ paths:
     $ref: paths/users.yaml#/capabilities
   /api/v1/users:
     $ref: paths/users.yaml#/accounts
+  /api/v1/mentor-role-target-preflights:
+    $ref: paths/users.yaml#/mentorTargetPreflights
   /api/v1/users/me/mobile-change-challenges:
     $ref: paths/users.yaml#/mobileChallenges
   /api/v1/users/me/mobile-change-challenges/{id}/verifications:

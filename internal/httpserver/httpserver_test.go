@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -100,6 +101,7 @@ func TestCookiePolicyAttributesAndLocalHTTPCookieJarCSRF(t *testing.T) {
 				status                  int
 			}{
 				{name: "missing", status: http.StatusForbidden},
+				{name: "empty", cookies: []string{""}, status: http.StatusForbidden},
 				{name: "mismatched", header: "wrong", cookies: []string{"token"}, status: http.StatusForbidden},
 				{name: "duplicated", header: "token", cookies: []string{"token", "token"}, status: http.StatusForbidden},
 				{name: "cross-site", header: "token", fetchSite: "cross-site", cookies: []string{"token"}, status: http.StatusForbidden},
@@ -116,6 +118,10 @@ func TestCookiePolicyAttributesAndLocalHTTPCookieJarCSRF(t *testing.T) {
 					server.Echo.ServeHTTP(result, request)
 					if result.Code != test.status {
 						t.Fatalf("status = %d, want %d", result.Code, test.status)
+					}
+					if test.status == http.StatusForbidden &&
+						!strings.Contains(result.Body.String(), `"code":"csrf_invalid"`) {
+						t.Fatalf("CSRF error body = %s", result.Body.String())
 					}
 				})
 			}

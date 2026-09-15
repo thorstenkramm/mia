@@ -63,9 +63,19 @@ func grantRoleHandler(database *sql.DB, soleSupervisor user.SoleSupervisorCheck)
 					c.Request().Header.Get("If-Match"), soleSupervisor); err != nil {
 					return err
 				}
+			} else if err := user.RequireReviewedMentorGrant(c.Request().Context(), tx, actorID, targetID,
+				c.Request().Header.Get("If-Match")); err != nil {
+				return err
+			}
+			alreadyGranted, err := user.HasRole(c.Request().Context(), tx, targetID, role)
+			if err != nil {
+				return err
 			}
 			if err := user.GrantRole(c.Request().Context(), tx, targetID, role, actorID); err != nil {
 				return err
+			}
+			if alreadyGranted {
+				return nil
 			}
 			return audit.WriteWithMetadata(c.Request().Context(), tx, audit.ActionUserUserRoleGranted, actorID, targetID, audit.Metadata{Role: string(role)})
 		})

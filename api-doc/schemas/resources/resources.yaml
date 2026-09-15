@@ -207,6 +207,23 @@ AdministrationAccountDetail:
           type: array
           items: { type: string, enum: [administrator, supervisor, mentor, student] }
         actions: { $ref: '#/AdministrationActions' }
+MentorRoleTarget:
+  type: object
+  required: [type, id, attributes]
+  additionalProperties: false
+  properties:
+    type: { const: mentor-role-targets }
+    id:
+      type: string
+      pattern: '^u_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'
+    attributes:
+      type: object
+      required: [username, display_name, grant_state]
+      additionalProperties: false
+      properties:
+        username: { type: string, minLength: 3, maxLength: 32 }
+        display_name: { type: [string, 'null'], minLength: 1, maxLength: 100 }
+        grant_state: { type: string, enum: [available, already_granted] }
 CreatedUser:
   description: >-
     Identity-only users resource returned by invitation acceptance. Attributes
@@ -1918,6 +1935,12 @@ AdministrationAccountCollectionDocument:
       items: { $ref: '#/AdministrationAccount' }
     meta: { $ref: ../json-api/documents.yaml#/PageMeta }
     links: { $ref: ../json-api/documents.yaml#/PageLinks }
+MentorRoleTargetDocument:
+  type: object
+  required: [data]
+  additionalProperties: false
+  properties:
+    data: { $ref: '#/MentorRoleTarget' }
 CreatedUserDocument:
   type: object
   required: [data]

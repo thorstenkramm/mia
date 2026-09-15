@@ -138,6 +138,12 @@ Password-recovery throttling that must remain indistinguishable from an accepted
 `204`. It is exempt from the general JSON:API `429` response requirement. The suppression is audited without
 username, account-existence, or password data.
 
+### Named Exception: Mentor-target preflight
+
+Authenticated supervisor mentor-target preflight throttling returns the same fixed `404` unavailable response as an
+unknown or ineligible exact target. It omits `Retry-After` and target-derived limiter state so throttling cannot become
+an account-existence oracle. The suppression is audited without the submitted target identifier.
+
 New exceptions MUST be approved as product behavior and added to this rule before implementation.
 
 ## Protocol Error Classification

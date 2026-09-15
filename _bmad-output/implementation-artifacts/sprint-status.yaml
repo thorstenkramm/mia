@@ -51,7 +51,7 @@ development_status:
   1-13-account-deletion-and-audit-log-api: done
   epic-1-retrospective: optional
 
-  epic-2: in-progress
+  epic-2: done
   2-1-protect-browser-responses-and-bound-error-disclosure: done
   2-2-discover-and-extend-browser-sessions-safely: done
   2-3-manage-invitations-through-delivery-ambiguity: done
@@ -63,7 +63,7 @@ development_status:
   2-9-observe-and-control-current-tutoring-work: done
   2-10-follow-tutoring-summary-generation-and-regeneration: done
   2-11-request-mentoring-and-complete-eligible-work: done
-  2-12-resolve-and-grant-mentor-targets-safely: backlog
+  2-12-resolve-and-grant-mentor-targets-safely: done
   epic-2-retrospective: optional
 
 action_items:

@@ -143,6 +143,22 @@ func (server *Server) CheckMFA(c *echo.Context, accountID string) Result {
 	return account
 }
 
+// CheckMentorTarget consumes the fixed supervisor-account and trusted source-IP
+// limits without deriving limiter state from the submitted target identifier.
+func (server *Server) CheckMentorTarget(c *echo.Context, actorID string) Result {
+	key, err := AccountKey(actorID)
+	if err != nil {
+		key = "account:invalid"
+	}
+	now := time.Now()
+	ip := server.limiter.Check(LimitMentorTargetIP, server.resolver.Resolve(c.Request()), now)
+	account := server.limiter.Check(LimitMentorTargetAccount, key, now)
+	if !ip.Allowed {
+		return ip
+	}
+	return account
+}
+
 // CheckInvitationPreview consumes layered IP and token-digest limits.
 func (server *Server) CheckInvitationPreview(c *echo.Context, token string) Result {
 	return server.checkInvitation(c, token)
@@ -771,7 +787,9 @@ func (server *Server) csrfMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
 		if isSafeMethod(c.Request().Method) {
 			return next(c)
 		}
-		if c.Request().Header.Get("Sec-Fetch-Site") == "cross-site" || cookie == nil || subtle.ConstantTimeCompare([]byte(cookie.Value), []byte(c.Request().Header.Get("X-CSRF-Token"))) != 1 {
+		header := c.Request().Header.Get("X-CSRF-Token")
+		if c.Request().Header.Get("Sec-Fetch-Site") == "cross-site" || cookie == nil || cookie.Value == "" ||
+			header == "" || subtle.ConstantTimeCompare([]byte(cookie.Value), []byte(header)) != 1 {
 			return NewError(CodeCSRFInvalid)
 		}
 		return next(c)

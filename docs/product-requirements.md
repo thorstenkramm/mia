@@ -415,6 +415,31 @@ profile operations.
 
 ### Direct role assignment
 
+- A supervisor resolves a prospective mentor-role target only by one complete
+  opaque user ID through a focused CSRF-protected preflight. MIA provides no
+  partial, prefix, fuzzy, batch, browse, autocomplete, suggestion, pagination,
+  or result-count behavior and stores no durable resolution record.
+- A successful preflight returns only the immutable user ID, username, nullable
+  display name, current mentor-grant state, and a strong validator covering the
+  exact identity, account class and state, verified-email eligibility, and
+  mentor-role state. It excludes email, mobile, unrelated roles, assignments,
+  courses, security state, and administrator metadata.
+- Preflight permits ten attempts per supervisor account and 30 per trusted
+  source IP in a rolling hour. Well-formed unknown IDs, student-only, unverified,
+  banned, deleted, inaccessible, otherwise ineligible, and throttled targets
+  return the same fixed unavailable response without target-specific
+  `Retry-After`, rejected identity, reason, or retained target-derived limiter
+  state. Throttling is audited without the submitted target ID.
+- A preflight document whose `data.attributes.user_id` is missing, null,
+  non-string, or not a canonical MIA user ID returns `422 auth_invalid_request`
+  before target lookup or dedicated throttling. Well-formed unknown, hidden, and
+  ineligible IDs use the fixed unavailable outcome.
+- A supervisor mentor-role grant requires the exact reviewed validator and
+  atomically rechecks supervisor authority, target identity and eligibility,
+  account and ban state, verified email, and current mentor role. Missing or
+  stale preconditions grant nothing and require a fresh preflight. Clients
+  reconcile uncertain outcomes through another preflight and never
+  automatically replay the grant.
 - An authorized actor grants an additional permanent role only to a registered
   staff account identified by user ID. A student-only account cannot receive its
   first staff role through direct assignment; new staff accounts use invitations.

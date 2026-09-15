@@ -117,3 +117,27 @@ func TestLimiterRefreshesActiveRollingEntryBeforeExpirySweep(t *testing.T) {
 		t.Fatalf("active entry was expired: %+v", result)
 	}
 }
+
+func TestMentorTargetLimitsUseFixedIndependentAccountAndIPBudgets(t *testing.T) {
+	limiter := NewLimiter(50_000)
+	now := time.Now()
+	for attempt := 0; attempt < 10; attempt++ {
+		if result := limiter.Check(LimitMentorTargetAccount, "account:supervisor", now); !result.Allowed {
+			t.Fatalf("account attempt %d blocked early: %+v", attempt+1, result)
+		}
+	}
+	if result := limiter.Check(LimitMentorTargetAccount, "account:supervisor", now); result.Allowed {
+		t.Fatal("eleventh account attempt accepted")
+	}
+	for attempt := 0; attempt < 30; attempt++ {
+		if result := limiter.Check(LimitMentorTargetIP, "198.51.100.20", now); !result.Allowed {
+			t.Fatalf("IP attempt %d blocked early: %+v", attempt+1, result)
+		}
+	}
+	if result := limiter.Check(LimitMentorTargetIP, "198.51.100.20", now); result.Allowed {
+		t.Fatal("thirty-first IP attempt accepted")
+	}
+	if result := limiter.Check(LimitMentorTargetAccount, "account:other", now); !result.Allowed {
+		t.Fatal("independent account was blocked")
+	}
+}

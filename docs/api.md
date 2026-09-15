@@ -427,6 +427,21 @@ return `428` and `412` respectively without mutation. The transaction rechecks
 authorization and all effect-driving state before role coupling, cleanup, and
 audit commit.
 
+Supervisors resolve a direct mentor-role target only through
+`POST /api/v1/mentor-role-target-preflights`, supplying one complete opaque user
+ID. This focused read returns only ID, username, nullable display name, current
+mentor-grant state, and a strong `ETag`; it provides no browse, partial match,
+autocomplete, pagination, or result count. The preflight is limited to ten
+attempts per supervisor account and 30 per trusted source IP in a rolling hour.
+Well-formed unknown or ineligible targets and throttling all return the same
+fixed unavailable response without `Retry-After` or target-derived limiter
+state. A mentor grant requires the reviewed value in `If-Match` and atomically
+rechecks actor authority, target eligibility, and current role state. Missing or
+stale values perform no mutation and require a fresh preflight. The structurally
+valid JSON:API document must contain a canonical string
+`data.attributes.user_id`; a missing, null, non-string, or malformed value
+returns `422 auth_invalid_request` before target lookup or dedicated throttling.
+
 These user-administration operations do not create a generic administrator override. Each operation
 enforces its role, course, student, and protected-field rules. Student
 provisioning and course membership use the course routes below.
