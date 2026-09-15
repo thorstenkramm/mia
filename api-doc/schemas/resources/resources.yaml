@@ -1712,7 +1712,7 @@ MentoringSession:
     attributes:
       type: object
       required: [topic, response, responded_at, responded_by, proposed_for, scheduled_for, meeting_instructions,
-        meeting_url, state, created_at, closed_at, closed_by, closure_reason]
+        meeting_url, state, created_at, closed_at, closed_by, closure_reason, completion_eligibility]
       properties:
         topic: { type: string, maxLength: 4000 }
         response: { type: [string, 'null'], maxLength: 8000 }
@@ -1727,6 +1727,7 @@ MentoringSession:
         closed_at: { type: [string, 'null'], format: date-time }
         closed_by: { type: [string, 'null'] }
         closure_reason: { type: [string, 'null'], enum: [cancelled, completed, null] }
+        completion_eligibility: { $ref: '#/MentoringCompletionEligibilityAttributes' }
     relationships:
       type: object
       required: [course, student, mentor]
@@ -1755,6 +1756,77 @@ MentoringSessionCollectionDocument:
       items: { $ref: '#/MentoringSession' }
     meta: { $ref: ../json-api/documents.yaml#/PageMeta }
     links: { $ref: ../json-api/documents.yaml#/PageLinks }
+MentoringRequestEligibility:
+  type: object
+  required: [type, id, attributes]
+  additionalProperties: false
+  properties:
+    type: { const: mentoring-request-eligibilities }
+    id: { type: string, pattern: '^mel_[0-9a-f]{32}$' }
+    attributes:
+      type: object
+      required: [state, checked_at]
+      additionalProperties: false
+      properties:
+        state: { type: string, enum: [allowed, disabled, access-lost] }
+        checked_at: { type: string, format: date-time }
+MentoringRequestEligibilityDocument:
+  type: object
+  required: [data]
+  additionalProperties: false
+  properties:
+    data: { $ref: '#/MentoringRequestEligibility' }
+MentoringCompletionEligibilityAttributes:
+  type: object
+  required: [state, checked_at, recheck_after]
+  additionalProperties: false
+  properties:
+    state: { type: string, enum: [allowed, not-allowed, terminal] }
+    checked_at: { type: string, format: date-time }
+    recheck_after: { type: [string, 'null'], format: date-time }
+MentoringCompletionEligibility:
+  type: object
+  required: [type, id, attributes]
+  additionalProperties: false
+  properties:
+    type: { const: mentoring-completion-eligibilities }
+    id: { type: string, pattern: '^mel_[0-9a-f]{32}$' }
+    attributes: { $ref: '#/MentoringCompletionEligibilityAttributes' }
+MentoringCompletionEligibilityDocument:
+  type: object
+  required: [data]
+  additionalProperties: false
+  properties:
+    data: { $ref: '#/MentoringCompletionEligibility' }
+MentorRemovalReview:
+  type: object
+  required: [type, id, attributes]
+  additionalProperties: false
+  properties:
+    type: { const: mentor-removal-reviews }
+    id: { type: string, pattern: '^mrr_[0-9a-f]{32}$' }
+    attributes:
+      type: object
+      required: [scope, affected_open_work, cleared_fields, preserved_fields,
+        direct_reassignment_preserves_open_work, checked_at]
+      additionalProperties: false
+      properties:
+        scope: { type: string, enum: [course, student] }
+        affected_open_work: { type: integer, minimum: 0 }
+        cleared_fields:
+          type: array
+          items: { type: string, enum: [mentor, proposed_for, scheduled_for, meeting_instructions, meeting_url] }
+        preserved_fields:
+          type: array
+          items: { type: string, enum: [topic, response, responded_at, responded_by] }
+        direct_reassignment_preserves_open_work: { type: boolean, const: true }
+        checked_at: { type: string, format: date-time }
+MentorRemovalReviewDocument:
+  type: object
+  required: [data]
+  additionalProperties: false
+  properties:
+    data: { $ref: '#/MentorRemovalReview' }
 MentorIdentifierCollectionDocument:
   type: object
   required: [data, meta]

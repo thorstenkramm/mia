@@ -866,7 +866,9 @@ One resource represents the request, mentor response, optional appointment, and
 closure:
 
 - `GET|POST /api/v1/courses/{course_id}/mentoring-sessions`
+- `GET /api/v1/courses/{course_id}/mentoring-request-eligibility`
 - `GET|PATCH /api/v1/mentoring-sessions/{id}`
+- `GET /api/v1/mentoring-sessions/{id}/completion-eligibility`
 - `GET /api/v1/courses/{course_id}/mentor-students/{student_id}`
 - `GET /api/v1/courses/{course_id}/mentor-students/{student_id}/avatar`
 
@@ -876,6 +878,28 @@ assigned mentor may then respond and set `scheduled_for`. The student or
 supervisor may cancel an unscheduled request; the student or assigned mentor may
 cancel a future schedule; only the assigned mentor may complete it after the
 scheduled time.
+
+The request-eligibility read atomically evaluates current membership, course
+activity, the request setting, and a qualifying mentor assignment. It returns an
+allowed, neutrally disabled, access-lost, or unavailable outcome without exposing
+the setting or mentor identity. Creation always repeats those checks in its
+transaction; a previous read is never mutation authority.
+While a check is in flight, no earlier result remains authoritative; checking is
+a browser state, not an additional backend outcome.
+
+Mentoring-session resources include viewer-specific completion eligibility. The
+focused eligibility read provides the fresh check required before showing final
+confirmation. Only the current assigned mentor can receive `allowed`; an early
+mentor receives the server-authored UTC recheck instant. Completion repeats all
+checks using server time, and clients reconcile stale or ambiguous outcomes by
+reading the current session without automatically replaying the mutation.
+
+If completion eligibility cannot be projected, mentoring-session list and detail
+reads return `503 mentoring_state_unavailable` and must be explicitly repeated;
+no earlier representation remains authoritative. The same error after POST or
+PATCH is transport-ambiguous because the mutation may already have committed.
+Clients must not replay it: they reconcile POST through the current course list
+and PATCH through the mentoring-session detail read.
 
 The mentor-student routes expose only username, name, nickname, and an optional
 avatar URL. Both routes require the current mentor's explicit assignment to that
@@ -894,6 +918,11 @@ An assigned supervisor may directly replace the current mentor on an open row.
 The update preserves proposed and scheduled times, meeting details, prior
 response, and immutable response authorship. Mentor removal remains a separate
 operation that clears future schedule details and returns open work to triage.
+Its element `GET` returns the reviewed consequences and a strong `ETag` covering
+the assignment and affected open work. `DELETE` requires that exact value in
+`If-Match`; missing or stale review state changes nothing. Direct reassignment
+does not use the removal review because it preserves schedule and prior response
+data.
 
 Course deactivation blocks creation but not existing work. Mentor removal clears
 the current mentor, proposed and scheduled times, and meeting details on open work

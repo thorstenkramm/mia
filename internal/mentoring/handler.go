@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 
 	"github.com/labstack/echo/v5"
 	"github.com/thorstenkramm/mia/internal/httpserver"
@@ -52,11 +53,14 @@ type sessionRequest struct {
 func Register(server *httpserver.Server, service *Service) {
 	server.AuthenticatedGET("/api/v1/courses/:course_id/mentors", listCourseMentorsHandler(service))
 	server.AuthenticatedPOST("/api/v1/courses/:course_id/mentors", assignCourseMentorHandler(service))
+	server.AuthenticatedGET("/api/v1/courses/:course_id/mentors/:user_id", reviewCourseMentorRemovalHandler(service))
 	server.AuthenticatedDELETE("/api/v1/courses/:course_id/mentors/:user_id", removeCourseMentorHandler(service))
 	server.AuthenticatedGET("/api/v1/courses/:course_id/students/:student_id/mentors",
 		listStudentMentorsHandler(service))
 	server.AuthenticatedPOST("/api/v1/courses/:course_id/students/:student_id/mentors",
 		assignStudentMentorHandler(service))
+	server.AuthenticatedGET("/api/v1/courses/:course_id/students/:student_id/mentors/:user_id",
+		reviewStudentMentorRemovalHandler(service))
 	server.AuthenticatedDELETE("/api/v1/courses/:course_id/students/:student_id/mentors/:user_id",
 		removeStudentMentorHandler(service))
 	server.AuthenticatedGET("/api/v1/courses/:course_id/mentor-students/:student_id",
@@ -64,8 +68,12 @@ func Register(server *httpserver.Server, service *Service) {
 	server.AuthenticatedRoute(http.MethodGet, "/api/v1/courses/:course_id/mentor-students/:student_id/avatar",
 		httpserver.RepresentationBinary, mentorStudentAvatarHandler(service))
 	server.AuthenticatedGET("/api/v1/courses/:course_id/mentoring-sessions", listSessionsHandler(service))
+	server.AuthenticatedGET("/api/v1/courses/:course_id/mentoring-request-eligibility",
+		requestEligibilityHandler(service))
 	server.AuthenticatedPOST("/api/v1/courses/:course_id/mentoring-sessions", createSessionHandler(service))
 	server.AuthenticatedGET("/api/v1/mentoring-sessions/:id", getSessionHandler(service))
+	server.AuthenticatedGET("/api/v1/mentoring-sessions/:id/completion-eligibility",
+		completionEligibilityHandler(service))
 	server.AuthenticatedPATCH("/api/v1/mentoring-sessions/:id", updateSessionHandler(service))
 }
 
@@ -128,7 +136,8 @@ func removeCourseMentorHandler(service *Service) echo.HandlerFunc {
 		if err != nil {
 			return err
 		}
-		if err := service.RemoveCourseMentor(c.Request().Context(), c.Param("course_id"), c.Param("user_id"), actorID); err != nil {
+		if err := service.RemoveCourseMentor(c.Request().Context(), c.Param("course_id"), c.Param("user_id"), actorID,
+			removalIfMatch(c)); err != nil {
 			return mutationError(c, service, actorID, err)
 		}
 		return c.NoContent(http.StatusNoContent)
@@ -142,10 +151,50 @@ func removeStudentMentorHandler(service *Service) echo.HandlerFunc {
 			return err
 		}
 		if err := service.RemoveStudentMentor(c.Request().Context(), c.Param("course_id"), c.Param("student_id"),
-			c.Param("user_id"), actorID); err != nil {
+			c.Param("user_id"), actorID, removalIfMatch(c)); err != nil {
 			return mutationError(c, service, actorID, err)
 		}
 		return c.NoContent(http.StatusNoContent)
+	}
+}
+
+// removalIfMatch preserves missing-header semantics while ensuring multiple validators can never match one review.
+func removalIfMatch(c *echo.Context) string {
+	values := c.Request().Header.Values("If-Match")
+	if len(values) == 0 {
+		return ""
+	}
+	if len(values) != 1 || strings.Contains(values[0], ",") {
+		return strings.Join(values, ",")
+	}
+	return values[0]
+}
+
+func reviewCourseMentorRemovalHandler(service *Service) echo.HandlerFunc {
+	return removalReviewHandler(func(c *echo.Context, actorID string) (RemovalReview, error) {
+		return service.ReviewCourseMentorRemoval(c.Request().Context(), c.Param("course_id"), c.Param("user_id"), actorID)
+	})
+}
+
+func reviewStudentMentorRemovalHandler(service *Service) echo.HandlerFunc {
+	return removalReviewHandler(func(c *echo.Context, actorID string) (RemovalReview, error) {
+		return service.ReviewStudentMentorRemoval(c.Request().Context(), c.Param("course_id"), c.Param("student_id"),
+			c.Param("user_id"), actorID)
+	})
+}
+
+func removalReviewHandler(review func(*echo.Context, string) (RemovalReview, error)) echo.HandlerFunc {
+	return func(c *echo.Context) error {
+		actorID, err := httpserver.AuthenticatedUser(c)
+		if err != nil {
+			return err
+		}
+		value, err := review(c, actorID)
+		if err != nil {
+			return mentoringError(err)
+		}
+		c.Response().Header().Set("ETag", value.ETag)
+		return httpserver.JSONAPI(c, http.StatusOK, map[string]any{"data": removalReviewResource(value)})
 	}
 }
 
@@ -209,6 +258,22 @@ func createSessionHandler(service *Service) echo.HandlerFunc {
 	})
 }
 
+func requestEligibilityHandler(service *Service) echo.HandlerFunc {
+	return func(c *echo.Context) error {
+		actorID, err := httpserver.AuthenticatedUser(c)
+		if err != nil {
+			return err
+		}
+		value, err := service.RequestEligibility(c.Request().Context(), c.Param("course_id"), actorID)
+		if err != nil {
+			return mentoringError(err)
+		}
+		return httpserver.Resource(c, http.StatusOK, "mentoring-request-eligibilities", value.ID, map[string]any{
+			"state": value.State, "checked_at": httpserver.FormatInstant(value.CheckedAt),
+		})
+	}
+}
+
 // Mentoring session reads keep mentoring-specific authorization, existence
 // hiding, and error translation, which is why this matches the tutoring session
 // read. The duplication marker lives at internal/tutoring/handler.go.
@@ -223,6 +288,20 @@ func getSessionHandler(service *Service) echo.HandlerFunc {
 			return mentoringError(err)
 		}
 		return sessionResponse(c, http.StatusOK, value)
+	}
+}
+
+func completionEligibilityHandler(service *Service) echo.HandlerFunc {
+	return func(c *echo.Context) error {
+		actorID, err := httpserver.AuthenticatedUser(c)
+		if err != nil {
+			return err
+		}
+		value, err := service.CompletionEligibility(c.Request().Context(), c.Param("id"), actorID)
+		if err != nil {
+			return mentoringError(err)
+		}
+		return httpserver.JSONAPI(c, http.StatusOK, map[string]any{"data": completionEligibilityResource(value)})
 	}
 }
 
@@ -371,10 +450,31 @@ func sessionResource(value Session) map[string]any {
 		"scheduled_for": httpserver.FormatOptionalInstant(value.ScheduledFor), "meeting_instructions": nullableJSON(value.MeetingInstructions),
 		"meeting_url": nullableJSON(value.MeetingURL), "state": state, "created_at": httpserver.FormatInstant(value.CreatedAt),
 		"closed_at": httpserver.FormatOptionalInstant(value.ClosedAt), "closed_by": nullableJSON(value.ClosedBy),
-		"closure_reason": nullableJSON(value.ClosureReason)}, "relationships": map[string]any{
+		"closure_reason":         nullableJSON(value.ClosureReason),
+		"completion_eligibility": completionEligibilityAttributes(value.CompletionEligibility)}, "relationships": map[string]any{
 		"course":  map[string]any{"data": map[string]string{"type": "courses", "id": value.CourseID}},
 		"student": map[string]any{"data": map[string]string{"type": "users", "id": value.StudentID}},
 		"mentor":  map[string]any{"data": mentor}}}
+}
+
+func completionEligibilityResource(value CompletionEligibility) map[string]any {
+	return map[string]any{"type": "mentoring-completion-eligibilities", "id": value.ID,
+		"attributes": completionEligibilityAttributes(value)}
+}
+
+func completionEligibilityAttributes(value CompletionEligibility) map[string]any {
+	return map[string]any{"state": value.State, "checked_at": httpserver.FormatInstant(value.CheckedAt),
+		"recheck_after": httpserver.FormatOptionalInstant(value.RecheckAfter)}
+}
+
+func removalReviewResource(value RemovalReview) map[string]any {
+	return map[string]any{"type": "mentor-removal-reviews", "id": value.ID, "attributes": map[string]any{
+		"scope": value.Scope, "affected_open_work": value.AffectedOpenWork,
+		"cleared_fields":                          []string{"mentor", "proposed_for", "scheduled_for", "meeting_instructions", "meeting_url"},
+		"preserved_fields":                        []string{"topic", "response", "responded_at", "responded_by"},
+		"direct_reassignment_preserves_open_work": true,
+		"checked_at":                              httpserver.FormatInstant(value.CheckedAt),
+	}}
 }
 
 func nullableJSON(value string) any {
@@ -451,6 +551,12 @@ func mentoringCode(err error) httpserver.Code {
 		return httpserver.CodeMentoringInvalidState
 	case errors.Is(err, ErrUnavailable):
 		return httpserver.CodeMentoringUnavailable
+	case errors.Is(err, ErrStateUnavailable):
+		return httpserver.CodeMentoringStateUnavailable
+	case errors.Is(err, ErrPreconditionRequired):
+		return httpserver.CodeMentoringPreconditionReq
+	case errors.Is(err, ErrPreconditionFailed):
+		return httpserver.CodeMentoringPreconditionStale
 	default:
 		return ""
 	}

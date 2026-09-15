@@ -189,8 +189,12 @@ paths:
     $ref: paths/mentoring.yaml#/mentorStudentAvatar
   /api/v1/courses/{course_id}/mentoring-sessions:
     $ref: paths/mentoring.yaml#/courseMentoringSessions
+  /api/v1/courses/{course_id}/mentoring-request-eligibility:
+    $ref: paths/mentoring.yaml#/mentoringRequestEligibility
   /api/v1/mentoring-sessions/{id}:
     $ref: paths/mentoring.yaml#/mentoringSession
+  /api/v1/mentoring-sessions/{id}/completion-eligibility:
+    $ref: paths/mentoring.yaml#/mentoringCompletionEligibility
   /api/v1/audit-events:
     $ref: paths/audit.yaml#/auditEvents
 components:

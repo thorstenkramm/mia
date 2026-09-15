@@ -7,10 +7,13 @@ import (
 )
 
 var (
-	ErrNotFound     = errors.New("mentoring resource not found")
-	ErrInvalid      = errors.New("invalid mentoring request")
-	ErrInvalidState = errors.New("mentoring state does not allow action")
-	ErrUnavailable  = errors.New("new mentoring request unavailable")
+	ErrNotFound             = errors.New("mentoring resource not found")
+	ErrInvalid              = errors.New("invalid mentoring request")
+	ErrInvalidState         = errors.New("mentoring state does not allow action")
+	ErrUnavailable          = errors.New("new mentoring request unavailable")
+	ErrStateUnavailable     = errors.New("mentoring state unavailable")
+	ErrPreconditionRequired = errors.New("mentoring removal precondition required")
+	ErrPreconditionFailed   = errors.New("mentoring removal precondition failed")
 )
 
 type Assignment struct {
@@ -25,6 +28,24 @@ type Session struct {
 	ClosureReason, ClosedBy                          string
 	CreatedAt                                        time.Time
 	RespondedAt, ProposedFor, ScheduledFor, ClosedAt *time.Time
+	CompletionEligibility                            CompletionEligibility
+}
+
+type RequestEligibility struct {
+	ID, State string
+	CheckedAt time.Time
+}
+
+type CompletionEligibility struct {
+	ID, State    string
+	CheckedAt    time.Time
+	RecheckAfter *time.Time
+}
+
+type RemovalReview struct {
+	ID, ETag, Scope  string
+	AffectedOpenWork int
+	CheckedAt        time.Time
 }
 
 type CreateInput struct {

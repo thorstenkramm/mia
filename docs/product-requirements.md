@@ -1348,6 +1348,11 @@ turns are omitted without a hidden rolling summary.
   create a new request. When it is false, MIA does not offer or suggest creating
   a new request. It does not remove mentor assignments or cancel existing
   requests or scheduled sessions.
+- A student-facing eligibility read evaluates current course activity,
+  membership, `mentoring_requests_allowed`, and a qualifying mentor assignment
+  atomically. Disabled results do not identify which private setting or
+  assignment caused the result. A new request repeats all checks in its
+  transaction; an earlier eligibility read is never authorization.
 - The mentor receives the mentoring topic, not private uploads or tutoring chat
   history.
 - A new mentoring request is unassigned even when one or more mentors are
@@ -1377,6 +1382,12 @@ turns are omitted without a hidden rolling summary.
   applies no no-show status or penalty.
 - Only the assigned mentor can mark a session completed, and only after its
   scheduled time has begun.
+- Completion eligibility is viewer-specific and based on current assignment,
+  schedule, lifecycle, account scope, and server time. When the assigned mentor
+  is too early, MIA may return the authoritative UTC instant for another explicit
+  check, but browser time never authorizes completion. Completion repeats every
+  check atomically and stale or ambiguous results are reconciled from the current
+  mentoring session without automatic replay.
 - Course deactivation blocks new mentoring requests but does not stop triage,
   responses, rescheduling, cancellation, or completion of existing work.
 
@@ -1404,6 +1415,9 @@ turns are omitted without a hidden rolling summary.
   open mentoring record.
 - Mentor removal, assignment deletion, open-work triage, and audit events occur
   in one transaction.
+- Before mentor removal, MIA returns the current consequences with a strong
+  validator covering the assignment and affected open work. Removal requires the
+  exact reviewed validator; a missing or stale precondition performs no mutation.
 - Completed mentoring history remains, but deletion of its mentor or closure
   actor may leave historical actor fields absent.
 

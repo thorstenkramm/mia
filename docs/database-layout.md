@@ -1132,6 +1132,9 @@ Constraints:
 - Creation requires `users.mentoring_requests_allowed`, an active course, and at
   least one mentor assignment for the student and course. A new row has no
   current mentor. Disabling new requests does not change existing rows.
+- Request and completion eligibility are read-time projections of current rows,
+  not persisted lifecycle state. Creation and completion recheck their gates in
+  the mutating transaction using server time.
 - `scheduled_for IS NULL` and `closed_at IS NULL` means requested. A non-null
   `scheduled_for` with no `closed_at` means scheduled. A non-null `closed_at`
   means closed.
@@ -1158,6 +1161,10 @@ Constraints:
   remain for supervisor triage. Closed rows remain without requiring retained
   mentor identity.
 - The clearing rule applies only to removal, not direct reassignment.
+- Removal reviews persist no token or snapshot. Their strong validator is
+  deterministically derived from the current assignment and ordered open-work
+  fields whose clearing or preservation affects the reviewed consequences. The
+  removal transaction derives it again before changing any row.
 - Course deactivation blocks creation but does not block changes to existing
   rows.
 - Rescheduling overwrites `scheduled_for`; the required audit event records the

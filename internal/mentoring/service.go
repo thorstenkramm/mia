@@ -2,7 +2,10 @@ package mentoring
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -99,6 +102,36 @@ func (service *Service) Available(ctx context.Context, query miSQLite.Querier, c
 	return studentHasMentor(ctx, query, courseID, studentID)
 }
 
+// RequestEligibility atomically projects the student-visible creation gate without disclosing which gate is closed.
+func (service *Service) RequestEligibility(ctx context.Context, courseID, studentID string) (RequestEligibility, error) {
+	result := RequestEligibility{ID: eligibilityID("request", courseID, studentID), State: "access-lost"}
+	err := miSQLite.WithTx(ctx, service.database, func(tx *sql.Tx) error {
+		result.CheckedAt = service.now()
+		var active, allowed, hasMentor int
+		err := tx.QueryRowContext(ctx, `SELECT c.is_active, u.mentoring_requests_allowed,
+			EXISTS(SELECT 1 FROM mentor_assignments ma WHERE ma.course_id = c.id AND ma.student_user_id = u.id)
+			FROM courses c JOIN course_students cs ON cs.course_id = c.id
+			JOIN users u ON u.id = cs.student_user_id WHERE c.id = ? AND u.id = ?`, courseID, studentID).
+			Scan(&active, &allowed, &hasMentor)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("load mentoring request eligibility: %w", err)
+		}
+		result.State = "disabled"
+		if active != 0 && allowed != 0 && hasMentor != 0 {
+			result.State = "allowed"
+		}
+		return nil
+	})
+	if err != nil {
+		return RequestEligibility{}, errors.Join(ErrStateUnavailable,
+			fmt.Errorf("project request eligibility: %w", err))
+	}
+	return result, nil
+}
+
 func (service *Service) AssignCourseMentor(ctx context.Context, courseID, mentorID, actorID string) error {
 	return miSQLite.WithTx(ctx, service.database, func(tx *sql.Tx) error {
 		if err := course.RequireAssignedSupervisor(ctx, tx, courseID, actorID); err != nil {
@@ -149,17 +182,22 @@ func (service *Service) AssignStudentMentor(ctx context.Context, courseID, stude
 	})
 }
 
-func (service *Service) RemoveCourseMentor(ctx context.Context, courseID, mentorID, actorID string) error {
+func (service *Service) ReviewCourseMentorRemoval(ctx context.Context, courseID, mentorID,
+	actorID string) (RemovalReview, error) {
+	return service.reviewRemoval(ctx, courseID, "", mentorID, actorID)
+}
+
+func (service *Service) RemoveCourseMentor(ctx context.Context, courseID, mentorID, actorID, etag string) error {
 	return miSQLite.WithTx(ctx, service.database, func(tx *sql.Tx) error {
-		if err := course.RequireAssignedSupervisor(ctx, tx, courseID, actorID); err != nil {
-			return ErrNotFound
-		}
-		exists, err := courseMentorExists(ctx, tx, courseID, mentorID)
+		review, err := service.removalReview(ctx, tx, courseID, "", mentorID, actorID)
 		if err != nil {
 			return err
 		}
-		if !exists {
-			return ErrNotFound
+		if etag == "" {
+			return ErrPreconditionRequired
+		}
+		if etag != review.ETag {
+			return ErrPreconditionFailed
 		}
 		triaged, err := triage(ctx, tx, "course_id = ? AND mentor_user_id = ?", courseID, mentorID)
 		if err != nil {
@@ -177,19 +215,23 @@ func (service *Service) RemoveCourseMentor(ctx context.Context, courseID, mentor
 	})
 }
 
-func (service *Service) RemoveStudentMentor(ctx context.Context, courseID, studentID, mentorID, actorID string) error {
+func (service *Service) ReviewStudentMentorRemoval(ctx context.Context, courseID, studentID, mentorID,
+	actorID string) (RemovalReview, error) {
+	return service.reviewRemoval(ctx, courseID, studentID, mentorID, actorID)
+}
+
+func (service *Service) RemoveStudentMentor(ctx context.Context, courseID, studentID, mentorID, actorID,
+	etag string) error {
 	return miSQLite.WithTx(ctx, service.database, func(tx *sql.Tx) error {
-		if err := course.RequireAssignedSupervisor(ctx, tx, courseID, actorID); err != nil {
-			return ErrNotFound
-		}
-		var exists int
-		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM mentor_assignments
-			WHERE course_id = ? AND student_user_id = ? AND mentor_user_id = ?)`, courseID, studentID, mentorID).
-			Scan(&exists); err != nil {
+		review, err := service.removalReview(ctx, tx, courseID, studentID, mentorID, actorID)
+		if err != nil {
 			return err
 		}
-		if exists == 0 {
-			return ErrNotFound
+		if etag == "" {
+			return ErrPreconditionRequired
+		}
+		if etag != review.ETag {
+			return ErrPreconditionFailed
 		}
 		triaged, err := triage(ctx, tx, "course_id = ? AND student_user_id = ? AND mentor_user_id = ?",
 			courseID, studentID, mentorID)
@@ -268,15 +310,81 @@ func (service *Service) Create(ctx context.Context, input CreateInput) (Session,
 		return audit.WriteWithMetadata(ctx, tx, audit.ActionMentoringSessionRequested, input.StudentID, input.StudentID,
 			audit.Metadata{CourseID: input.CourseID, MentoringSessionID: created.ID})
 	})
-	return created, err
+	if err != nil {
+		return Session{}, err
+	}
+	return service.Get(ctx, created.ID, input.StudentID)
 }
 
 func (service *Service) Get(ctx context.Context, id, actorID string) (Session, error) {
-	value, err := loadAuthorizedSession(ctx, service.database, id, actorID)
+	var value Session
+	err := miSQLite.WithTx(ctx, service.database, func(tx *sql.Tx) error {
+		loaded, err := loadAuthorizedSession(ctx, tx, id, actorID)
+		if err != nil {
+			return err
+		}
+		loaded.CompletionEligibility, err = service.completionEligibility(ctx, tx, loaded, actorID)
+		value = loaded
+		return err
+	})
 	if errors.Is(err, sql.ErrNoRows) {
 		return Session{}, ErrNotFound
 	}
+	if err != nil && !errors.Is(err, ErrNotFound) {
+		return Session{}, errors.Join(ErrStateUnavailable, fmt.Errorf("project completion eligibility: %w", err))
+	}
 	return value, err
+}
+
+func (service *Service) CompletionEligibility(ctx context.Context, id, actorID string) (CompletionEligibility, error) {
+	var result CompletionEligibility
+	err := miSQLite.WithTx(ctx, service.database, func(tx *sql.Tx) error {
+		value, err := loadAuthorizedSession(ctx, tx, id, actorID)
+		if err != nil {
+			return err
+		}
+		result, err = service.completionEligibility(ctx, tx, value, actorID)
+		return err
+	})
+	if errors.Is(err, sql.ErrNoRows) {
+		return CompletionEligibility{}, ErrNotFound
+	}
+	if err != nil && !errors.Is(err, ErrNotFound) && !errors.Is(err, sql.ErrNoRows) {
+		return CompletionEligibility{}, errors.Join(ErrStateUnavailable,
+			fmt.Errorf("project completion eligibility: %w", err))
+	}
+	return result, err
+}
+
+func (service *Service) completionEligibility(ctx context.Context, query miSQLite.Querier, value Session,
+	actorID string) (CompletionEligibility, error) {
+	now := service.now()
+	result := CompletionEligibility{ID: eligibilityID("completion", value.ID, actorID), State: "not-allowed",
+		CheckedAt: now}
+	if value.ClosedAt != nil {
+		result.State = "terminal"
+		return result, nil
+	}
+	if value.MentorID == "" || value.MentorID != actorID {
+		return result, nil
+	}
+	assigned, err := studentMentorExists(ctx, query, value.CourseID, value.StudentID, actorID)
+	if err != nil {
+		return CompletionEligibility{}, err
+	}
+	if !assigned {
+		return CompletionEligibility{}, ErrNotFound
+	}
+	if value.ScheduledFor == nil {
+		return result, nil
+	}
+	if value.ScheduledFor.After(now) {
+		instant := *value.ScheduledFor
+		result.RecheckAfter = &instant
+		return result, nil
+	}
+	result.State = "allowed"
+	return result, nil
 }
 
 // MentorStudentProfile returns minimal identity only while the mentor has the explicit course-student assignment.
@@ -335,18 +443,29 @@ func (service *Service) List(ctx context.Context, courseID, actorID string, inpu
 	if !validPage(input) {
 		return SessionListResult{}, ErrInvalid
 	}
-	student, supervisor, err := course.MentoringScope(ctx, service.database, courseID, actorID)
+	var result SessionListResult
+	err := miSQLite.WithTx(ctx, service.database, func(tx *sql.Tx) error {
+		var err error
+		result, err = service.listSessions(ctx, tx, courseID, actorID, input)
+		return err
+	})
+	return result, err
+}
+
+func (service *Service) listSessions(ctx context.Context, query miSQLite.Querier, courseID, actorID string,
+	input ListInput) (SessionListResult, error) {
+	student, supervisor, err := course.MentoringScope(ctx, query, courseID, actorID)
 	if err != nil {
 		return SessionListResult{}, err
 	}
-	mentor, err := user.HasRole(ctx, service.database, actorID, user.Mentor)
+	mentor, err := user.HasRole(ctx, query, actorID, user.Mentor)
 	if err != nil {
 		return SessionListResult{}, err
 	}
 	if !student && !supervisor && !mentor {
 		return SessionListResult{}, ErrNotFound
 	}
-	rows, err := service.database.QueryContext(ctx, sessionSelect+` WHERE course_id = ? AND
+	rows, err := query.QueryContext(ctx, sessionSelect+` WHERE course_id = ? AND
 		(? OR student_user_id = ? OR (mentor_user_id = ? AND EXISTS(SELECT 1 FROM mentor_assignments
 		WHERE course_id = mentoring_sessions.course_id AND student_user_id = mentoring_sessions.student_user_id
 		AND mentor_user_id = ?))) ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?`,
@@ -361,6 +480,13 @@ func (service *Service) List(ctx context.Context, courseID, actorID string, inpu
 	hasMore := len(values) > input.Limit
 	if hasMore {
 		values = values[:input.Limit]
+	}
+	for index := range values {
+		values[index].CompletionEligibility, err = service.completionEligibility(ctx, query, values[index], actorID)
+		if err != nil {
+			return SessionListResult{}, errors.Join(ErrStateUnavailable,
+				fmt.Errorf("project listed session completion eligibility: %w", err))
+		}
 	}
 	return SessionListResult{Sessions: values, HasMore: hasMore}, nil
 }
@@ -520,7 +646,11 @@ func (service *Service) closeSession(ctx context.Context, tx *sql.Tx, value Sess
 			return ErrInvalidState
 		}
 	case "completed":
-		if !scope.mentor || value.ScheduledFor == nil || value.ScheduledFor.After(now) {
+		assigned, err := studentMentorExists(ctx, tx, value.CourseID, value.StudentID, input.ActorID)
+		if err != nil {
+			return err
+		}
+		if !scope.mentor || !assigned || value.ScheduledFor == nil || value.ScheduledFor.After(now) {
 			return ErrInvalidState
 		}
 	default:
@@ -655,6 +785,91 @@ func auditTriaged(ctx context.Context, query miSQLite.Querier, affected []triage
 		}
 	}
 	return nil
+}
+
+func (service *Service) reviewRemoval(ctx context.Context, courseID, studentID, mentorID,
+	actorID string) (RemovalReview, error) {
+	var review RemovalReview
+	err := miSQLite.WithTx(ctx, service.database, func(tx *sql.Tx) error {
+		var err error
+		review, err = service.removalReview(ctx, tx, courseID, studentID, mentorID, actorID)
+		return err
+	})
+	return review, err
+}
+
+type removalSnapshot struct {
+	CourseID, StudentID, MentorID, AssignedAt, AssignedBy string
+	OpenWork                                              []removalWorkSnapshot
+}
+
+type removalWorkSnapshot struct {
+	ID, ProposedFor, ScheduledFor, MeetingInstructions, MeetingURL, Response, RespondedBy string
+}
+
+// removalReview authorizes and hashes every current fact that changes the reviewed removal consequences.
+func (service *Service) removalReview(ctx context.Context, query miSQLite.Querier, courseID, studentID, mentorID,
+	actorID string) (RemovalReview, error) {
+	if err := course.RequireAssignedSupervisor(ctx, query, courseID, actorID); err != nil {
+		return RemovalReview{}, ErrNotFound
+	}
+	snapshot := removalSnapshot{CourseID: courseID, StudentID: studentID, MentorID: mentorID,
+		OpenWork: make([]removalWorkSnapshot, 0)}
+	var assignedAt string
+	var assignedBy sql.NullString
+	statement := `SELECT assigned_at, assigned_by FROM course_mentors WHERE course_id = ? AND mentor_user_id = ?`
+	args := []any{courseID, mentorID}
+	condition := "course_id = ? AND mentor_user_id = ?"
+	if studentID != "" {
+		statement = `SELECT assigned_at, assigned_by FROM mentor_assignments
+			WHERE course_id = ? AND student_user_id = ? AND mentor_user_id = ?`
+		args = []any{courseID, studentID, mentorID}
+		condition = "course_id = ? AND student_user_id = ? AND mentor_user_id = ?"
+	}
+	if err := query.QueryRowContext(ctx, statement, args...).Scan(&assignedAt, &assignedBy); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return RemovalReview{}, ErrNotFound
+		}
+		return RemovalReview{}, fmt.Errorf("load mentor removal assignment: %w", err)
+	}
+	snapshot.AssignedAt, snapshot.AssignedBy = assignedAt, assignedBy.String
+	rows, err := query.QueryContext(ctx, `SELECT id, COALESCE(proposed_for, ''), COALESCE(scheduled_for, ''),
+		COALESCE(meeting_instructions, ''), COALESCE(meeting_url, ''), COALESCE(response, ''),
+		COALESCE(responded_by, '') FROM mentoring_sessions WHERE closed_at IS NULL AND `+condition+` ORDER BY id`, args...)
+	if err != nil {
+		return RemovalReview{}, fmt.Errorf("load mentor removal work: %w", err)
+	}
+	for rows.Next() {
+		var work removalWorkSnapshot
+		if err := rows.Scan(&work.ID, &work.ProposedFor, &work.ScheduledFor, &work.MeetingInstructions,
+			&work.MeetingURL, &work.Response, &work.RespondedBy); err != nil {
+			return RemovalReview{}, errors.Join(fmt.Errorf("scan mentor removal work: %w", err), rows.Close())
+		}
+		snapshot.OpenWork = append(snapshot.OpenWork, work)
+	}
+	if err := rows.Err(); err != nil {
+		return RemovalReview{}, errors.Join(fmt.Errorf("iterate mentor removal work: %w", err), rows.Close())
+	}
+	if err := rows.Close(); err != nil {
+		return RemovalReview{}, fmt.Errorf("close mentor removal work: %w", err)
+	}
+	canonical, err := json.Marshal(snapshot)
+	if err != nil {
+		return RemovalReview{}, fmt.Errorf("encode mentor removal review: %w", err)
+	}
+	digest := sha256.Sum256(canonical)
+	token := hex.EncodeToString(digest[:])
+	scope := "course"
+	if studentID != "" {
+		scope = "student"
+	}
+	return RemovalReview{ID: "mrr_" + token[:32], ETag: `"` + token + `"`, Scope: scope,
+		AffectedOpenWork: len(snapshot.OpenWork), CheckedAt: service.now()}, nil
+}
+
+func eligibilityID(kind string, values ...string) string {
+	digest := sha256.Sum256([]byte(kind + "\x00" + strings.Join(values, "\x00")))
+	return "mel_" + hex.EncodeToString(digest[:])[:32]
 }
 
 const sessionSelect = `SELECT id, student_user_id, course_id, COALESCE(mentor_user_id, ''), topic,

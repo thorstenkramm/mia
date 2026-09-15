@@ -126,6 +126,12 @@ const (
 	CodeAuditInvalid             Code = "audit_invalid"
 )
 
+const (
+	CodeMentoringStateUnavailable  Code = "mentoring_state_unavailable"
+	CodeMentoringPreconditionReq   Code = "mentoring_precondition_required"
+	CodeMentoringPreconditionStale Code = "mentoring_precondition_failed"
+)
+
 type definition struct {
 	status        int
 	title, detail string
@@ -242,6 +248,10 @@ var errorRegistry = map[Code]definition{
 	CodeSpeechRestartInterrupted:    {},
 	CodeAuditUnauthorized:           {http.StatusForbidden, "Unauthorized", "The request could not be completed."},
 	CodeAuditInvalid:                {http.StatusUnprocessableEntity, "Invalid Audit Query", "The request could not be completed."},
+
+	CodeMentoringStateUnavailable:  {http.StatusServiceUnavailable, "Mentoring State Unavailable", "Try checking the current mentoring state again."},
+	CodeMentoringPreconditionReq:   {http.StatusPreconditionRequired, "Precondition Required", "Review the current mentor removal before trying again."},
+	CodeMentoringPreconditionStale: {http.StatusPreconditionFailed, "Precondition Failed", "The mentor assignment or affected work changed. Review it before trying again."},
 }
 
 // StableCode returns a centrally registered code for persistence, audit

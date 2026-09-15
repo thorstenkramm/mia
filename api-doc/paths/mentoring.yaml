@@ -54,6 +54,27 @@ courseMentors:
     responses: { '204': { $ref: ../responses/success.yaml#/NoContent, description: Assignment exists. }, '400': { $ref: ../responses/errors.yaml#/BadRequest }, '401': { $ref: ../responses/errors.yaml#/Unauthorized }, '403': { $ref: ../responses/errors.yaml#/Forbidden }, '404': { $ref: ../responses/errors.yaml#/NotFound }, '406': { $ref: ../responses/errors.yaml#/NotAcceptable }, '413': { $ref: ../responses/errors.yaml#/RequestTooLarge }, '415': { $ref: ../responses/errors.yaml#/UnsupportedMediaType }, '422': { $ref: ../responses/errors.yaml#/Unprocessable } }
 
 courseMentor:
+  get:
+    tags: [Mentoring]
+    operationId: reviewCourseMentorRemoval
+    summary: Review course-mentor removal and its current open-work consequences
+    security: [{ sessionCookie: [] }]
+    parameters:
+      - { $ref: ../openapi.yaml#/components/parameters/CourseID }
+      - { $ref: ../openapi.yaml#/components/parameters/UserID }
+    responses:
+      '200':
+        description: Current removal review and strong validator.
+        headers:
+          Cache-Control: { $ref: ../openapi.yaml#/components/headers/CacheControlNoStore }
+          ETag: { $ref: ../openapi.yaml#/components/headers/StrongETag }
+        content:
+          application/vnd.api+json:
+            schema: { $ref: ../schemas/resources/resources.yaml#/MentorRemovalReviewDocument }
+      '401': { $ref: ../responses/errors.yaml#/Unauthorized }
+      '403': { $ref: ../responses/errors.yaml#/Forbidden }
+      '404': { $ref: ../responses/errors.yaml#/NotFound }
+      '406': { $ref: ../responses/errors.yaml#/NotAcceptable }
   delete:
     tags: [Mentoring]
     operationId: removeCourseMentor
@@ -62,7 +83,8 @@ courseMentor:
     parameters:
       - { $ref: ../openapi.yaml#/components/parameters/CourseID }
       - { $ref: ../openapi.yaml#/components/parameters/UserID }
-    responses: { '204': { $ref: ../responses/success.yaml#/NoContent, description: Mentor removed and open work triaged. }, '401': { $ref: ../responses/errors.yaml#/Unauthorized }, '403': { $ref: ../responses/errors.yaml#/Forbidden }, '404': { $ref: ../responses/errors.yaml#/NotFound }, '406': { $ref: ../responses/errors.yaml#/NotAcceptable } }
+      - { $ref: ../openapi.yaml#/components/parameters/IfMatch }
+    responses: { '204': { $ref: ../responses/success.yaml#/NoContent, description: Mentor removed and open work triaged. }, '401': { $ref: ../responses/errors.yaml#/Unauthorized }, '403': { $ref: ../responses/errors.yaml#/Forbidden, description: CSRF or restricted session (`csrf_invalid` or `auth_password_change_required`). }, '404': { $ref: ../responses/errors.yaml#/NotFound }, '406': { $ref: ../responses/errors.yaml#/NotAcceptable }, '412': { $ref: ../responses/errors.yaml#/PreconditionFailed, description: Reviewed assignment or open work changed (`mentoring_precondition_failed`). }, '428': { $ref: ../responses/errors.yaml#/PreconditionRequired, description: A current removal review is required (`mentoring_precondition_required`). } }
 
 studentMentors:
   get:
@@ -90,6 +112,28 @@ studentMentors:
     responses: { '204': { $ref: ../responses/success.yaml#/NoContent, description: Assignment exists. }, '400': { $ref: ../responses/errors.yaml#/BadRequest }, '401': { $ref: ../responses/errors.yaml#/Unauthorized }, '403': { $ref: ../responses/errors.yaml#/Forbidden }, '404': { $ref: ../responses/errors.yaml#/NotFound }, '406': { $ref: ../responses/errors.yaml#/NotAcceptable }, '413': { $ref: ../responses/errors.yaml#/RequestTooLarge }, '415': { $ref: ../responses/errors.yaml#/UnsupportedMediaType }, '422': { $ref: ../responses/errors.yaml#/Unprocessable } }
 
 studentMentor:
+  get:
+    tags: [Mentoring]
+    operationId: reviewStudentMentorRemoval
+    summary: Review student-mentor removal and its current open-work consequences
+    security: [{ sessionCookie: [] }]
+    parameters:
+      - { $ref: ../openapi.yaml#/components/parameters/CourseID }
+      - { $ref: ../openapi.yaml#/components/parameters/StudentID }
+      - { $ref: ../openapi.yaml#/components/parameters/UserID }
+    responses:
+      '200':
+        description: Current removal review and strong validator.
+        headers:
+          Cache-Control: { $ref: ../openapi.yaml#/components/headers/CacheControlNoStore }
+          ETag: { $ref: ../openapi.yaml#/components/headers/StrongETag }
+        content:
+          application/vnd.api+json:
+            schema: { $ref: ../schemas/resources/resources.yaml#/MentorRemovalReviewDocument }
+      '401': { $ref: ../responses/errors.yaml#/Unauthorized }
+      '403': { $ref: ../responses/errors.yaml#/Forbidden }
+      '404': { $ref: ../responses/errors.yaml#/NotFound }
+      '406': { $ref: ../responses/errors.yaml#/NotAcceptable }
   delete:
     tags: [Mentoring]
     operationId: removeStudentMentor
@@ -99,7 +143,8 @@ studentMentor:
       - { $ref: ../openapi.yaml#/components/parameters/CourseID }
       - { $ref: ../openapi.yaml#/components/parameters/StudentID }
       - { $ref: ../openapi.yaml#/components/parameters/UserID }
-    responses: { '204': { $ref: ../responses/success.yaml#/NoContent, description: Assignment removed and open work triaged. }, '401': { $ref: ../responses/errors.yaml#/Unauthorized }, '403': { $ref: ../responses/errors.yaml#/Forbidden }, '404': { $ref: ../responses/errors.yaml#/NotFound }, '406': { $ref: ../responses/errors.yaml#/NotAcceptable } }
+      - { $ref: ../openapi.yaml#/components/parameters/IfMatch }
+    responses: { '204': { $ref: ../responses/success.yaml#/NoContent, description: Assignment removed and open work triaged. }, '401': { $ref: ../responses/errors.yaml#/Unauthorized }, '403': { $ref: ../responses/errors.yaml#/Forbidden, description: CSRF or restricted session (`csrf_invalid` or `auth_password_change_required`). }, '404': { $ref: ../responses/errors.yaml#/NotFound }, '406': { $ref: ../responses/errors.yaml#/NotAcceptable }, '412': { $ref: ../responses/errors.yaml#/PreconditionFailed, description: Reviewed assignment or open work changed (`mentoring_precondition_failed`). }, '428': { $ref: ../responses/errors.yaml#/PreconditionRequired, description: A current removal review is required (`mentoring_precondition_required`). } }
 
 mentorStudentProfile:
   get:
@@ -157,7 +202,23 @@ courseMentoringSessions:
       - { $ref: ../openapi.yaml#/components/parameters/CourseID }
       - { $ref: ../openapi.yaml#/components/parameters/PageLimit }
       - { $ref: ../openapi.yaml#/components/parameters/PageOffset }
-    responses: { '200': { description: Paginated mentoring-session collection., headers: { Cache-Control: { $ref: ../openapi.yaml#/components/headers/CacheControlNoStore } }, content: { application/vnd.api+json: { schema: { $ref: ../schemas/resources/resources.yaml#/MentoringSessionCollectionDocument } } } }, '401': { $ref: ../responses/errors.yaml#/Unauthorized }, '403': { $ref: ../responses/errors.yaml#/Forbidden }, '404': { $ref: ../responses/errors.yaml#/NotFound }, '406': { $ref: ../responses/errors.yaml#/NotAcceptable }, '422': { $ref: ../responses/errors.yaml#/Unprocessable } }
+    responses:
+      '200':
+        description: Paginated mentoring-session collection.
+        headers: { Cache-Control: { $ref: ../openapi.yaml#/components/headers/CacheControlNoStore } }
+        content:
+          application/vnd.api+json:
+            schema: { $ref: ../schemas/resources/resources.yaml#/MentoringSessionCollectionDocument }
+      '401': { $ref: ../responses/errors.yaml#/Unauthorized }
+      '403': { $ref: ../responses/errors.yaml#/Forbidden }
+      '404': { $ref: ../responses/errors.yaml#/NotFound }
+      '406': { $ref: ../responses/errors.yaml#/NotAcceptable }
+      '422': { $ref: ../responses/errors.yaml#/Unprocessable }
+      '503':
+        $ref: ../responses/errors.yaml#/ServiceUnavailable
+        description: >-
+          A session completion projection could not be established (`mentoring_state_unavailable`). No collection is
+          authoritative; explicitly repeat this safe list read to reconcile current state.
   post:
     tags: [Mentoring]
     operationId: createMentoringSession
@@ -167,7 +228,53 @@ courseMentoringSessions:
     requestBody:
       required: true
       content: { application/vnd.api+json: { schema: { $ref: ../schemas/requests/requests.yaml#/MentoringSessionCreateRequestDocument } } }
-    responses: { '201': { description: Unassigned mentoring request., headers: { Cache-Control: { $ref: ../openapi.yaml#/components/headers/CacheControlNoStore } }, content: { application/vnd.api+json: { schema: { $ref: ../schemas/resources/resources.yaml#/MentoringSessionDocument } } } }, '400': { $ref: ../responses/errors.yaml#/BadRequest }, '401': { $ref: ../responses/errors.yaml#/Unauthorized }, '403': { $ref: ../responses/errors.yaml#/Forbidden }, '404': { $ref: ../responses/errors.yaml#/NotFound }, '406': { $ref: ../responses/errors.yaml#/NotAcceptable }, '409': { $ref: ../responses/errors.yaml#/Conflict }, '413': { $ref: ../responses/errors.yaml#/RequestTooLarge }, '415': { $ref: ../responses/errors.yaml#/UnsupportedMediaType }, '422': { $ref: ../responses/errors.yaml#/Unprocessable } }
+    responses:
+      '201':
+        description: Unassigned mentoring request.
+        headers: { Cache-Control: { $ref: ../openapi.yaml#/components/headers/CacheControlNoStore } }
+        content:
+          application/vnd.api+json:
+            schema: { $ref: ../schemas/resources/resources.yaml#/MentoringSessionDocument }
+      '400': { $ref: ../responses/errors.yaml#/BadRequest }
+      '401': { $ref: ../responses/errors.yaml#/Unauthorized }
+      '403': { $ref: ../responses/errors.yaml#/Forbidden }
+      '404': { $ref: ../responses/errors.yaml#/NotFound }
+      '406': { $ref: ../responses/errors.yaml#/NotAcceptable }
+      '409': { $ref: ../responses/errors.yaml#/Conflict }
+      '413': { $ref: ../responses/errors.yaml#/RequestTooLarge }
+      '415': { $ref: ../responses/errors.yaml#/UnsupportedMediaType }
+      '422': { $ref: ../responses/errors.yaml#/Unprocessable }
+      '503':
+        $ref: ../responses/errors.yaml#/ServiceUnavailable
+        description: >-
+          The request may have committed but its completion projection could not be established
+          (`mentoring_state_unavailable`). Do not replay POST; reconcile by explicitly reading the current course list.
+
+mentoringRequestEligibility:
+  get:
+    tags: [Mentoring]
+    operationId: getMentoringRequestEligibility
+    summary: Check current student mentoring-request eligibility
+    description: >-
+      Atomically evaluates current course membership, course activity, the request setting, and qualifying assignment.
+      Disabled does not identify which creation gate is closed. Access-lost reveals no course or membership existence.
+    security: [{ sessionCookie: [] }]
+    parameters: [{ $ref: ../openapi.yaml#/components/parameters/CourseID }]
+    responses:
+      '200':
+        description: Current allowed, neutrally disabled, or access-lost projection.
+        headers: { Cache-Control: { $ref: ../openapi.yaml#/components/headers/CacheControlNoStore } }
+        content:
+          application/vnd.api+json:
+            schema: { $ref: ../schemas/resources/resources.yaml#/MentoringRequestEligibilityDocument }
+      '401': { $ref: ../responses/errors.yaml#/Unauthorized }
+      '403': { $ref: ../responses/errors.yaml#/Forbidden }
+      '406': { $ref: ../responses/errors.yaml#/NotAcceptable }
+      '503':
+        $ref: ../responses/errors.yaml#/ServiceUnavailable
+        description: >-
+          Current eligibility could not be established (`mentoring_state_unavailable`); unavailable is an error outcome,
+          not a successful resource state.
 
 mentoringSession:
   get:
@@ -176,7 +283,22 @@ mentoringSession:
     summary: Get an authorized mentoring session
     security: [{ sessionCookie: [] }]
     parameters: [{ $ref: ../openapi.yaml#/components/parameters/ResourceID }]
-    responses: { '200': { description: Current mentoring workflow state., headers: { Cache-Control: { $ref: ../openapi.yaml#/components/headers/CacheControlNoStore } }, content: { application/vnd.api+json: { schema: { $ref: ../schemas/resources/resources.yaml#/MentoringSessionDocument } } } }, '401': { $ref: ../responses/errors.yaml#/Unauthorized }, '403': { $ref: ../responses/errors.yaml#/Forbidden }, '404': { $ref: ../responses/errors.yaml#/NotFound }, '406': { $ref: ../responses/errors.yaml#/NotAcceptable } }
+    responses:
+      '200':
+        description: Current mentoring workflow state.
+        headers: { Cache-Control: { $ref: ../openapi.yaml#/components/headers/CacheControlNoStore } }
+        content:
+          application/vnd.api+json:
+            schema: { $ref: ../schemas/resources/resources.yaml#/MentoringSessionDocument }
+      '401': { $ref: ../responses/errors.yaml#/Unauthorized }
+      '403': { $ref: ../responses/errors.yaml#/Forbidden }
+      '404': { $ref: ../responses/errors.yaml#/NotFound }
+      '406': { $ref: ../responses/errors.yaml#/NotAcceptable }
+      '503':
+        $ref: ../responses/errors.yaml#/ServiceUnavailable
+        description: >-
+          Current completion eligibility could not be established (`mentoring_state_unavailable`). Explicitly repeat
+          this safe GET to reconcile; no prior representation remains authoritative.
   patch:
     tags: [Mentoring]
     operationId: updateMentoringSession
@@ -186,7 +308,58 @@ mentoringSession:
     requestBody:
       required: true
       content: { application/vnd.api+json: { schema: { $ref: ../schemas/requests/requests.yaml#/MentoringSessionUpdateRequestDocument } } }
-    responses: { '200': { description: Updated mentoring workflow state., headers: { Cache-Control: { $ref: ../openapi.yaml#/components/headers/CacheControlNoStore } }, content: { application/vnd.api+json: { schema: { $ref: ../schemas/resources/resources.yaml#/MentoringSessionDocument } } } }, '400': { $ref: ../responses/errors.yaml#/BadRequest }, '401': { $ref: ../responses/errors.yaml#/Unauthorized }, '403': { $ref: ../responses/errors.yaml#/Forbidden }, '404': { $ref: ../responses/errors.yaml#/NotFound }, '406': { $ref: ../responses/errors.yaml#/NotAcceptable }, '409': { $ref: ../responses/errors.yaml#/Conflict }, '413': { $ref: ../responses/errors.yaml#/RequestTooLarge }, '415': { $ref: ../responses/errors.yaml#/UnsupportedMediaType }, '422': { $ref: ../responses/errors.yaml#/Unprocessable } }
+    responses:
+      '200':
+        description: Updated mentoring workflow state.
+        headers: { Cache-Control: { $ref: ../openapi.yaml#/components/headers/CacheControlNoStore } }
+        content:
+          application/vnd.api+json:
+            schema: { $ref: ../schemas/resources/resources.yaml#/MentoringSessionDocument }
+      '400': { $ref: ../responses/errors.yaml#/BadRequest }
+      '401': { $ref: ../responses/errors.yaml#/Unauthorized }
+      '403': { $ref: ../responses/errors.yaml#/Forbidden }
+      '404': { $ref: ../responses/errors.yaml#/NotFound }
+      '406': { $ref: ../responses/errors.yaml#/NotAcceptable }
+      '409': { $ref: ../responses/errors.yaml#/Conflict }
+      '413': { $ref: ../responses/errors.yaml#/RequestTooLarge }
+      '415': { $ref: ../responses/errors.yaml#/UnsupportedMediaType }
+      '422': { $ref: ../responses/errors.yaml#/Unprocessable }
+      '503':
+        $ref: ../responses/errors.yaml#/ServiceUnavailable
+        description: >-
+          The update may have committed but its completion projection could not be established
+          (`mentoring_state_unavailable`). Do not replay PATCH; reconcile by explicitly reading this mentoring session.
+
+mentoringCompletionEligibility:
+  get:
+    tags: [Mentoring]
+    operationId: getMentoringCompletionEligibility
+    summary: Freshly check viewer-specific mentoring completion eligibility
+    description: >-
+      Uses current assignment, lifecycle, schedule, authorization, and server time. A future recheck instant is advisory;
+      a fresh allowed response is still required immediately before confirmation.
+    security: [{ sessionCookie: [] }]
+    parameters: [{ $ref: ../openapi.yaml#/components/parameters/ResourceID }]
+    responses:
+      '200':
+        description: Current allowed, not-allowed, or terminal completion projection.
+        headers: { Cache-Control: { $ref: ../openapi.yaml#/components/headers/CacheControlNoStore } }
+        content:
+          application/vnd.api+json:
+            schema: { $ref: ../schemas/resources/resources.yaml#/MentoringCompletionEligibilityDocument }
+      '401': { $ref: ../responses/errors.yaml#/Unauthorized }
+      '403': { $ref: ../responses/errors.yaml#/Forbidden }
+      '404':
+        $ref: ../responses/errors.yaml#/NotFound
+        description: >-
+          Missing, out-of-scope, or assignment-lost work (`mentoring_not_found`); access-lost is an error outcome, not a
+          successful resource state.
+      '406': { $ref: ../responses/errors.yaml#/NotAcceptable }
+      '503':
+        $ref: ../responses/errors.yaml#/ServiceUnavailable
+        description: >-
+          Current eligibility could not be established (`mentoring_state_unavailable`); unavailable is an error outcome,
+          not a successful resource state.
 
 components:
   responses:

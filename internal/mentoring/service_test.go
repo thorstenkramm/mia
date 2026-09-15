@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -94,6 +95,40 @@ func TestRequestAdmissionGatesDoNotAffectExistingWork(t *testing.T) {
 	assert.Equal(t, reasonCanceled, closed.ClosureReason)
 }
 
+func TestRequestEligibilityReflectsCurrentGatesWithoutDisclosingThem(t *testing.T) {
+	fixture := newFixture(t)
+	ctx := context.Background()
+
+	eligibility, err := fixture.service.RequestEligibility(ctx, fixture.course, fixture.student)
+	require.NoError(t, err)
+	assert.Equal(t, "disabled", eligibility.State)
+	assert.NotEmpty(t, eligibility.ID)
+
+	require.NoError(t, fixture.service.AssignCourseMentor(ctx, fixture.course, fixture.mentor, fixture.supervisor))
+	require.NoError(t, fixture.service.AssignStudentMentor(ctx, fixture.course, fixture.student, fixture.mentor,
+		fixture.supervisor))
+	require.NoError(t, user.SetMentoringRequestsAllowed(ctx, fixture.database, fixture.student, true))
+	eligibility, err = fixture.service.RequestEligibility(ctx, fixture.course, fixture.student)
+	require.NoError(t, err)
+	assert.Equal(t, "allowed", eligibility.State)
+	removeStudentMentor(t, fixture, fixture.mentor)
+	eligibility, err = fixture.service.RequestEligibility(ctx, fixture.course, fixture.student)
+	require.NoError(t, err)
+	assert.Equal(t, "disabled", eligibility.State)
+	require.NoError(t, fixture.service.AssignStudentMentor(ctx, fixture.course, fixture.student, fixture.mentor,
+		fixture.supervisor))
+
+	_, err = fixture.database.ExecContext(ctx, "UPDATE courses SET is_active = 0 WHERE id = ?", fixture.course)
+	require.NoError(t, err)
+	eligibility, err = fixture.service.RequestEligibility(ctx, fixture.course, fixture.student)
+	require.NoError(t, err)
+	assert.Equal(t, "disabled", eligibility.State)
+
+	eligibility, err = fixture.service.RequestEligibility(ctx, fixture.course, fixture.other)
+	require.NoError(t, err)
+	assert.Equal(t, "access-lost", eligibility.State)
+}
+
 func TestTriageResponseSchedulingAndDirectReassignment(t *testing.T) {
 	fixture := newFixture(t)
 	ctx := context.Background()
@@ -129,8 +164,7 @@ func TestTriageResponseSchedulingAndDirectReassignment(t *testing.T) {
 	assert.Equal(t, scheduled, *reassigned.ScheduledFor)
 	assert.Equal(t, meetingURL, reassigned.MeetingURL)
 
-	require.NoError(t, fixture.service.RemoveStudentMentor(ctx, fixture.course, fixture.student,
-		fixture.replacement, fixture.supervisor))
+	removeStudentMentor(t, fixture, fixture.replacement)
 	triaged, err := fixture.service.Get(ctx, created.ID, fixture.supervisor)
 	require.NoError(t, err)
 	assert.Empty(t, triaged.MentorID)
@@ -202,8 +236,7 @@ func TestScheduleCancellationAndCompletionRules(t *testing.T) {
 	visible, err := fixture.service.List(ctx, fixture.course, fixture.mentor, ListInput{Limit: 25})
 	require.NoError(t, err)
 	assert.Len(t, visible.Sessions, 2)
-	require.NoError(t, fixture.service.RemoveStudentMentor(ctx, fixture.course, fixture.student, fixture.mentor,
-		fixture.supervisor))
+	removeStudentMentor(t, fixture, fixture.mentor)
 	_, err = fixture.service.Get(ctx, second.ID, fixture.mentor)
 	assert.ErrorIs(t, err, ErrNotFound)
 	revoked, err := fixture.service.List(ctx, fixture.course, fixture.mentor, ListInput{Limit: 25})
@@ -211,6 +244,135 @@ func TestScheduleCancellationAndCompletionRules(t *testing.T) {
 	assert.Empty(t, revoked.Sessions)
 	_, err = fixture.service.Get(ctx, second.ID, fixture.student)
 	require.NoError(t, err)
+}
+
+func TestCompletionEligibilityUsesCurrentAssignmentAndServerTime(t *testing.T) {
+	fixture := newFixture(t)
+	ctx := context.Background()
+	require.NoError(t, fixture.service.AssignCourseMentor(ctx, fixture.course, fixture.mentor, fixture.supervisor))
+	require.NoError(t, fixture.service.AssignStudentMentor(ctx, fixture.course, fixture.student, fixture.mentor,
+		fixture.supervisor))
+	require.NoError(t, user.SetMentoringRequestsAllowed(ctx, fixture.database, fixture.student, true))
+	created, err := fixture.service.Create(ctx, CreateInput{CourseID: fixture.course, StudentID: fixture.student,
+		Topic: "Calculus"})
+	require.NoError(t, err)
+	_, err = fixture.service.Update(ctx, created.ID, UpdateInput{MentorID: optionalValue(fixture.mentor),
+		ActorID: fixture.supervisor})
+	require.NoError(t, err)
+	scheduled := fixture.now.Add(time.Hour)
+	_, err = fixture.service.Update(ctx, created.ID, UpdateInput{ScheduledFor: OptionalTime{Set: true, Value: &scheduled},
+		ActorID: fixture.mentor})
+	require.NoError(t, err)
+
+	early, err := fixture.service.CompletionEligibility(ctx, created.ID, fixture.mentor)
+	require.NoError(t, err)
+	assert.Equal(t, "not-allowed", early.State)
+	assert.Equal(t, scheduled, *early.RecheckAfter)
+	studentView, err := fixture.service.CompletionEligibility(ctx, created.ID, fixture.student)
+	require.NoError(t, err)
+	assert.Equal(t, "not-allowed", studentView.State)
+	assert.Nil(t, studentView.RecheckAfter)
+
+	fixture.now = scheduled
+	fixture.service.now = func() time.Time { return fixture.now }
+	allowed, err := fixture.service.CompletionEligibility(ctx, created.ID, fixture.mentor)
+	require.NoError(t, err)
+	assert.Equal(t, "allowed", allowed.State)
+	_, err = fixture.database.ExecContext(ctx, "UPDATE courses SET is_active = 0 WHERE id = ?", fixture.course)
+	require.NoError(t, err)
+	completed, err := fixture.service.Update(ctx, created.ID,
+		UpdateInput{ClosureReason: "completed", ActorID: fixture.mentor})
+	require.NoError(t, err)
+	assert.Equal(t, "terminal", completed.CompletionEligibility.State)
+
+	removeStudentMentor(t, fixture, fixture.mentor)
+	_, err = fixture.service.CompletionEligibility(ctx, created.ID, fixture.mentor)
+	assert.ErrorIs(t, err, ErrNotFound)
+}
+
+func TestRemovalRequiresFreshReviewAndStaleReviewDoesNotMutate(t *testing.T) {
+	fixture := newFixture(t)
+	ctx := context.Background()
+	require.NoError(t, fixture.service.AssignCourseMentor(ctx, fixture.course, fixture.mentor, fixture.supervisor))
+	require.NoError(t, fixture.service.AssignStudentMentor(ctx, fixture.course, fixture.student, fixture.mentor,
+		fixture.supervisor))
+	require.NoError(t, user.SetMentoringRequestsAllowed(ctx, fixture.database, fixture.student, true))
+
+	review, err := fixture.service.ReviewStudentMentorRemoval(ctx, fixture.course, fixture.student, fixture.mentor,
+		fixture.supervisor)
+	require.NoError(t, err)
+	assert.Zero(t, review.AffectedOpenWork)
+	err = fixture.service.RemoveStudentMentor(ctx, fixture.course, fixture.student, fixture.mentor, fixture.supervisor, "")
+	assert.ErrorIs(t, err, ErrPreconditionRequired)
+
+	created, err := fixture.service.Create(ctx, CreateInput{CourseID: fixture.course, StudentID: fixture.student,
+		Topic: "New work"})
+	require.NoError(t, err)
+	_, err = fixture.service.Update(ctx, created.ID,
+		UpdateInput{MentorID: optionalValue(fixture.mentor), ActorID: fixture.supervisor})
+	require.NoError(t, err)
+	err = fixture.service.RemoveStudentMentor(ctx, fixture.course, fixture.student, fixture.mentor, fixture.supervisor,
+		review.ETag)
+	assert.ErrorIs(t, err, ErrPreconditionFailed)
+	current, err := fixture.service.Get(ctx, created.ID, fixture.mentor)
+	require.NoError(t, err)
+	assert.Equal(t, fixture.mentor, current.MentorID)
+
+	fresh, err := fixture.service.ReviewStudentMentorRemoval(ctx, fixture.course, fixture.student, fixture.mentor,
+		fixture.supervisor)
+	require.NoError(t, err)
+	assert.Equal(t, 1, fresh.AffectedOpenWork)
+	assert.NotEqual(t, review.ETag, fresh.ETag)
+	require.NoError(t, fixture.service.RemoveStudentMentor(ctx, fixture.course, fixture.student, fixture.mentor,
+		fixture.supervisor, fresh.ETag))
+}
+
+func TestConcurrentCompletionCommitsExactlyOnce(t *testing.T) {
+	fixture := newFixture(t)
+	ctx := context.Background()
+	require.NoError(t, fixture.service.AssignCourseMentor(ctx, fixture.course, fixture.mentor, fixture.supervisor))
+	require.NoError(t, fixture.service.AssignStudentMentor(ctx, fixture.course, fixture.student, fixture.mentor,
+		fixture.supervisor))
+	require.NoError(t, user.SetMentoringRequestsAllowed(ctx, fixture.database, fixture.student, true))
+	created, err := fixture.service.Create(ctx, CreateInput{CourseID: fixture.course, StudentID: fixture.student,
+		Topic: "Concurrent completion"})
+	require.NoError(t, err)
+	_, err = fixture.service.Update(ctx, created.ID,
+		UpdateInput{MentorID: optionalValue(fixture.mentor), ActorID: fixture.supervisor})
+	require.NoError(t, err)
+	scheduled := fixture.now.Add(time.Minute)
+	_, err = fixture.service.Update(ctx, created.ID, UpdateInput{ScheduledFor: OptionalTime{Set: true,
+		Value: &scheduled}, ActorID: fixture.mentor})
+	require.NoError(t, err)
+	fixture.now = scheduled
+	fixture.service.now = func() time.Time { return fixture.now }
+
+	start := make(chan struct{})
+	errorsFound := make(chan error, 2)
+	var wait sync.WaitGroup
+	for range 2 {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			<-start
+			_, updateErr := fixture.service.Update(context.Background(), created.ID,
+				UpdateInput{ClosureReason: "completed", ActorID: fixture.mentor})
+			errorsFound <- updateErr
+		}()
+	}
+	close(start)
+	wait.Wait()
+	close(errorsFound)
+	successes, denials := 0, 0
+	for completionErr := range errorsFound {
+		if completionErr == nil {
+			successes++
+		} else if errors.Is(completionErr, ErrInvalidState) {
+			denials++
+		}
+	}
+	assert.Equal(t, 1, successes)
+	assert.Equal(t, 1, denials)
 }
 
 func TestWrongScopeIsHiddenAndCourseRemovalTriagesAllOpenWork(t *testing.T) {
@@ -230,7 +392,7 @@ func TestWrongScopeIsHiddenAndCourseRemovalTriagesAllOpenWork(t *testing.T) {
 	require.NoError(t, err)
 	_, err = fixture.service.Get(ctx, created.ID, fixture.mentor)
 	require.NoError(t, err)
-	require.NoError(t, fixture.service.RemoveCourseMentor(ctx, fixture.course, fixture.mentor, fixture.supervisor))
+	removeCourseMentor(t, fixture, fixture.mentor)
 	_, err = fixture.service.Get(ctx, created.ID, fixture.mentor)
 	assert.ErrorIs(t, err, ErrNotFound)
 	triaged, err := fixture.service.Get(ctx, created.ID, fixture.student)
@@ -244,3 +406,21 @@ func TestWrongScopeIsHiddenAndCourseRemovalTriagesAllOpenWork(t *testing.T) {
 
 func optionalValue(value string) OptionalString { return OptionalString{Set: true, Value: &value} }
 func timePointer(value time.Time) *time.Time    { return &value }
+
+func removeStudentMentor(t *testing.T, fixture fixture, mentorID string) {
+	t.Helper()
+	review, err := fixture.service.ReviewStudentMentorRemoval(context.Background(), fixture.course, fixture.student,
+		mentorID, fixture.supervisor)
+	require.NoError(t, err)
+	require.NoError(t, fixture.service.RemoveStudentMentor(context.Background(), fixture.course, fixture.student,
+		mentorID, fixture.supervisor, review.ETag))
+}
+
+func removeCourseMentor(t *testing.T, fixture fixture, mentorID string) {
+	t.Helper()
+	review, err := fixture.service.ReviewCourseMentorRemoval(context.Background(), fixture.course, mentorID,
+		fixture.supervisor)
+	require.NoError(t, err)
+	require.NoError(t, fixture.service.RemoveCourseMentor(context.Background(), fixture.course, mentorID,
+		fixture.supervisor, review.ETag))
+}
