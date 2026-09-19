@@ -12,3 +12,10 @@
 - Plan finding 1.2 requires adding the Redocly lint command to repository CI; the repository has no CI
   configuration at all. `run-all-tests.sh` and the rule's endpoint checklist carry the gate today. Revisit
   when CI infrastructure is introduced.
+
+## Deferred from: code review of spec-fix-mfa-completion-session (2026-09-19)
+
+- Reset all inherited session values instead of the current stage-specific key; this is broader session hardening
+  beyond the present MFA carry-over defect.
+- Validate the `stage` and `challengeID` pairing at the session API boundary; current callers satisfy the contract and
+  changing that boundary is outside this focused fix.

@@ -414,6 +414,9 @@ func (server *Server) saveSession(c *echo.Context, userID string, generation int
 	if err != nil {
 		return err
 	}
+	// CookieStore.New preserves values from the request cookie. A challenge only
+	// belongs to the MFA stage, so never carry it into a destination session.
+	delete(session.Values, "mfa_challenge_id")
 	session.Values["user_id"] = userID
 	session.Values["stage"] = stage
 	session.Values["security_generation"] = generation

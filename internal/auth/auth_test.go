@@ -1006,6 +1006,127 @@ func TestMFAVerificationPrecedesPasswordChange(t *testing.T) {
 	}
 }
 
+func TestMFACompletionSessionsWorkOnNextRequest(t *testing.T) {
+	t.Run("TOTP completion", func(t *testing.T) {
+		server, database := testServer(t)
+		account := createAccount(t, database, false)
+		secret := []byte("12345678901234567890")
+		insertTOTPFactor(t, database, account.ID, secret)
+
+		login := serve(t, server, http.MethodPost, "/api/v1/auth/login", csrfToken(t, server), nil,
+			loginBody("student", "correct horse battery"))
+		cookies, csrf := authCookies(t, server, login)
+		challengeID := currentMFAChallengeID(t, database, account.ID)
+		completed := serve(t, server, http.MethodPost, "/api/v1/auth/mfa-challenges/"+challengeID+"/verifications",
+			csrf, cookies, `{"data":{"type":"mfa-verifications","attributes":{"code":"`+totpCode(secret, time.Now().Unix()/30)+`"}}}`)
+		assertCode(t, completed, http.StatusOK, "")
+		if stage(t, completed.Body.Bytes()) != "authenticated" {
+			t.Fatalf("completion stage = %q", stage(t, completed.Body.Bytes()))
+		}
+		cookies, csrf = authCookies(t, server, completed)
+		assertNoMFAChallenge(t, server, cookies)
+		assertCode(t, serve(t, server, http.MethodPost, "/api/v1/auth/session-continuations", csrf, cookies, ""), http.StatusOK, "")
+	})
+
+	t.Run("SMS completion", func(t *testing.T) {
+		sender := &smsRecorder{}
+		server, database := testServerWithSMS(t, sender)
+		account := createAccount(t, database, false)
+		if _, err := database.Exec(`INSERT INTO mfa_factors
+			(id, user_id, method, sms_destination, created_at) VALUES (?, ?, 'sms', ?, ?)`,
+			"mff_"+uuid.NewString(), account.ID, "+4915112345678", instant(time.Now())); err != nil {
+			t.Fatal(err)
+		}
+
+		login := serve(t, server, http.MethodPost, "/api/v1/auth/login", csrfToken(t, server), nil,
+			loginBody("student", "correct horse battery"))
+		cookies, csrf := authCookies(t, server, login)
+		challengeID := currentMFAChallengeID(t, database, account.ID)
+		completed := serve(t, server, http.MethodPost, "/api/v1/auth/mfa-challenges/"+challengeID+"/verifications",
+			csrf, cookies, `{"data":{"type":"mfa-verifications","attributes":{"code":"`+sender.last(t)+`"}}}`)
+		assertCode(t, completed, http.StatusOK, "")
+		cookies, csrf = authCookies(t, server, completed)
+		assertNoMFAChallenge(t, server, cookies)
+		assertCode(t, serve(t, server, http.MethodPost, "/api/v1/auth/session-continuations", csrf, cookies, ""), http.StatusOK, "")
+	})
+
+	t.Run("recovery-code completion", func(t *testing.T) {
+		server, database := testServer(t)
+		account := createAccount(t, database, false)
+		insertTOTPFactor(t, database, account.ID, []byte("12345678901234567890"))
+		code := "ABCDEFGHJKMNPQRS"
+		digest, err := recoveryDigest(code)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := database.Exec(`INSERT INTO mfa_recovery_codes (id, user_id, digest, created_at)
+			VALUES (?, ?, ?, ?)`, "mrc_"+uuid.NewString(), account.ID, digest[:], instant(time.Now())); err != nil {
+			t.Fatal(err)
+		}
+
+		login := serve(t, server, http.MethodPost, "/api/v1/auth/login", csrfToken(t, server), nil,
+			loginBody("student", "correct horse battery"))
+		cookies, csrf := authCookies(t, server, login)
+		challengeID := currentMFAChallengeID(t, database, account.ID)
+		completed := serve(t, server, http.MethodPost,
+			"/api/v1/auth/mfa-challenges/"+challengeID+"/recovery-code-consumptions", csrf, cookies,
+			`{"data":{"type":"mfa-recovery-code-consumptions","attributes":{"code":"`+code+`"}}}`)
+		assertCode(t, completed, http.StatusOK, "")
+		cookies, csrf = authCookies(t, server, completed)
+		assertNoMFAChallenge(t, server, cookies)
+		assertCode(t, serve(t, server, http.MethodPost, "/api/v1/auth/session-continuations", csrf, cookies, ""), http.StatusOK, "")
+	})
+
+	t.Run("password-change completion", func(t *testing.T) {
+		server, database := testServer(t)
+		account := createAccount(t, database, true)
+		secret := []byte("12345678901234567890")
+		insertTOTPFactor(t, database, account.ID, secret)
+
+		login := serve(t, server, http.MethodPost, "/api/v1/auth/login", csrfToken(t, server), nil,
+			loginBody("student", "correct horse battery"))
+		cookies, csrf := authCookies(t, server, login)
+		challengeID := currentMFAChallengeID(t, database, account.ID)
+		completed := serve(t, server, http.MethodPost, "/api/v1/auth/mfa-challenges/"+challengeID+"/verifications",
+			csrf, cookies, `{"data":{"type":"mfa-verifications","attributes":{"code":"`+totpCode(secret, time.Now().Unix()/30)+`"}}}`)
+		assertCode(t, completed, http.StatusOK, "")
+		if stage(t, completed.Body.Bytes()) != "password-change" {
+			t.Fatalf("completion stage = %q", stage(t, completed.Body.Bytes()))
+		}
+		cookies, csrf = authCookies(t, server, completed)
+		assertNoMFAChallenge(t, server, cookies)
+		changed := serve(t, server, http.MethodPost, "/api/v1/auth/password-changes", csrf, cookies,
+			`{"data":{"type":"password-changes","attributes":{"password":"a different strong password","password_confirmation":"a different strong password"}}}`)
+		assertCode(t, changed, http.StatusOK, "")
+		cookies, csrf = authCookies(t, server, changed)
+		assertNoMFAChallenge(t, server, cookies)
+		assertCode(t, serve(t, server, http.MethodPost, "/api/v1/auth/session-continuations", csrf, cookies, ""), http.StatusOK, "")
+	})
+
+	t.Run("non-MFA login replaces stale challenge session", func(t *testing.T) {
+		server, database := testServer(t)
+		account := createAccount(t, database, false)
+		insertTOTPFactor(t, database, account.ID, []byte("12345678901234567890"))
+
+		firstLogin := serve(t, server, http.MethodPost, "/api/v1/auth/login", csrfToken(t, server), nil,
+			loginBody("student", "correct horse battery"))
+		oldCookies, csrf := authCookies(t, server, firstLogin)
+		if _, err := database.Exec("DELETE FROM mfa_factors WHERE user_id = ?", account.ID); err != nil {
+			t.Fatal(err)
+		}
+
+		login := serve(t, server, http.MethodPost, "/api/v1/auth/login", csrf, oldCookies,
+			loginBody("student", "correct horse battery"))
+		assertCode(t, login, http.StatusOK, "")
+		cookies, csrf := authCookies(t, server, login)
+		if stage(t, login.Body.Bytes()) != "authenticated" {
+			t.Fatalf("replacement login stage = %q", stage(t, login.Body.Bytes()))
+		}
+		assertNoMFAChallenge(t, server, cookies)
+		assertCode(t, serve(t, server, http.MethodPost, "/api/v1/auth/session-continuations", csrf, cookies, ""), http.StatusOK, "")
+	})
+}
+
 func TestSMSEnrollmentDeliversAndVerifiesOneCode(t *testing.T) {
 	sender := &smsRecorder{}
 	server, database := testServerWithSMS(t, sender)
@@ -1481,6 +1602,24 @@ func insertMFAArtifacts(t *testing.T, database *sql.DB, accountID string) {
 	}
 }
 
+func insertTOTPFactor(t *testing.T, database *sql.DB, accountID string, secret []byte) {
+	t.Helper()
+	if _, err := database.Exec(`INSERT INTO mfa_factors (id, user_id, method, totp_secret, created_at)
+		VALUES (?, ?, 'totp', ?, ?)`, "mff_"+uuid.NewString(), accountID, secret, instant(time.Now())); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func currentMFAChallengeID(t *testing.T, database *sql.DB, accountID string) string {
+	t.Helper()
+	var challengeID string
+	if err := database.QueryRow("SELECT id FROM mfa_challenges WHERE user_id = ? AND consumed_at IS NULL", accountID).
+		Scan(&challengeID); err != nil {
+		t.Fatal(err)
+	}
+	return challengeID
+}
+
 func assertResetState(t *testing.T, database *sql.DB, accountID string, generation int64) {
 	t.Helper()
 	for _, table := range []string{"mfa_factors", "mfa_enrollments", "mfa_challenges", "mfa_management_proofs", "mfa_recovery_codes"} {
@@ -1792,6 +1931,30 @@ func sessionCookies(t *testing.T, server *httpserver.Server, response *httptest.
 		t.Fatalf("response session cookie count = %d", len(cookies))
 	}
 	return cookies
+}
+
+func assertNoMFAChallenge(t *testing.T, server *httpserver.Server, cookies []*http.Cookie) {
+	t.Helper()
+	request := httptest.NewRequest(http.MethodPost, "http://mia.test/", nil)
+	for _, cookie := range cookies {
+		request.AddCookie(cookie)
+	}
+	session, err := server.Sessions.Get(request, server.SessionCookieName())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if session.IsNew {
+		t.Fatal("completion session cookie was missing or undecodable")
+	}
+	if userID, ok := session.Values["user_id"].(string); !ok || userID == "" {
+		t.Fatal("completion session omitted user identity")
+	}
+	if stage, ok := session.Values["stage"].(string); !ok || stage == "mfa" {
+		t.Fatalf("completion session stage = %q", session.Values["stage"])
+	}
+	if _, present := session.Values["mfa_challenge_id"]; present {
+		t.Fatal("completion session retained MFA challenge state")
+	}
 }
 
 func replaceSessionCookie(server *httpserver.Server, cookies []*http.Cookie, replacement *http.Cookie) []*http.Cookie {
