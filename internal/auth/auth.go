@@ -24,6 +24,8 @@ import (
 	"github.com/thorstenkramm/mia/internal/provider/sms"
 	miSQLite "github.com/thorstenkramm/mia/internal/sqlite"
 	"github.com/thorstenkramm/mia/internal/user"
+	moderncSQLite "modernc.org/sqlite"
+	"modernc.org/sqlite/lib"
 )
 
 type recoveryMailer interface {
@@ -831,9 +833,6 @@ func startEnrollment(_ *httpserver.Server, database *sql.DB, publicURL string, s
 			return httpserver.NewError(httpserver.CodeMFAUnavailable)
 		}
 		method := request.Data.Attributes.Method
-		if method == "sms" && !sms.Available(sender) {
-			return httpserver.NewError(httpserver.CodeMFAUnavailable)
-		}
 		var secret []byte
 		var smsCode string
 		if method == "totp" {
@@ -845,9 +844,27 @@ func startEnrollment(_ *httpserver.Server, database *sql.DB, publicURL string, s
 			return err
 		}
 		id := "mfe_" + uuid.NewString()
-		now := time.Now()
 		var username, destination string
 		err = miSQLite.WithTx(c.Request().Context(), database, func(tx *sql.Tx) error {
+			// BeginTx holds SQLite's immediate write lock before this instant is captured.
+			now := time.Now()
+			// Resolve pending state before replacement or SMS prerequisites so every
+			// valid duplicate start has the same conflict outcome.
+			if _, err := tx.ExecContext(c.Request().Context(),
+				"DELETE FROM mfa_enrollments WHERE user_id = ? AND expires_at <= ?", accountID, instant(now)); err != nil {
+				return err
+			}
+			var pending int
+			if err := tx.QueryRowContext(c.Request().Context(),
+				"SELECT EXISTS(SELECT 1 FROM mfa_enrollments WHERE user_id = ?)", accountID).Scan(&pending); err != nil {
+				return err
+			}
+			if pending != 0 {
+				return errMFAEnrollmentPending
+			}
+			if method == "sms" && !sms.Available(sender) {
+				return sms.ErrUnavailable
+			}
 			profile, err := user.LoadMFAProfile(c.Request().Context(), tx, accountID)
 			if err != nil {
 				return err
@@ -868,10 +885,6 @@ func startEnrollment(_ *httpserver.Server, database *sql.DB, publicURL string, s
 				}
 				proofDigest = digest[:]
 			}
-			// The unique enrollment row must not let an expired enrollment block a new attempt.
-			if _, err := tx.ExecContext(c.Request().Context(), "DELETE FROM mfa_enrollments WHERE user_id = ? AND expires_at <= ?", accountID, instant(now)); err != nil {
-				return err
-			}
 			if method == "sms" {
 				if _, err := sms.Reserve(c.Request().Context(), tx, accountID, destination, now); err != nil {
 					return err
@@ -880,6 +893,9 @@ func startEnrollment(_ *httpserver.Server, database *sql.DB, publicURL string, s
 			_, err = tx.ExecContext(c.Request().Context(), `INSERT INTO mfa_enrollments
 				(id, user_id, method, totp_secret, sms_destination, sms_code, proof_digest, expires_at, created_at)
 				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, id, accountID, method, nullableBytes(secret), nullable(destination), nullable(smsCode), proofDigest, instant(now.Add(30*time.Minute)), instant(now))
+			if isMFAEnrollmentPendingViolation(err) {
+				return errMFAEnrollmentPending
+			}
 			return err
 		})
 		if errors.Is(err, errProofRequired) {
@@ -887,6 +903,9 @@ func startEnrollment(_ *httpserver.Server, database *sql.DB, publicURL string, s
 		}
 		if errors.Is(err, errSMSDestinationRequired) || errors.Is(err, sms.ErrUnavailable) {
 			return httpserver.NewError(httpserver.CodeMFAUnavailable)
+		}
+		if errors.Is(err, errMFAEnrollmentPending) {
+			return httpserver.NewError(httpserver.CodeMFAEnrollmentPending)
 		}
 		if errors.Is(err, sms.ErrRateLimited) {
 			return smsRateLimited(c, err)
@@ -906,7 +925,20 @@ func startEnrollment(_ *httpserver.Server, database *sql.DB, publicURL string, s
 	}
 }
 
-var errSMSDestinationRequired = errors.New("verified mobile is required for SMS MFA")
+var (
+	errSMSDestinationRequired = errors.New("verified mobile is required for SMS MFA")
+	errMFAEnrollmentPending   = errors.New("MFA enrollment pending")
+)
+
+// isMFAEnrollmentPendingViolation recognizes only the unique index that
+// enforces one pending enrollment for a user.
+func isMFAEnrollmentPendingViolation(err error) bool {
+	var sqliteError *moderncSQLite.Error
+	if !errors.As(err, &sqliteError) || sqliteError.Code() != sqlite3.SQLITE_CONSTRAINT_UNIQUE {
+		return false
+	}
+	return strings.Contains(sqliteError.Error(), "UNIQUE constraint failed: mfa_enrollments.user_id")
+}
 
 func verifyEnrollment(server *httpserver.Server, database *sql.DB) echo.HandlerFunc {
 	return func(c *echo.Context) error {

@@ -274,6 +274,8 @@ without extending expiry or resetting failures. TOTP provisioning uses issuer
 activation returns ten recovery codes once. Disabling or replacing active MFA
 requires the current password and a fresh current-factor or recovery-code proof.
 POST enrollment creates a pending replacement when an active factor exists.
+Starting another enrollment while one remains pending returns
+`409 auth_mfa_enrollment_pending`; the existing enrollment remains unchanged.
 Replacement activation atomically consumes the password and MFA-management proof.
 DELETE cancels a pending enrollment or, with the same proof requirements,
 disables an active factor. If an activation response containing recovery codes is

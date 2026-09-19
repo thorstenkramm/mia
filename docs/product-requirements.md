@@ -659,6 +659,8 @@ profile operations.
 - MFA enrollment is not active until the user verifies the selected factor.
 - A pending enrollment expires after 30 minutes. Expiry removes its pending
   secret or SMS code without changing an existing active factor.
+- Starting another enrollment while one remains pending returns a conflict and
+  leaves the existing enrollment unchanged.
 - Five incorrect verification submissions delete the pending enrollment.
 - Resending a pending SMS enrollment sends its existing code without extending
   expiry or resetting failed attempts.

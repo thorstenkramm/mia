@@ -715,6 +715,144 @@ func TestTOTPEnrollmentLoginAndStepReplay(t *testing.T) {
 	_ = account
 }
 
+func TestMFAEnrollmentRejectsPendingAndReplacesExpired(t *testing.T) {
+	server, database := testServer(t)
+	account := createAccount(t, database, false)
+	csrf := csrfToken(t, server)
+	login := serve(t, server, http.MethodPost, "/api/v1/auth/login", csrf, nil,
+		loginBody("student", "correct horse battery"))
+	session, csrf := authCookies(t, server, login)
+	request := `{"data":{"type":"mfa-enrollments","attributes":{"method":"totp"}}}`
+	first := serve(t, server, http.MethodPost, "/api/v1/users/me/mfa-enrollments", csrf, session, request)
+	assertCode(t, first, http.StatusCreated, "")
+	var created struct {
+		Data struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(first.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+
+	duplicate := serve(t, server, http.MethodPost, "/api/v1/users/me/mfa-enrollments", csrf, session, request)
+	assertCode(t, duplicate, http.StatusConflict, "auth_mfa_enrollment_pending")
+	for _, detail := range []string{"sqlite", "mfa_enrollments", "mfa_enrollments_user_idx", "constraint", "index"} {
+		if strings.Contains(strings.ToLower(duplicate.Body.String()), detail) {
+			t.Fatalf("duplicate enrollment exposed persistence detail %q: %s", detail, duplicate.Body.String())
+		}
+	}
+	var retainedID string
+	if err := database.QueryRow("SELECT id FROM mfa_enrollments WHERE user_id = ?", account.ID).Scan(&retainedID); err != nil {
+		t.Fatal(err)
+	}
+	if retainedID != created.Data.ID {
+		t.Fatalf("pending enrollment changed from %q to %q", created.Data.ID, retainedID)
+	}
+
+	if _, err := database.Exec("UPDATE mfa_enrollments SET expires_at = ? WHERE id = ?", instant(time.Now().Add(-time.Minute)), retainedID); err != nil {
+		t.Fatal(err)
+	}
+	replacement := serve(t, server, http.MethodPost, "/api/v1/users/me/mfa-enrollments", csrf, session, request)
+	assertCode(t, replacement, http.StatusCreated, "")
+	if err := json.Unmarshal(replacement.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+	if created.Data.ID == retainedID {
+		t.Fatalf("expired enrollment %q was returned instead of replaced", retainedID)
+	}
+	var enrollments int
+	if err := database.QueryRow("SELECT COUNT(*) FROM mfa_enrollments WHERE user_id = ?", account.ID).Scan(&enrollments); err != nil {
+		t.Fatal(err)
+	}
+	if enrollments != 1 {
+		t.Fatalf("enrollment count = %d, want 1", enrollments)
+	}
+}
+
+func TestConcurrentMFAEnrollmentProducesOneCreation(t *testing.T) {
+	server, database := testServer(t)
+	account := createAccount(t, database, false)
+	csrf := csrfToken(t, server)
+	login := serve(t, server, http.MethodPost, "/api/v1/auth/login", csrf, nil,
+		loginBody("student", "correct horse battery"))
+	session, csrf := authCookies(t, server, login)
+	request := `{"data":{"type":"mfa-enrollments","attributes":{"method":"totp"}}}`
+	start := make(chan struct{})
+	responses := make(chan *httptest.ResponseRecorder, 2)
+	for range 2 {
+		go func() {
+			<-start
+			responses <- serve(t, server, http.MethodPost, "/api/v1/users/me/mfa-enrollments", csrf, session, request)
+		}()
+	}
+	close(start)
+	first, second := <-responses, <-responses
+	if min(first.Code, second.Code) != http.StatusCreated || max(first.Code, second.Code) != http.StatusConflict {
+		t.Fatalf("concurrent enrollment codes=%d,%d", first.Code, second.Code)
+	}
+	if first.Code == http.StatusConflict {
+		assertCode(t, first, http.StatusConflict, "auth_mfa_enrollment_pending")
+	} else {
+		assertCode(t, second, http.StatusConflict, "auth_mfa_enrollment_pending")
+	}
+	var enrollments int
+	if err := database.QueryRow("SELECT COUNT(*) FROM mfa_enrollments WHERE user_id = ?", account.ID).Scan(&enrollments); err != nil {
+		t.Fatal(err)
+	}
+	if enrollments != 1 {
+		t.Fatalf("enrollment count = %d, want 1", enrollments)
+	}
+}
+
+func TestMFAEnrollmentPendingPrecedesSecondaryChecks(t *testing.T) {
+	t.Run("SMS cooldown", func(t *testing.T) {
+		sender := &smsRecorder{}
+		server, database := testServerWithSMS(t, sender)
+		account := createAccount(t, database, false)
+		if _, err := database.Exec("UPDATE users SET mobile = ?, mobile_verified_at = ? WHERE id = ?",
+			"+4915112345678", instant(time.Now()), account.ID); err != nil {
+			t.Fatal(err)
+		}
+		csrf := csrfToken(t, server)
+		login := serve(t, server, http.MethodPost, "/api/v1/auth/login", csrf, nil,
+			loginBody("student", "correct horse battery"))
+		session, csrf := authCookies(t, server, login)
+		request := `{"data":{"type":"mfa-enrollments","attributes":{"method":"sms"}}}`
+		created := serve(t, server, http.MethodPost, "/api/v1/users/me/mfa-enrollments", csrf, session, request)
+		assertCode(t, created, http.StatusCreated, "")
+
+		duplicate := serve(t, server, http.MethodPost, "/api/v1/users/me/mfa-enrollments", csrf, session, request)
+		assertCode(t, duplicate, http.StatusConflict, "auth_mfa_enrollment_pending")
+		if sender.count() != 1 {
+			t.Fatalf("SMS delivery count = %d, want 1", sender.count())
+		}
+	})
+
+	t.Run("replacement proof and provider availability", func(t *testing.T) {
+		server, database := testServer(t)
+		account := createAccount(t, database, false)
+		csrf := csrfToken(t, server)
+		login := serve(t, server, http.MethodPost, "/api/v1/auth/login", csrf, nil,
+			loginBody("student", "correct horse battery"))
+		session, csrf := authCookies(t, server, login)
+		now := instant(time.Now())
+		if _, err := database.Exec(`INSERT INTO mfa_factors
+			(id, user_id, method, totp_secret, created_at) VALUES (?, ?, 'totp', ?, ?)`,
+			"mff_"+uuid.NewString(), account.ID, []byte("12345678901234567890"), now); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := database.Exec(`INSERT INTO mfa_enrollments
+			(id, user_id, method, totp_secret, proof_digest, expires_at, created_at)
+			VALUES (?, ?, 'totp', ?, ?, ?, ?)`, "mfe_"+uuid.NewString(), account.ID,
+			[]byte("abcdefghijabcdefghij"), []byte("pending-proof"), instant(time.Now().Add(time.Minute)), now); err != nil {
+			t.Fatal(err)
+		}
+		request := `{"data":{"type":"mfa-enrollments","attributes":{"method":"sms"}}}`
+		duplicate := serve(t, server, http.MethodPost, "/api/v1/users/me/mfa-enrollments", csrf, session, request)
+		assertCode(t, duplicate, http.StatusConflict, "auth_mfa_enrollment_pending")
+	})
+}
+
 func TestManagementProofsUseUniqueOpaqueResourceIDs(t *testing.T) {
 	server, database := testServer(t)
 	createAccount(t, database, false)
@@ -1023,6 +1161,12 @@ func (recorder *smsRecorder) last(t *testing.T) string {
 		t.Fatal("SMS sender received no code")
 	}
 	return recorder.codes[len(recorder.codes)-1]
+}
+
+func (recorder *smsRecorder) count() int {
+	recorder.mu.Lock()
+	defer recorder.mu.Unlock()
+	return len(recorder.codes)
 }
 
 type mailRecorder struct {

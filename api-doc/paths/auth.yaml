@@ -314,6 +314,9 @@ mfaEnrollments:
         $ref: ../responses/errors.yaml#/Forbidden
         description: CSRF or restricted session (`csrf_invalid` or `auth_password_change_required`).
       '406': { $ref: ../responses/errors.yaml#/NotAcceptable }
+      '409':
+        $ref: ../responses/errors.yaml#/Conflict
+        description: A pending enrollment already exists (`auth_mfa_enrollment_pending`).
       '413': { $ref: ../responses/errors.yaml#/RequestTooLarge }
       '415': { $ref: ../responses/errors.yaml#/UnsupportedMediaType }
       '422':

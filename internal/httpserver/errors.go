@@ -45,6 +45,7 @@ const (
 	CodeInvalidRecoveryCode         Code = "auth_invalid_recovery_code"
 	CodeMFAChallengeExpired         Code = "auth_mfa_challenge_expired"
 	CodeMFAProofRequired            Code = "auth_mfa_proof_required"
+	CodeMFAEnrollmentPending        Code = "auth_mfa_enrollment_pending"
 	CodeMFAUnavailable              Code = "auth_mfa_unavailable"
 	CodeMFAResetNotFound            Code = "auth_mfa_reset_not_found"
 	CodeMFAResetUnavailable         Code = "auth_mfa_reset_unavailable"
@@ -172,6 +173,7 @@ var errorRegistry = map[Code]definition{
 	CodeInvalidRecoveryCode:         {http.StatusUnprocessableEntity, "Invalid Recovery Code", "The request could not be completed."},
 	CodeMFAChallengeExpired:         {http.StatusUnprocessableEntity, "MFA Challenge Expired", "The request could not be completed."},
 	CodeMFAProofRequired:            {http.StatusUnprocessableEntity, "MFA Proof Required", "The request could not be completed."},
+	CodeMFAEnrollmentPending:        {http.StatusConflict, "MFA Enrollment Pending", "Finish or cancel the pending MFA enrollment before starting another."},
 	CodeMFAUnavailable:              {http.StatusUnprocessableEntity, "MFA Unavailable", "The request could not be completed."},
 	CodeMFAResetNotFound:            {http.StatusNotFound, "Not Found", "The requested resource was not found."},
 	CodeMFAResetUnavailable:         {http.StatusConflict, "MFA Reset Unavailable", "Review the current account before trying again."},
