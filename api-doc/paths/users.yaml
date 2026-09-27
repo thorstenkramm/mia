@@ -55,6 +55,9 @@ capabilities:
     description: >-
       Read after GET /api/v1/auth/session reports authenticated. Requires a full authenticated session;
       both mfa and password-change stages are denied. This GET requires no CSRF header or request body.
+      Middleware retains an existing CSRF cookie or issues one when absent. Duplicate configured-name CSRF cookies
+      return 403 csrf_invalid, subject to earlier middleware. The shared auth_password_change_required denial does not
+      distinguish MFA from password replacement; reconcile the stage through GET /api/v1/auth/session.
       Returns application/vnd.api+json with Cache-Control: no-store and never extends the session.
       Successful discovery permits every fully authenticated account to mount the basic Home shell, including
       an empty Home when assignment scopes are empty. No separate Home permission or authorization endpoint is needed.
@@ -74,10 +77,195 @@ capabilities:
         content:
           application/vnd.api+json:
             schema: { $ref: ../schemas/resources/resources.yaml#/AccountCapabilitiesDocument }
+            examples:
+              singleRole:
+                summary: Student with one joined course
+                value:
+                  data:
+                    type: account-capabilities
+                    id: example-student
+                    attributes:
+                      capabilities:
+                        - action: profile.view
+                          available: true
+                          scope: { global: false, course_ids: [], student_ids: [], course_students: [], own_resource: true }
+                        - action: profile.edit
+                          available: false
+                          scope: { global: false, course_ids: [], student_ids: [], course_students: [], own_resource: false }
+                        - action: accounts.administer
+                          available: false
+                          scope: { global: false, course_ids: [], student_ids: [], course_students: [], own_resource: false }
+                        - action: audit.view
+                          available: false
+                          scope: { global: false, course_ids: [], student_ids: [], course_students: [], own_resource: false }
+                        - action: jobs.view
+                          available: false
+                          scope: { global: false, course_ids: [], student_ids: [], course_students: [], own_resource: false }
+                        - action: courses.create
+                          available: false
+                          scope: { global: false, course_ids: [], student_ids: [], course_students: [], own_resource: false }
+                        - action: course_records.manage
+                          available: false
+                          scope: { global: false, course_ids: [], student_ids: [], course_students: [], own_resource: false }
+                        - action: course_supervisors.manage
+                          available: false
+                          scope: { global: false, course_ids: [], student_ids: [], course_students: [], own_resource: false }
+                        - action: courses.supervise
+                          available: false
+                          scope: { global: false, course_ids: [], student_ids: [], course_students: [], own_resource: false }
+                        - action: students.manage
+                          available: false
+                          scope: { global: false, course_ids: [], student_ids: [], course_students: [], own_resource: false }
+                        - action: students.ban
+                          available: false
+                          scope: { global: false, course_ids: [], student_ids: [], course_students: [], own_resource: false }
+                        - action: students.unban
+                          available: false
+                          scope: { global: false, course_ids: [], student_ids: [], course_students: [], own_resource: false }
+                        - action: learning.participate
+                          available: true
+                          scope:
+                            global: false
+                            course_ids: [example-joined-course]
+                            student_ids: []
+                            course_students: []
+                            own_resource: false
+                        - action: mentoring.fulfill
+                          available: false
+                          scope: { global: false, course_ids: [], student_ids: [], course_students: [], own_resource: false }
+              multiRole:
+                summary: Supervisor (also student) and mentor with distinct assignment scopes
+                value:
+                  data:
+                    type: account-capabilities
+                    id: example-multi-role
+                    attributes:
+                      capabilities:
+                        - action: profile.view
+                          available: true
+                          scope: { global: false, course_ids: [], student_ids: [], course_students: [], own_resource: true }
+                        - action: profile.edit
+                          available: true
+                          scope: { global: false, course_ids: [], student_ids: [], course_students: [], own_resource: true }
+                        - action: accounts.administer
+                          available: false
+                          scope: { global: false, course_ids: [], student_ids: [], course_students: [], own_resource: false }
+                        - action: audit.view
+                          available: false
+                          scope: { global: false, course_ids: [], student_ids: [], course_students: [], own_resource: false }
+                        - action: jobs.view
+                          available: false
+                          scope: { global: false, course_ids: [], student_ids: [], course_students: [], own_resource: false }
+                        - action: courses.create
+                          available: false
+                          scope: { global: false, course_ids: [], student_ids: [], course_students: [], own_resource: false }
+                        - action: course_records.manage
+                          available: false
+                          scope: { global: false, course_ids: [], student_ids: [], course_students: [], own_resource: false }
+                        - action: course_supervisors.manage
+                          available: false
+                          scope: { global: false, course_ids: [], student_ids: [], course_students: [], own_resource: false }
+                        - action: courses.supervise
+                          available: true
+                          scope:
+                            global: false
+                            course_ids: [example-supervised-course]
+                            student_ids: []
+                            course_students: []
+                            own_resource: false
+                        - action: students.manage
+                          available: true
+                          scope:
+                            global: false
+                            course_ids: []
+                            student_ids: [example-managed-student]
+                            course_students: []
+                            own_resource: false
+                        - action: students.ban
+                          available: true
+                          scope:
+                            global: false
+                            course_ids: []
+                            student_ids: [example-managed-student]
+                            course_students: []
+                            own_resource: false
+                        - action: students.unban
+                          available: false
+                          scope: { global: false, course_ids: [], student_ids: [], course_students: [], own_resource: false }
+                        - action: learning.participate
+                          available: true
+                          scope:
+                            global: false
+                            course_ids: [example-joined-course]
+                            student_ids: []
+                            course_students: []
+                            own_resource: false
+                        - action: mentoring.fulfill
+                          available: true
+                          scope:
+                            global: false
+                            course_ids: []
+                            student_ids: []
+                            course_students:
+                              - { course_id: example-mentored-course-a, student_id: example-mentored-student-a }
+                              - { course_id: example-mentored-course-b, student_id: example-mentored-student-b }
+                            own_resource: false
+              emptyAssignments:
+                summary: Unassigned administrator may enter basic Home without course or student access
+                value:
+                  data:
+                    type: account-capabilities
+                    id: example-administrator
+                    attributes:
+                      capabilities:
+                        - action: profile.view
+                          available: true
+                          scope: { global: false, course_ids: [], student_ids: [], course_students: [], own_resource: true }
+                        - action: profile.edit
+                          available: true
+                          scope: { global: false, course_ids: [], student_ids: [], course_students: [], own_resource: true }
+                        - action: accounts.administer
+                          available: true
+                          scope: { global: true, course_ids: [], student_ids: [], course_students: [], own_resource: false }
+                        - action: audit.view
+                          available: true
+                          scope: { global: true, course_ids: [], student_ids: [], course_students: [], own_resource: false }
+                        - action: jobs.view
+                          available: true
+                          scope: { global: true, course_ids: [], student_ids: [], course_students: [], own_resource: false }
+                        - action: courses.create
+                          available: true
+                          scope: { global: true, course_ids: [], student_ids: [], course_students: [], own_resource: false }
+                        - action: course_records.manage
+                          available: true
+                          scope: { global: true, course_ids: [], student_ids: [], course_students: [], own_resource: false }
+                        - action: course_supervisors.manage
+                          available: true
+                          scope: { global: true, course_ids: [], student_ids: [], course_students: [], own_resource: false }
+                        - action: courses.supervise
+                          available: false
+                          scope: { global: false, course_ids: [], student_ids: [], course_students: [], own_resource: false }
+                        - action: students.manage
+                          available: false
+                          scope: { global: false, course_ids: [], student_ids: [], course_students: [], own_resource: false }
+                        - action: students.ban
+                          available: false
+                          scope: { global: false, course_ids: [], student_ids: [], course_students: [], own_resource: false }
+                        - action: students.unban
+                          available: false
+                          scope: { global: false, course_ids: [], student_ids: [], course_students: [], own_resource: false }
+                        - action: learning.participate
+                          available: false
+                          scope: { global: false, course_ids: [], student_ids: [], course_students: [], own_resource: false }
+                        - action: mentoring.fulfill
+                          available: false
+                          scope: { global: false, course_ids: [], student_ids: [], course_students: [], own_resource: false }
       '401': { $ref: ../responses/errors.yaml#/Unauthorized }
       '403':
         $ref: ../responses/errors.yaml#/Forbidden
-        description: Restricted mfa or password-change session (`auth_password_change_required`).
+        description: >-
+          Duplicate configured-name CSRF cookies (`csrf_invalid`) or restricted mfa or password-change session
+          (`auth_password_change_required`). Reconcile restricted stages through session discovery.
       '406': { $ref: ../responses/errors.yaml#/NotAcceptable }
       '500': { $ref: ../responses/errors.yaml#/InternalError }
 

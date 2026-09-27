@@ -35,7 +35,11 @@ sessionDiscovery:
     summary: Discover current browser session
     description: >-
       Returns anonymous state for absent, stale, malformed, banned, deleted, or generation-invalid authentication.
-      Discovery never extends a session. Anonymous discovery refreshes the public CSRF cookie. Clients use this route
+      Discovery never extends a session. Anonymous discovery rotates the public CSRF cookie; valid-stage discovery
+      retains an existing cookie. Middleware issues one when absent; anonymous rotation then issues the effective
+      last cookie. Rotation rejects old-header/new-cookie mismatches on unsafe requests but does not revoke prior
+      matching pairs server-side. Duplicate configured-name CSRF cookies return 403 csrf_invalid, subject to earlier
+      middleware. Clients use this route
       to reconcile a delayed authentication-transition response that arrives after an attempted logout.
       This GET requires no CSRF header or request body and returns application/vnd.api+json with Cache-Control: no-store.
       Use this response as the sole authority for choosing exactly one entry flow, without cookie inspection or
@@ -56,6 +60,44 @@ sessionDiscovery:
         content:
           application/vnd.api+json:
             schema: { $ref: ../schemas/resources/resources.yaml#/SessionDiscoveryDocument }
+            examples:
+              anonymous:
+                summary: No valid authentication
+                value: { data: null, meta: { stage: anonymous } }
+              mfa:
+                summary: MFA before any required password replacement
+                value:
+                  data:
+                    type: auth-sessions
+                    id: example-account
+                    attributes:
+                      stage: mfa
+                      mfa_challenge_id: example-challenge
+                      idle_expires_at: '2026-09-27T10:30:00.000000Z'
+                      absolute_expires_at: '2026-09-27T10:30:00.000000Z'
+              passwordChange:
+                summary: Password replacement after any required MFA
+                value:
+                  data:
+                    type: auth-sessions
+                    id: example-account
+                    attributes:
+                      stage: password-change
+                      idle_expires_at: '2026-09-27T10:30:00.000000Z'
+                      absolute_expires_at: '2026-09-27T10:30:00.000000Z'
+              authenticated:
+                summary: Proceed to capability discovery before Home
+                value:
+                  data:
+                    type: auth-sessions
+                    id: example-account
+                    attributes:
+                      stage: authenticated
+                      idle_expires_at: '2026-09-27T10:30:00.000000Z'
+                      absolute_expires_at: '2026-09-27T22:00:00.000000Z'
+      '403':
+        $ref: ../responses/errors.yaml#/Forbidden
+        description: Duplicate configured-name CSRF cookies (`csrf_invalid`); no GET header or body is required.
       '406': { $ref: ../responses/errors.yaml#/NotAcceptable }
       '429': { $ref: ../responses/errors.yaml#/RateLimited }
       '500': { $ref: ../responses/errors.yaml#/InternalError }

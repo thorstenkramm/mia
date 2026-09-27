@@ -139,12 +139,19 @@ validation is required. A loopback-HTTP `main.public_url` uses the non-Secure
 listener. MIA supports same-origin browser access only in the MVP and does not
 enable CORS.
 
-`GET /api/v1/auth/session` always issues or refreshes anonymous CSRF state. Every
+Anonymous `GET /api/v1/auth/session` rotates the CSRF cookie. Valid-stage discovery
+retains an existing cookie; shared middleware issues one when absent. Both this
+GET and capability discovery require no CSRF header or body, but reject duplicate
+configured-name CSRF cookies with `403 csrf_invalid`, subject to earlier middleware.
+For anonymous discovery without a cookie, middleware issuance precedes handler
+rotation; the effective cookie is the last one issued. Every
 unsafe public endpoint, including login, invitation preview and acceptance, and
 recovery, requires the matching cookie and header. Cross-site Fetch Metadata is
 rejected; missing Fetch Metadata is accepted only with a valid CSRF token. MIA
 rotates CSRF state after completed login, logout, and every login-stage
-transition, invalidating the old value immediately.
+transition. An old header paired with the replacement cookie fails unsafe-request
+validation. Rotation alone does not revoke a previously matching cookie/header
+pair: the middleware keeps no server-side CSRF revocation state.
 
 Session discovery returns the authoritative `anonymous`, `mfa`,
 `password-change`, or `authenticated` stage. It returns no profile or role data;

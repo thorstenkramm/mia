@@ -19,6 +19,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v5"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"github.com/thorstenkramm/mia/internal/httpserver"
 	"github.com/thorstenkramm/mia/internal/httpserver/conformance"
 	"github.com/thorstenkramm/mia/internal/identity"
@@ -403,6 +405,235 @@ func TestMFADiscoveryReturnsOnlyOpaqueChallenge(t *testing.T) {
 		strings.Contains(discovered.Body.String(), "destination") || strings.Contains(discovered.Body.String(), "secret") {
 		t.Fatalf("MFA discovery = %s", discovered.Body.String())
 	}
+}
+
+func TestSessionDiscoveryCSRFMatrix(t *testing.T) {
+	for _, local := range []bool{false, true} {
+		for _, entryStage := range []string{"anonymous", "mfa", "password-change", "authenticated"} {
+			t.Run(fmt.Sprintf("local=%t/%s", local, entryStage), func(t *testing.T) {
+				newServer := testServer
+				if local {
+					newServer = testLocalServer
+				}
+				server, database := newServer(t)
+				account := createAccount(t, database, entryStage == "password-change")
+				var cookies []*http.Cookie
+				var initial httpserver.BrowserSession
+				if entryStage != "anonymous" {
+					issued := httptest.NewRecorder()
+					c := server.Echo.NewContext(httptest.NewRequest(http.MethodGet, "http://mia.test/", nil), issued)
+					started := time.Now().Add(-5 * time.Minute)
+					if entryStage == "mfa" {
+						require.NoError(t, server.StartMFASession(c, account.ID, account.SecurityGeneration, "example-challenge", started))
+					} else {
+						require.NoError(t, server.StartSession(c, account.ID, account.SecurityGeneration, entryStage, started))
+					}
+					cookies = sessionCookies(t, server, issued)
+					var ok bool
+					initial, ok = httpserver.CurrentSession(c)
+					require.True(t, ok)
+				}
+				for _, count := range []int{0, 1, 2} {
+					t.Run(fmt.Sprintf("csrf-cookies=%d", count), func(t *testing.T) {
+						request := httptest.NewRequest(http.MethodGet, "http://mia.test/api/v1/auth/session", nil)
+						for _, cookie := range cookies {
+							request.AddCookie(cookie)
+						}
+						for range count {
+							request.AddCookie(&http.Cookie{Name: server.CSRFCookieName(), Value: "synthetic-prior-csrf"})
+						}
+						response := httptest.NewRecorder()
+						server.Echo.ServeHTTP(response, request)
+						assert.Equal(t, "no-store", response.Header().Get("Cache-Control"))
+						if count == 2 {
+							conformance.Error(t, response, http.StatusForbidden, "csrf_invalid")
+							assert.NotContains(t, conformance.Document(t, response), "data")
+							return
+						}
+						require.Equal(t, http.StatusOK, response.Code)
+						assert.Equal(t, "application/vnd.api+json", response.Header().Get("Content-Type"))
+						issuedCount := 0
+						for _, cookie := range response.Result().Cookies() {
+							if cookie.Name == server.CSRFCookieName() {
+								issuedCount++
+							}
+						}
+						wantCount := 0
+						if count == 0 {
+							wantCount++
+						}
+						if entryStage == "anonymous" {
+							wantCount++
+							assert.JSONEq(t, `{"data":null,"meta":{"stage":"anonymous"}}`, response.Body.String())
+						} else {
+							assert.Equal(t, entryStage, stage(t, response.Body.Bytes()))
+							assert.False(t, hasSession(server, response), "discovery must not reissue authentication")
+							assert.True(t, responseCookie(response, server.BrowserCookieName()) == nil,
+								"discovery must not reissue the browser marker")
+							assert.Equal(t, httpserver.FormatInstant(initial.IdleExpiresAt), response.Header().Get("Mia-Session-Idle-Expires-At"))
+							assert.Equal(t, httpserver.FormatInstant(initial.AbsoluteExpiresAt), response.Header().Get("Mia-Session-Absolute-Expires-At"))
+							var document struct {
+								Data struct {
+									Attributes struct {
+										IdleExpiresAt     string `json:"idle_expires_at"`
+										AbsoluteExpiresAt string `json:"absolute_expires_at"`
+									} `json:"attributes"`
+								} `json:"data"`
+							}
+							require.NoError(t, json.Unmarshal(response.Body.Bytes(), &document))
+							assert.Equal(t, response.Header().Get("Mia-Session-Idle-Expires-At"), document.Data.Attributes.IdleExpiresAt)
+							assert.Equal(t, response.Header().Get("Mia-Session-Absolute-Expires-At"), document.Data.Attributes.AbsoluteExpiresAt)
+						}
+						assert.Equal(t, wantCount, issuedCount)
+						if wantCount > 0 {
+							// Compare only booleans so a failure never prints cookie values.
+							effective := csrfCookieValue(t, server, response)
+							assert.True(t, effective != "" && effective != "synthetic-prior-csrf", "expected newly issued CSRF")
+						}
+					})
+				}
+			})
+		}
+	}
+}
+
+func TestDiscoveryRotationRejectsMismatchWithoutRevokingPriorPair(t *testing.T) {
+	server, _ := testServer(t)
+	old := csrfToken(t, server)
+	request := httptest.NewRequest(http.MethodGet, "http://mia.test/api/v1/auth/session", nil)
+	request.AddCookie(&http.Cookie{Name: server.CSRFCookieName(), Value: old})
+	discovered := httptest.NewRecorder()
+	server.Echo.ServeHTTP(discovered, request)
+	require.Equal(t, http.StatusOK, discovered.Code)
+	fresh := csrfCookieValue(t, server, discovered)
+	require.True(t, old != fresh, "anonymous discovery must replace CSRF")
+	for _, test := range []struct {
+		name, cookie, header string
+		status               int
+		code                 string
+	}{
+		{"stale header", fresh, old, http.StatusForbidden, "csrf_invalid"},
+		{"new pair", fresh, fresh, http.StatusNoContent, ""},
+		{"prior matching pair", old, old, http.StatusNoContent, ""},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			// Recovery is a real unsafe public route with uniform, provider-free unknown-user acceptance.
+			request := httptest.NewRequest(http.MethodPost, "http://mia.test/api/v1/auth/password-recovery-requests",
+				strings.NewReader(`{"data":{"type":"password-recovery-requests","attributes":{"username":"unknown"}}}`))
+			request.Header.Set("Content-Type", "application/vnd.api+json")
+			request.Header.Set("X-CSRF-Token", test.header)
+			request.AddCookie(&http.Cookie{Name: server.CSRFCookieName(), Value: test.cookie})
+			response := httptest.NewRecorder()
+			server.Echo.ServeHTTP(response, request)
+			assertCode(t, response, test.status, test.code)
+		})
+	}
+}
+
+func TestSessionDiscoveryInvalidAuthenticationIsUniform(t *testing.T) {
+	for _, invalid := range []string{"missing", "malformed", "expired", "banned", "deleted", "generation", "malformed browser marker"} {
+		t.Run(invalid, func(t *testing.T) {
+			server, database := testServer(t)
+			account := createAccount(t, database, false)
+			issued := httptest.NewRecorder()
+			c := server.Echo.NewContext(httptest.NewRequest(http.MethodGet, "http://mia.test/", nil), issued)
+			require.NoError(t, server.StartSession(c, account.ID, account.SecurityGeneration, "authenticated", time.Now()))
+			cookies := sessionCookies(t, server, issued)
+			switch invalid {
+			case "missing":
+				cookies = nil
+			case "malformed":
+				cookies = replaceSessionCookie(server, cookies, &http.Cookie{Name: server.SessionCookieName(), Value: "malformed"})
+			case "expired":
+				cookies = conformance.ExpireSession(t, server.Sessions, server.SessionCookieName(), cookies)
+			case "banned":
+				_, err := database.Exec("UPDATE users SET is_banned = 1 WHERE id = ?", account.ID)
+				require.NoError(t, err)
+			case "deleted":
+				_, err := database.Exec("DELETE FROM users WHERE id = ?", account.ID)
+				require.NoError(t, err)
+			case "generation":
+				_, err := database.Exec("UPDATE users SET security_generation = security_generation + 1 WHERE id = ?", account.ID)
+				require.NoError(t, err)
+			case "malformed browser marker":
+				cookies = []*http.Cookie{sessionCookie(t, server, issued), {Name: server.BrowserCookieName(), Value: "invalid"}}
+			}
+			response := serve(t, server, http.MethodGet, "/api/v1/auth/session", "", cookies, "")
+			require.Equal(t, http.StatusOK, response.Code)
+			assert.JSONEq(t, `{"data":null,"meta":{"stage":"anonymous"}}`, response.Body.String())
+			assert.Equal(t, "no-store", response.Header().Get("Cache-Control"))
+			assert.Equal(t, "application/vnd.api+json", response.Header().Get("Content-Type"))
+		})
+	}
+}
+
+func TestMalformedBrowserMarkerRecoveryRemainsAnonymousUntilLogin(t *testing.T) {
+	for _, local := range []bool{false, true} {
+		t.Run(fmt.Sprintf("local=%t", local), func(t *testing.T) {
+			newServer := testServer
+			if local {
+				newServer = testLocalServer
+			}
+			server, database := newServer(t)
+			createAccount(t, database, false)
+			login := serve(t, server, http.MethodPost, "/api/v1/auth/login", csrfToken(t, server), nil,
+				loginBody("student", "correct horse battery"))
+			require.Equal(t, http.StatusOK, login.Code)
+			originalSession := sessionCookie(t, server, login)
+			broken := []*http.Cookie{originalSession, {Name: server.BrowserCookieName(), Value: "malformed"}}
+			// A valid session cookie alone must not authenticate a broken marker pair.
+			denied := serve(t, server, http.MethodPost, "/api/v1/auth/session-continuations",
+				csrfCookieValue(t, server, login), broken, "")
+			conformance.Error(t, denied, http.StatusUnauthorized, "auth_unauthenticated")
+			recovered := serve(t, server, http.MethodGet, "/api/v1/auth/session", "", broken, "")
+			require.Equal(t, http.StatusOK, recovered.Code)
+			assert.JSONEq(t, `{"data":null,"meta":{"stage":"anonymous"}}`, recovered.Body.String())
+			assert.True(t, hasClearedSession(server, recovered))
+			marker := responseCookie(recovered, server.BrowserCookieName())
+			require.True(t, marker != nil, "recovery must issue a replacement marker")
+			assert.True(t, marker.Value != "" && marker.Value != "malformed", "replacement must be fresh")
+			assert.Equal(t, !local, marker.Secure)
+			assert.True(t, marker.HttpOnly)
+			assert.Equal(t, http.SameSiteLaxMode, marker.SameSite)
+			assert.Equal(t, "/", marker.Path)
+			assert.Empty(t, marker.Domain)
+			assert.Zero(t, marker.MaxAge)
+			// Replacing the marker must not make the old authenticated cookie usable.
+			stale := serve(t, server, http.MethodGet, "/api/v1/auth/session", "",
+				[]*http.Cookie{originalSession, marker}, "")
+			require.Equal(t, http.StatusOK, stale.Code)
+			assert.JSONEq(t, `{"data":null,"meta":{"stage":"anonymous"}}`, stale.Body.String())
+			assert.True(t, responseCookie(stale, server.BrowserCookieName()) == nil, "valid marker must be reused")
+			next := serve(t, server, http.MethodGet, "/api/v1/auth/session", "", []*http.Cookie{marker}, "")
+			require.Equal(t, http.StatusOK, next.Code)
+			assert.JSONEq(t, `{"data":null,"meta":{"stage":"anonymous"}}`, next.Body.String())
+			assert.True(t, responseCookie(next, server.BrowserCookieName()) == nil, "valid marker must not rotate")
+			freshLogin := serve(t, server, http.MethodPost, "/api/v1/auth/login", csrfCookieValue(t, server, next),
+				[]*http.Cookie{marker}, loginBody("student", "correct horse battery"))
+			require.Equal(t, http.StatusOK, freshLogin.Code)
+			usable := serve(t, server, http.MethodGet, "/api/v1/auth/session", "",
+				sessionCookies(t, server, freshLogin), "")
+			require.Equal(t, http.StatusOK, usable.Code)
+			assert.Equal(t, "authenticated", stage(t, usable.Body.Bytes()))
+		})
+	}
+}
+
+func TestSessionDiscoveryDependencyFailureRemainsAnError(t *testing.T) {
+	server, database := testServer(t)
+	account := createAccount(t, database, false)
+	issued := httptest.NewRecorder()
+	c := server.Echo.NewContext(httptest.NewRequest(http.MethodGet, "http://mia.test/", nil), issued)
+	require.NoError(t, server.StartSession(c, account.ID, account.SecurityGeneration, "authenticated", time.Now()))
+	server.SetIdentityLoader(func(context.Context, string) (httpserver.IdentityState, error) {
+		return httpserver.IdentityState{}, errors.New("synthetic identity dependency failure")
+	})
+	response := serve(t, server, http.MethodGet, "/api/v1/auth/session", "", sessionCookies(t, server, issued), "")
+	conformance.Error(t, response, http.StatusInternalServerError, "internal_error")
+	assert.NotContains(t, conformance.Document(t, response), "data")
+	assert.NotContains(t, response.Body.String(), "synthetic identity")
+	assert.NotContains(t, response.Body.String(), account.ID)
+	assert.Equal(t, "no-store", response.Header().Get("Cache-Control"))
 }
 
 func TestLogoutReorderingUsesReducedStatelessGuarantee(t *testing.T) {
@@ -1842,7 +2073,7 @@ func authCookies(t *testing.T, server *httpserver.Server, response *httptest.Res
 		}
 	}
 	if len(cookies) != 2 || csrf == "" {
-		t.Fatalf("auth cookies count=%d csrf=%q", len(cookies), csrf)
+		t.Fatalf("auth cookies count=%d csrf present=%t", len(cookies), csrf != "")
 	}
 	return cookies, csrf
 }
@@ -1910,13 +2141,16 @@ func sessionCookie(t *testing.T, server *httpserver.Server, response *httptest.R
 
 func csrfCookieValue(t *testing.T, server *httpserver.Server, response *httptest.ResponseRecorder) string {
 	t.Helper()
+	var value string
 	for _, cookie := range response.Result().Cookies() {
 		if cookie.Name == server.CSRFCookieName() {
-			return cookie.Value
+			value = cookie.Value
 		}
 	}
-	t.Fatal("response omitted CSRF cookie")
-	return ""
+	if value == "" {
+		t.Fatal("response omitted non-empty CSRF cookie")
+	}
+	return value
 }
 
 func sessionCookies(t *testing.T, server *httpserver.Server, response *httptest.ResponseRecorder) []*http.Cookie {

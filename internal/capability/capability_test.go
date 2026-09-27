@@ -127,6 +127,65 @@ func TestCapabilitiesRejectRestrictedStages(t *testing.T) {
 	}
 }
 
+func TestCapabilitiesDiscoveryCSRFMatrix(t *testing.T) {
+	for _, entryStage := range []string{"anonymous", "mfa", "password-change", "authenticated"} {
+		t.Run(entryStage, func(t *testing.T) {
+			server, database := capabilityRouteServer(t)
+			actor := createAccount(t, database, "csrf-matrix", []user.Role{user.Student})
+			_, err := database.Exec("UPDATE users SET must_change_password = ? WHERE id = ?",
+				entryStage == "password-change", actor)
+			require.NoError(t, err)
+			Register(server, New(database, mentoring.LoadCapabilityAssignments))
+			var session []*http.Cookie
+			if entryStage != "anonymous" {
+				for _, cookie := range capabilitySession(t, server, actor, entryStage, time.Now()) {
+					if cookie.Name != server.CSRFCookieName() {
+						session = append(session, cookie)
+					}
+				}
+			}
+			for _, mode := range []string{"missing", "existing", "duplicate"} {
+				t.Run(mode, func(t *testing.T) {
+					cookies := append([]*http.Cookie{}, session...)
+					if mode != "missing" {
+						cookies = append(cookies, &http.Cookie{Name: server.CSRFCookieName(), Value: "synthetic-prior-csrf"})
+					}
+					if mode == "duplicate" {
+						cookies = append(cookies, &http.Cookie{Name: server.CSRFCookieName(), Value: "synthetic-prior-csrf"})
+					}
+					response := capabilityGET(server, cookies)
+					assert.Equal(t, "no-store", response.Header().Get("Cache-Control"))
+					switch {
+					case mode == "duplicate":
+						conformance.Error(t, response, http.StatusForbidden, "csrf_invalid")
+					case entryStage == "anonymous":
+						conformance.Error(t, response, http.StatusUnauthorized, "auth_unauthenticated")
+					case entryStage != "authenticated":
+						conformance.Error(t, response, http.StatusForbidden, "auth_password_change_required")
+					default:
+						readCapabilities(t, response, actor)
+					}
+					if response.Code != http.StatusOK {
+						assert.NotContains(t, conformance.Document(t, response), "data")
+					}
+					issued := 0
+					for _, cookie := range response.Result().Cookies() {
+						if cookie.Name == server.CSRFCookieName() {
+							issued++
+							assert.True(t, cookie.Value != "", "issued CSRF must be non-empty")
+						}
+					}
+					want := 0
+					if mode == "missing" {
+						want = 1
+					}
+					assert.Equal(t, want, issued, "existing CSRF must be retained, missing CSRF issued")
+				})
+			}
+		})
+	}
+}
+
 func TestMentorScopePreservesPairsAndReflectsRemoval(t *testing.T) {
 	server, database := capabilityRouteServer(t)
 	actor := createAccount(t, database, "mentor", []user.Role{user.Mentor})
@@ -236,7 +295,15 @@ func readCapabilities(t *testing.T, response *httptest.ResponseRecorder, actorID
 		require.NotContains(t, byAction, item.Action, "duplicate capability action")
 		byAction[item.Action] = item
 	}
-	require.Len(t, byAction, 14)
+	var actions []string
+	for action := range byAction {
+		actions = append(actions, action)
+	}
+	assert.ElementsMatch(t, []string{
+		"profile.view", "profile.edit", "accounts.administer", "audit.view", "jobs.view",
+		"courses.create", "course_records.manage", "course_supervisors.manage", "courses.supervise",
+		"students.manage", "students.ban", "students.unban", "learning.participate", "mentoring.fulfill",
+	}, actions)
 	return byAction
 }
 

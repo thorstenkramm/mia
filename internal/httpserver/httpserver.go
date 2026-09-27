@@ -206,7 +206,7 @@ type BrowserSession struct {
 	AbsoluteExpiresAt time.Time
 }
 
-// RotateCSRF invalidates the current browser CSRF token after an auth boundary.
+// RotateCSRF replaces the browser CSRF cookie; it does not revoke prior matching cookie/header pairs.
 func (server *Server) RotateCSRF(c *echo.Context) {
 	server.setCSRFCookie(c, randomToken(32))
 }
@@ -553,10 +553,9 @@ func (server *Server) rotateBrowserGeneration(c *echo.Context) error {
 }
 
 func (server *Server) setBrowserGeneration(c *echo.Context, generation string, maxAge int) error {
-	marker, err := server.Sessions.New(c.Request(), server.BrowserCookieName())
-	if err != nil {
-		return fmt.Errorf("create browser generation: %w", err)
-	}
+	// The caller has selected the generation to persist. Construct fresh state
+	// rather than decoding an incoming marker that may need replacement.
+	marker := sessions.NewSession(server.Sessions, server.BrowserCookieName())
 	marker.Values["generation"] = generation
 	marker.Options = &sessions.Options{Path: "/", MaxAge: maxAge, Secure: server.cookiePolicy.Secure, HttpOnly: true,
 		SameSite: http.SameSiteLaxMode}

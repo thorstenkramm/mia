@@ -286,9 +286,6 @@ AuthSession:
         stage:
           type: string
           enum: [authenticated, mfa, password-change]
-        mfa_challenge_id:
-          type: string
-          description: Present only in the `mfa` stage.
         idle_expires_at:
           type: string
           format: date-time
@@ -297,6 +294,21 @@ AuthSession:
           type: string
           format: date-time
           description: Fixed maximum deadline for this login stage or authenticated lifetime.
+      if:
+        properties:
+          stage: { const: mfa }
+        required: [stage]
+      then:
+        additionalProperties: true
+        required: [mfa_challenge_id]
+        properties:
+          mfa_challenge_id:
+            $ref: ../../openapi.yaml#/components/parameters/ResourceID/schema
+            description: Present only in the `mfa` stage.
+      else:
+        additionalProperties: true
+        properties:
+          mfa_challenge_id: false
 SessionDiscoveryDocument:
   description: >-
     Exactly one entry stage. When data is null, read meta.stage (anonymous); otherwise read data.attributes.stage

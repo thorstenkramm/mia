@@ -11,8 +11,23 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gorilla/sessions"
 	"github.com/labstack/echo/v5"
+	"github.com/stretchr/testify/require"
 )
+
+func TestBrowserMarkerSaveFailureIsReturned(t *testing.T) {
+	// No codecs forces a real CookieStore encoding failure at Save, not a request decode failure.
+	store := sessions.NewCookieStore()
+	server := &Server{Echo: echo.New(), Sessions: store,
+		cookiePolicy: CookiePolicy{SessionName: "mia_session", CSRFName: "mia_csrf"}}
+	request := httptest.NewRequest(http.MethodGet, "http://mia.test/", nil)
+	request.AddCookie(&http.Cookie{Name: server.BrowserCookieName(), Value: "malformed"})
+	response := httptest.NewRecorder()
+	err := server.setBrowserGeneration(server.Echo.NewContext(request, response), "synthetic-generation", 0)
+	require.ErrorContains(t, err, "save browser generation")
+	require.Empty(t, response.Header().Values("Set-Cookie"))
+}
 
 func TestCookiePolicyAttributesAndLocalHTTPCookieJarCSRF(t *testing.T) {
 	for name, policy := range map[string]CookiePolicy{
@@ -65,7 +80,7 @@ func TestCookiePolicyAttributesAndLocalHTTPCookieJarCSRF(t *testing.T) {
 				!session.HttpOnly || !browser.HttpOnly || csrf.HttpOnly || session.Path != "/" || browser.Path != "/" ||
 				csrf.Path != "/" || session.SameSite != http.SameSiteLaxMode || browser.SameSite != http.SameSiteLaxMode ||
 				csrf.SameSite != http.SameSiteLaxMode || session.Domain != "" || browser.Domain != "" || csrf.Domain != "" {
-				t.Fatalf("unexpected cookie attributes: session=%#v csrf=%#v", session, csrf)
+				t.Fatal("unexpected session, browser, or CSRF cookie attributes")
 			}
 			server.AuthenticatedPOST("/api/v1/cookie-refresh", func(c *echo.Context) error { return c.NoContent(http.StatusNoContent) })
 			server.AuthenticatedPOST("/api/v1/cookie-clear", func(c *echo.Context) error {
@@ -87,11 +102,11 @@ func TestCookiePolicyAttributesAndLocalHTTPCookieJarCSRF(t *testing.T) {
 				}
 				cookies := result.Result().Cookies()
 				if path == "/api/v1/cookie-refresh" && len(cookies) != 0 {
-					t.Fatalf("ordinary request returned cookies = %#v", cookies)
+					t.Fatalf("ordinary request returned %d cookies", len(cookies))
 				}
 				if path == "/api/v1/cookie-clear" && (len(cookies) != 2 || cookies[0].Name != policy.SessionName ||
 					cookies[0].MaxAge >= 0 || cookies[1].Name != server.BrowserCookieName()) {
-					t.Fatalf("clear cookies = %#v", cookies)
+					t.Fatal("clear response omitted expected session deletion or browser marker")
 				}
 			}
 			server.Echo.POST("/api/v1/csrf-policy", func(c *echo.Context) error { return c.NoContent(http.StatusNoContent) })
