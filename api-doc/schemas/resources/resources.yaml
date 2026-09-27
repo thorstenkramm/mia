@@ -52,19 +52,34 @@ User:
           description: Relative avatar download URL, or null without an avatar.
 CapabilityScope:
   type: object
+  description: >-
+    Current scope for this action, not a permanent grant. All fields are present; absent assignment scope uses
+    empty arrays, never null or omitted fields. Unused boolean discriminators are false. Assignment arrays are
+    complete and currently unpaginated. Each target operation still applies its own authorization and state rules.
   required: [global, course_ids, student_ids, course_students, own_resource]
   additionalProperties: false
   properties:
-    global: { type: boolean }
+    global:
+      type: boolean
+      description: >-
+        Platform-wide scope for this action only. Does not confer unrelated course-content or student access.
     course_ids:
       type: array
+      description: >-
+        Assigned courses for courses.supervise, or joined courses for learning.participate. Membership is not
+        tutoring-start eligibility; course readiness and other operation-specific conditions still apply.
       items: { type: string }
     student_ids:
       type: array
+      description: >-
+        Student-only accounts sharing a supervised course for students.manage and students.ban;
+        students.unban includes only currently banned such accounts. Does not grant access in unrelated courses.
       items: { type: string }
     course_students:
       type: array
-      description: Paired scope for actions that require both course and student assignment.
+      description: >-
+        Exact current course-and-student assignments for mentoring.fulfill. Each pair is indivisible;
+        never combine course IDs and student IDs across pairs or infer student scope from course assignment alone.
       items:
         type: object
         required: [course_id, student_id]
@@ -72,7 +87,9 @@ CapabilityScope:
         properties:
           course_id: { type: string }
           student_id: { type: string }
-    own_resource: { type: boolean }
+    own_resource:
+      type: boolean
+      description: Current account's own resource for profile.view or profile.edit, not another user's profile.
 AccountCapability:
   type: object
   required: [action, available, scope]
@@ -95,14 +112,24 @@ AccountCapability:
         - students.unban
         - learning.participate
         - mentoring.fulfill
-    available: { type: boolean }
+    available:
+      type: boolean
+      description: >-
+        Whether this action is currently available within its returned scope. False actions remain in the catalog.
+        True is navigation guidance, not authorization for every target or a promise that all action preconditions hold.
     scope: { $ref: '#/CapabilityScope' }
 AccountCapabilities:
   type: object
+  description: >-
+    Current-account singleton projection, recomputed from current roles and scoped assignments rather than roles alone.
+    Successful discovery permits basic Home even when assignment arrays are empty; protected sections need their own
+    relevant action and scope. Scope contains no unrelated protected resource data.
   required: [type, id, attributes]
   properties:
     type: { const: account-capabilities }
-    id: { type: string }
+    id:
+      type: string
+      description: Current account ID, not the literal me alias or a session token.
     attributes:
       type: object
       required: [capabilities]
@@ -110,6 +137,7 @@ AccountCapabilities:
       properties:
         capabilities:
           type: array
+          description: Complete release-one action catalog, including unavailable actions with explicit empty scope.
           minItems: 14
           maxItems: 14
           items: { $ref: '#/AccountCapability' }
@@ -270,6 +298,11 @@ AuthSession:
           format: date-time
           description: Fixed maximum deadline for this login stage or authenticated lifetime.
 SessionDiscoveryDocument:
+  description: >-
+    Exactly one entry stage. When data is null, read meta.stage (anonymous); otherwise read data.attributes.stage
+    (mfa, password-change, or authenticated). Do not infer stage from cookies, account fields, or failed requests.
+    MFA precedes password replacement when both apply. Restricted stages permit only their focused flow and logout.
+    Authenticated proceeds to capability discovery before Home may mount.
   oneOf:
     - $ref: '#/AuthSessionDocument'
     - $ref: '#/AnonymousAuthSessionDocument'

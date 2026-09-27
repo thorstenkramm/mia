@@ -52,7 +52,20 @@ capabilities:
     tags: [Users]
     operationId: getCurrentAccountCapabilities
     summary: Get current account capabilities and scopes
-    description: Navigation guidance only; every operation independently reauthorizes current state.
+    description: >-
+      Read after GET /api/v1/auth/session reports authenticated. Requires a full authenticated session;
+      both mfa and password-change stages are denied. This GET requires no CSRF header or request body.
+      Returns application/vnd.api+json with Cache-Control: no-store and never extends the session.
+      Successful discovery permits every fully authenticated account to mount the basic Home shell, including
+      an empty Home when assignment scopes are empty. No separate Home permission or authorization endpoint is needed.
+      Gate each protected section and dependent request by its relevant available action and scope.
+      Navigation guidance only; every operation independently reauthorizes its target against current state.
+      The complete action catalog and assignment scopes are returned unpaginated on each check, including unavailable
+      actions and empty arrays. Removed assignments are excluded on subsequent reads; prior results are not grants.
+      Only current-account scope is exposed, not an unrelated-resource directory. Do not use denial probing or
+      resource enumeration to decide Home eligibility. Membership alone does not establish tutoring-start eligibility.
+      A failed capability read must leave a neutral loading/error or sign-in state without mounting protected content;
+      do not interpret failure as empty successful scope or permission, or reveal whether another resource exists.
     security: [{ sessionCookie: [] }]
     responses:
       '200':
@@ -64,8 +77,9 @@ capabilities:
       '401': { $ref: ../responses/errors.yaml#/Unauthorized }
       '403':
         $ref: ../responses/errors.yaml#/Forbidden
-        description: Restricted session (`auth_password_change_required`).
+        description: Restricted mfa or password-change session (`auth_password_change_required`).
       '406': { $ref: ../responses/errors.yaml#/NotAcceptable }
+      '500': { $ref: ../responses/errors.yaml#/InternalError }
 
 accounts:
   get:

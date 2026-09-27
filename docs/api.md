@@ -376,6 +376,24 @@ empty scopes are represented rather than omitted. The projection is recomputed
 from current roles, assignments, memberships, and account state. It guides shell
 and entry-scope visibility but never authorizes a later operation.
 
+Entry uses `GET /auth/session` first to choose exactly one entry flow. Anonymous
+users enter sign-in. Restricted MFA and password-change stages show only the
+focused flow and logout, without application navigation, protected titles or names,
+breadcrumbs, prefetch, or dependent protected requests. MFA comes first when both
+requirements apply. Only the full authenticated stage proceeds to capability discovery.
+
+Successful current-account capability discovery permits the basic Home shell,
+including an empty Home for an account without assignments. Session discovery alone
+does not permit Home to mount. Protected sections and dependent requests are gated
+by their relevant capability and scope; backend target authorization remains independent.
+Mentor scope preserves exact course/student pairs, and membership does not establish
+tutoring-start eligibility. Removed assignments disappear on the next capability check.
+
+If either discovery read fails, retain a neutral loading/error or sign-in state and
+do not mount protected content. Do not inspect cookies, probe denials, or enumerate
+resources to decide entry. OpenAPI owns stage extraction, scope field meanings,
+media types, status codes, and GET CSRF requirements for both discovery operations.
+
 Field-level authorization still applies to `PATCH /users/me`. Student-only
 accounts cannot mutate their profiles. Administrators, supervisors, and mentors
 may change their own name, nickname, language, country, time zone, avatar, and TTS

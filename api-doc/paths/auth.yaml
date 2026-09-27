@@ -37,6 +37,14 @@ sessionDiscovery:
       Returns anonymous state for absent, stale, malformed, banned, deleted, or generation-invalid authentication.
       Discovery never extends a session. Anonymous discovery refreshes the public CSRF cookie. Clients use this route
       to reconcile a delayed authentication-transition response that arrives after an attempted logout.
+      This GET requires no CSRF header or request body and returns application/vnd.api+json with Cache-Control: no-store.
+      Use this response as the sole authority for choosing exactly one entry flow, without cookie inspection or
+      denial probing. Anonymous state is data: null with meta.stage; all other stages are in data.attributes.stage.
+      Anonymous enters sign-in. The mfa and password-change stages render only their focused flow and logout,
+      without application navigation, protected titles or names, breadcrumbs, prefetch, or dependent protected requests.
+      MFA precedes password replacement when both apply. The authenticated stage proceeds to
+      GET /api/v1/users/me/capabilities; session discovery alone does not permit Home to mount.
+      A failed discovery read leaves a neutral loading/error or sign-in state, never protected content.
     security: [{}, { sessionCookie: [] }]
     responses:
       '200':
@@ -50,6 +58,7 @@ sessionDiscovery:
             schema: { $ref: ../schemas/resources/resources.yaml#/SessionDiscoveryDocument }
       '406': { $ref: ../responses/errors.yaml#/NotAcceptable }
       '429': { $ref: ../responses/errors.yaml#/RateLimited }
+      '500': { $ref: ../responses/errors.yaml#/InternalError }
 
 sessionContinuations:
   post:

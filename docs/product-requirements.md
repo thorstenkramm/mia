@@ -238,6 +238,21 @@ mobile numbers. Accounts with any staff role use staff self-service rules.
   catalog reflects current role, assignment, membership, ban, and account state
   on each explicit non-refreshing check. Empty and unavailable scope is explicit,
   and each operation still authorizes independently.
+- Entry first discovers exactly one session stage. Anonymous users enter sign-in;
+  MFA and mandatory password replacement render only their focused flow and logout,
+  without application navigation, protected titles or names, breadcrumbs, or prefetch.
+  MFA precedes password replacement when both are required.
+- A fully authenticated account may mount the basic Home shell only after successful
+  current-account capability discovery. Accounts without assignments may mount an
+  empty Home. Each protected section and dependent request requires its relevant
+  capability and scope, and each backend operation independently authorizes its target.
+  Empty assignment scope grants no access to unrelated resources.
+- Failed session or capability discovery leaves a neutral loading/error or sign-in
+  state, never permission to mount protected content. Clients use these discovery
+  contracts rather than cookie inspection, denial probing, or resource enumeration.
+- Capabilities describe current scope, not roles alone or permanent grants. Mentor
+  course/student pairs cannot be combined independently, and course membership alone
+  does not establish tutoring-start eligibility.
 - Assigned supervisors can view students and staff relationships in their
   assigned courses.
 - Mentors see only minimal identity — username, name, nickname, and avatar —

@@ -19,3 +19,13 @@
   beyond the present MFA carry-over defect.
 - Validate the `stage` and `challengeID` pairing at the session API boundary; current callers satisfy the contract and
   changing that boundary is outside this focused fix.
+
+## Deferred from: spec-frontend-entry-contracts (2026-09-25)
+
+- source_spec: spec-frontend-entry-contracts.md
+  summary: Design bounded current-account scope retrieval to replace the unbounded assignment arrays.
+  evidence: The user explicitly deferred the existing pagination-rule conflict for this task only. The current
+    capability response returns complete, unpaginated scope arrays that grow with assignments; this is a known
+    limitation, not a permanent pagination exemption. Follow-up must define handling of assignment changes between
+    pages and how the frontend establishes complete scope before mounting protected sections, without treating
+    partial results as complete or cached scope as authorization. Scope transport redesign requires approval.
