@@ -28,6 +28,8 @@ guides will be added when the corresponding implementation exists.
 - [API design](api.md) defines the current route layout and open transport
   decisions.
 - [Entry contract evidence](entry-contract-evidence.md) maps discovery guarantees and OpenAPI examples to backend tests.
+- [Authentication and invitation guide](api-authentication-and-user-invitation.md) explains account-entry and MFA flows
+  with API request examples and current integration gaps.
 - [Database layout](database-layout.md) defines the current logical SQLite
   design.
 - [Background jobs](jobs.md) defines the current asynchronous processing design.

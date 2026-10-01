@@ -27,6 +27,7 @@ login:
       '429':
         $ref: ../responses/errors.yaml#/RateLimited
         description: Global or layered login limit (`rate_limited` or `auth_login_throttled`).
+      '500': { $ref: ../responses/errors.yaml#/InternalError }
 
 sessionDiscovery:
   get:
