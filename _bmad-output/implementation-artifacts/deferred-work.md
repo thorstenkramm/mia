@@ -40,3 +40,8 @@
     validation of nonconforming document metadata by detaching Info and catalog XMP references before validation.
     Shared objects/content may survive through other references; generated chunks may have pdfcpu producer metadata.
     Source bytes remain unchanged; this is not general metadata removal or anonymization.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-align-ci-linter.md`
+  summary: Align pre-existing conflicting golangci-lint version guidance in agent rules.
+  evidence: `.agents/rules/techstack.md` names 2.12.2 and `.agents/rules/golang.md` names 2.5.0, while CI now pins
+    compatible 2.15.0. These inconsistent guidance versions predate the CI compatibility fix.
