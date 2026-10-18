@@ -10,6 +10,9 @@ behavior remains defined by the
 
 - The Go module path is `github.com/thorstenkramm/mia`.
 - The minimum supported Go version is `1.27.0`.
+- Development and verification prefer the patched Go `1.27.2` toolchain through
+  the module's `toolchain` directive. Automatic toolchain selection uses this
+  version or a newer available toolchain without changing the minimum language version.
 
 Initial scaffolding is limited to command wiring, configuration, process locking,
 SQLite and migrations, identity validation, the HTTP server, and the first
