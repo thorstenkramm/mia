@@ -31,6 +31,12 @@
     partial results as complete or cached scope as authorization. Scope transport redesign requires approval.
 
 - source_spec: `_bmad-output/implementation-artifacts/spec-relaxed-pdf-validation.md`
-  summary: PDF chunks sent to Mistral OCR keep the document-information dictionary (author, title, producer metadata).
-  evidence: `ocrPDF` uses `api.Trim`, which preserves the Info dictionary; the PRD says Mistral receives page content
-    only and provider data disclosure must be documented. Pre-existing behavior, surfaced during review.
+  summary: Closed as not reproduced: the review's claim that original PDF Trim forwarded source Info metadata.
+  evidence: The original review inferred that `api.Trim` preserved author, title and producer without a reproducer.
+    `TestOriginalPDFTrimDoesNotForwardInfo` now checks a synthetic valid Info dictionary against pdfcpu v0.15.0's
+    original `api.Trim`: source title and author are absent from the output, and the source producer is replaced.
+    Trim's `ExtractPages` creates a fresh destination context. The earlier forwarding claim was inaccurate.
+  resolution: This was not a forwarding defect fixed by `spec-pdf-document-metadata-tolerance.md`. That spec fixes
+    validation of nonconforming document metadata by detaching Info and catalog XMP references before validation.
+    Shared objects/content may survive through other references; generated chunks may have pdfcpu producer metadata.
+    Source bytes remain unchanged; this is not general metadata removal or anonymization.

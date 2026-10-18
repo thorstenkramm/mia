@@ -204,19 +204,11 @@ func validateSource(format string, source []byte, limits Limits) (string, int, [
 	}
 	switch format {
 	case "pdf":
-		if !bytes.HasPrefix(source, []byte("%PDF-")) || containsPDFHazard(source) {
+		ctx, err := readMaterialPDF(source, pdfConfiguration())
+		if err != nil {
 			return "", 0, nil, ErrInvalid
 		}
-		reader := bytes.NewReader(source)
-		configuration := pdfConfiguration()
-		if err := api.Validate(reader, configuration); err != nil {
-			return "", 0, nil, ErrInvalid
-		}
-		pages, err := api.PageCount(bytes.NewReader(source), configuration)
-		if err != nil || pages < 1 {
-			return "", 0, nil, ErrInvalid
-		}
-		return "application/pdf", pages, source, nil
+		return "application/pdf", ctx.PageCount, source, nil
 	case "jpeg", "png":
 		expected := "image/jpeg"
 		if format == "png" {
@@ -261,9 +253,8 @@ func validateSource(format string, source []byte, limits Limits) (string, int, [
 var disablePDFConfigDir sync.Once
 
 // pdfConfiguration returns the only pdfcpu configuration MIA uses. It never reads or creates pdfcpu's config.yml in
-// the user configuration directory, and it uses relaxed validation so nonconforming document metadata, such as
-// malformed information-dictionary dates, does not reject otherwise readable PDFs. Signature, active-content marker,
-// encryption, parse, and limit checks remain the safety boundary.
+// the user configuration directory. Relaxed validation applies after readMaterialPDF detaches document metadata;
+// signature, active-content marker, encryption, parse, and limit checks remain the safety boundary.
 func pdfConfiguration() *model.Configuration {
 	disablePDFConfigDir.Do(api.DisableConfigDir)
 	configuration := model.NewDefaultConfiguration()

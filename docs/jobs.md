@@ -78,6 +78,19 @@ main document, tables, headers, footers, footnotes, endnotes, and inserted track
 changes. PDF validation rejects encryption, malformed cross-references, embedded
 files, JavaScript, and launch actions before sending page content to Mistral.
 
+PDF upload and OCR preparation ignore document-level Info and catalog XMP
+conformance by detaching those references before validating the remaining
+document. Signature and raw hazard-marker checks precede detachment; encryption,
+unreadable structure, zero pages, and existing resource limits remain rejected.
+OCR extracts ordered chunks of at most 25 pages, preparing an independent
+metadata-detached, validated context for each chunk because page extraction
+mutates that context. The parsed page count must match the stored count before
+any OCR request. Uploaded source bytes remain unchanged. Only the document-level
+Info and catalog XMP references are removed: objects shared with page content
+are preserved and may reach Mistral through those content references. Generated
+chunks may also contain pdfcpu's own producer metadata; this is not general
+metadata removal or anonymization.
+
 Finalization accepts only draft or authorized retryable failed material. In one
 transaction it validates and freezes the complete source set, changes every file
 and the material to processing, and inserts exactly one extraction job per file.

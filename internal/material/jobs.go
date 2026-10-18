@@ -12,7 +12,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pdfcpu/pdfcpu/pkg/api"
 	"github.com/thorstenkramm/mia/internal/audit"
 	"github.com/thorstenkramm/mia/internal/filepublish"
 	"github.com/thorstenkramm/mia/internal/jobs"
@@ -128,12 +127,21 @@ func (handler *ExtractionHandler) ocrPDF(ctx context.Context, source []byte, pag
 	const pagesPerChunk = 25
 	var all []Segment
 	var inputUnits int64
-	configuration := pdfConfiguration()
+	if pageCount < 1 {
+		return nil, 0, ErrInvalid
+	}
 	for first := 1; first <= pageCount; first += pagesPerChunk {
+		// ExtractPages mutates source named-destination trees, so each chunk needs an independent context.
+		document, err := preparePDFChunks(source)
+		if err != nil {
+			return nil, inputUnits, err
+		}
+		if document.PageCount != pageCount {
+			return nil, inputUnits, ErrInvalid
+		}
 		last := min(first+pagesPerChunk-1, pageCount)
 		var chunk bytes.Buffer
-		if err := api.Trim(bytes.NewReader(source), &chunk, []string{fmt.Sprintf("%d-%d", first, last)},
-			configuration); err != nil {
+		if err := writePDFChunk(document, &chunk, first, last); err != nil {
 			return nil, inputUnits, err
 		}
 		result, err := handler.service.ocr.OCR(ctx, "application/pdf", chunk.Bytes())

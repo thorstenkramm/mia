@@ -843,6 +843,11 @@ Constraints:
   objects, and active content.
 - Bounded PDF parsing rejects encryption, malformed cross-references, embedded
   files, JavaScript, launch actions, and excessive pages before OCR.
+- PDF source bytes are retained unchanged. Processing detaches only document
+  Info and catalog XMP references before validation and chunk extraction, so
+  their semantic nonconformance does not reject an otherwise readable document.
+  Raw signature and hazard checks precede detachment; nonmetadata validation and
+  resource limits still apply. Shared referenced objects are not deleted.
 - Original filenames are valid NFC UTF-8 basenames of at most 255 code points and
   1 KiB after path removal and whitespace trimming. NUL, controls, bidi controls,
   `/`, `\`, and empty basenames are rejected. The value is never a path.

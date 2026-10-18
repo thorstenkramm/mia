@@ -1119,9 +1119,17 @@ embedded objects, and active content.
 
 Before OCR, a bounded PDF parser establishes page count and rejects malformed
 cross-references, encryption, embedded files, JavaScript, launch actions, and
-excessive pages. Nonconforming document metadata, such as malformed
-information-dictionary dates, does not cause rejection. Mistral receives page
-content only, never active attachments.
+excessive pages. Nonconforming document-level Info entries (including titles,
+Trapped values, and dates) and catalog XMP metadata do not cause rejection.
+MIA detaches these references from its processing context before validation and
+OCR chunk extraction; it retains uploaded PDF source bytes unchanged for download.
+Signature and raw hazard-marker checks run before detachment. Unreadable syntax,
+broken document structure, zero pages, and nonmetadata validation failures remain
+rejected. Mistral receives page content, never active attachments. Removal is
+limited to the document-level Info and catalog XMP references; objects shared
+with page content are preserved and may reach Mistral through content references.
+Generated chunks may also contain pdfcpu's producer metadata; this is not a
+general metadata-removal or anonymization feature.
 
 If any file in a multi-file material is corrupt, malformed, or cannot be
 processed, MIA marks the whole material faulty and prevents approval or tutoring

@@ -86,12 +86,36 @@ set environment variables.
 
 ## Design Notes
 
+### Review Findings
+
+- [x] [Review][Decision] Relaxed validation does not meet the blanket metadata-tolerance contract (medium) —
+  `internal/material/validation.go:270` selects relaxed mode, but pdfcpu v0.15.0 still rejects otherwise parseable
+  synthetic PDFs with `/Title 123` or `/Trapped /Invalid` in their Info dictionary. Reproduced during review of
+  commit `0e0d375`; the bad-date fixture succeeds under the same configuration. This conflicts with the intent
+  that metadata conformance must not block upload and the new promise in `docs/product-requirements.md:1122`.
+  Decide whether to implement broader metadata tolerance or explicitly narrow the approved contract to the
+  nonconformance tolerated by pdfcpu relaxed mode. No implementation change made during review.
+  Resolved by `spec-pdf-document-metadata-tolerance.md`: the owner selected broader tolerance. Upload and OCR now
+  detach document Info and catalog XMP references before validating the remaining context. Tests cover numeric
+  titles, invalid Trapped values, bad dates, invalid catalog metadata, shared objects, ordered multi-chunk content,
+  unchanged downloaded source bytes, and the existing safety/limit rejections.
+
 `sync.Once` publishes the `ConfigPath` write before any `NewDefaultConfiguration` read through the helper, keeping
 `go test -race` clean. Verified locally: the synthetic bad-date PDF fails strict Validate/PageCount/Trim and passes
 relaxed with the correct page count; garbage, corrupt xref header, and truncated bodies fail in both modes; a wrong
 `startxref` offset is repaired in both modes (no behavior change).
 
 ## Verification
+
+Follow-up metadata-tolerance implementation verified 2026-10-18: `go test ./internal/material/...` and
+`./run-all-tests.sh` passed, including race, zero duplication clones, Redocly API lint, and Markdown lint.
+All checks ran. Govulncheck reports no reachable vulnerabilities (one required-module vulnerability outside
+called code); Trivy reports zero unsuppressed findings with the existing policy.
+
+Follow-up review evidence: `TestOriginalPDFTrimDoesNotForwardInfo` passes against original pdfcpu v0.15.0
+`api.Trim` with valid synthetic title, author and producer metadata. It does not forward the source title/author
+and replaces the producer. The deferred Info-forwarding entry was an inaccurate inference, now corrected;
+metadata-conformance rejection remains the independently reproduced bug fixed by the follow-up spec.
 
 **Commands:**
 - `go test ./internal/material/...` -- expected: pass
