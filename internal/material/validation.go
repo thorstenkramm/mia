@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"path/filepath"
 	"strings"
+	"sync"
 	"unicode"
 	"unicode/utf8"
 
@@ -207,8 +208,7 @@ func validateSource(format string, source []byte, limits Limits) (string, int, [
 			return "", 0, nil, ErrInvalid
 		}
 		reader := bytes.NewReader(source)
-		configuration := model.NewDefaultConfiguration()
-		configuration.ValidationMode = model.ValidationStrict
+		configuration := pdfConfiguration()
 		if err := api.Validate(reader, configuration); err != nil {
 			return "", 0, nil, ErrInvalid
 		}
@@ -256,6 +256,19 @@ func validateSource(format string, source []byte, limits Limits) (string, int, [
 	default:
 		return "", 0, nil, ErrInvalid
 	}
+}
+
+var disablePDFConfigDir sync.Once
+
+// pdfConfiguration returns the only pdfcpu configuration MIA uses. It never reads or creates pdfcpu's config.yml in
+// the user configuration directory, and it uses relaxed validation so nonconforming document metadata, such as
+// malformed information-dictionary dates, does not reject otherwise readable PDFs. Signature, active-content marker,
+// encryption, parse, and limit checks remain the safety boundary.
+func pdfConfiguration() *model.Configuration {
+	disablePDFConfigDir.Do(api.DisableConfigDir)
+	configuration := model.NewDefaultConfiguration()
+	configuration.ValidationMode = model.ValidationRelaxed
+	return configuration
 }
 
 func validateDOCX(source []byte) error {

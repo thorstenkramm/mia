@@ -1119,7 +1119,9 @@ embedded objects, and active content.
 
 Before OCR, a bounded PDF parser establishes page count and rejects malformed
 cross-references, encryption, embedded files, JavaScript, launch actions, and
-excessive pages. Mistral receives page content only, never active attachments.
+excessive pages. Nonconforming document metadata, such as malformed
+information-dictionary dates, does not cause rejection. Mistral receives page
+content only, never active attachments.
 
 If any file in a multi-file material is corrupt, malformed, or cannot be
 processed, MIA marks the whole material faulty and prevents approval or tutoring

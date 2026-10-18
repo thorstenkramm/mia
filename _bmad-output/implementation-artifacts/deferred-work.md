@@ -29,3 +29,8 @@
     limitation, not a permanent pagination exemption. Follow-up must define handling of assignment changes between
     pages and how the frontend establishes complete scope before mounting protected sections, without treating
     partial results as complete or cached scope as authorization. Scope transport redesign requires approval.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-relaxed-pdf-validation.md`
+  summary: PDF chunks sent to Mistral OCR keep the document-information dictionary (author, title, producer metadata).
+  evidence: `ocrPDF` uses `api.Trim`, which preserves the Info dictionary; the PRD says Mistral receives page content
+    only and provider data disclosure must be documented. Pre-existing behavior, surfaced during review.

@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/pdfcpu/pdfcpu/pkg/api"
-	"github.com/pdfcpu/pdfcpu/pkg/pdfcpu/model"
 	"github.com/thorstenkramm/mia/internal/audit"
 	"github.com/thorstenkramm/mia/internal/filepublish"
 	"github.com/thorstenkramm/mia/internal/jobs"
@@ -129,7 +128,7 @@ func (handler *ExtractionHandler) ocrPDF(ctx context.Context, source []byte, pag
 	const pagesPerChunk = 25
 	var all []Segment
 	var inputUnits int64
-	configuration := model.NewDefaultConfiguration()
+	configuration := pdfConfiguration()
 	for first := 1; first <= pageCount; first += pagesPerChunk {
 		last := min(first+pagesPerChunk-1, pageCount)
 		var chunk bytes.Buffer
